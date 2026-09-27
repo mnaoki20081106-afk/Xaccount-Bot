@@ -1,0 +1,74 @@
+name: Bootstrap integrated Xaccount-Bot
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/bootstrap-integrated.yml"
+      - ".github/scripts/bootstrap-integrated.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xaccount-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch source repositories
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/mnaoki20081106-afk/Discord-Bot.git /tmp/discord-bot
+          git clone --depth 1 https://github.com/mnaoki20081106-afk/Discord-Security.git /tmp/discord-security
+
+      - name: Import management baseline
+        run: |
+          set -euo pipefail
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.github/scripts/bootstrap-integrated.mjs' \
+            --exclude='.github/workflows/bootstrap-integrated.yml' \
+            /tmp/discord-bot/ ./
+
+      - name: Integrate Security into the same Worker
+        run: node .github/scripts/bootstrap-integrated.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Worker typecheck
+        run: npm run typecheck --workspace @dsm/worker
+
+      - name: Dashboard build
+        run: npm run build --workspace @dsm/web
+
+      - name: Worker tests
+        run: npm run test --workspace @dsm/worker
+
+      - name: Commit integrated bot
+        run: |
+          set -euo pipefail
+          git config user.name "xaccount-bootstrap[bot]"
+          git config user.email "xaccount-bootstrap[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "feat: integrate management and security bot"
+          git push origin HEAD:main
