@@ -92,9 +92,8 @@
         "label": "管理サイト Password",
         "type": "secret",
         "required": true,
-        "pattern": "^.{12,}$",
-        "placeholder": "12文字以上",
-        "help": "GitHub Pagesの管理画面へログインするため、ここは自分で分かる値を設定します。"
+        "placeholder": "好きなパスワード",
+        "help": "GitHub Pagesの管理画面へログインするためのパスワードです。自分で分かる値を設定してください。"
       },
       {
         "key": "SHIIRE_BRIDGE_SECRET",
