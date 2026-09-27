@@ -37,7 +37,7 @@ jobs:
           rsync -a --delete \
             --exclude='.git' \
             --exclude='.github/scripts/bootstrap-integrated.mjs' \
-            --exclude='.github/workflows/bootstrap-integrated.yml' \
+            --exclude='.github/workflows/***' \
             /tmp/discord-bot/ ./
 
       - name: Integrate Security into the same Worker
