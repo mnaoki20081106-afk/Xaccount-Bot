@@ -56,6 +56,7 @@ type Machine={
   role_id:string|null;
   panel_title:string|null;
   panel_description:string|null;
+  panel_image_url:string|null;
   active:number;
   products?:Product[];
   coupons?:Array<{code:string;discount:number;created_at:number}>;
@@ -72,6 +73,35 @@ type Order={
   created_at:number;
   delivered_at:number|null;
 };
+
+async function prepareShiirePanelImage(file:File):Promise<string>{
+  if(!file.type.startsWith("image/")) throw new Error("画像ファイルを選択してください");
+  const objectUrl=URL.createObjectURL(file);
+  try{
+    const image=await new Promise<HTMLImageElement>((resolve,reject)=>{
+      const element=new Image();
+      element.onload=()=>resolve(element);
+      element.onerror=()=>reject(new Error("画像を読み込めませんでした"));
+      element.src=objectUrl;
+    });
+    let scale=Math.min(1,1600/Math.max(image.naturalWidth,image.naturalHeight));
+    for(let attempt=0;attempt<5;attempt++){
+      const canvas=document.createElement("canvas");
+      canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+      canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+      const context=canvas.getContext("2d");
+      if(!context) throw new Error("画像の圧縮処理を開始できません");
+      context.drawImage(image,0,0,canvas.width,canvas.height);
+      const quality=Math.max(.58,.88-attempt*.08);
+      const dataUrl=canvas.toDataURL("image/webp",quality);
+      if(dataUrl.length<=1_150_000) return dataUrl;
+      scale*=.78;
+    }
+    throw new Error("画像を900KB以下まで圧縮できませんでした");
+  }finally{
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 function postableChannels(channels:Channel[]){
   return channels.filter(channel=>
@@ -103,6 +133,8 @@ export default function ShiireVendingManager({
   const [machineName,setMachineName]=useState("");
   const [panelTitle,setPanelTitle]=useState("");
   const [panelDescription,setPanelDescription]=useState("");
+  const [panelImageUrl,setPanelImageUrl]=useState("");
+  const [panelImageBusy,setPanelImageBusy]=useState(false);
   const [publicLogChannel,setPublicLogChannel]=useState("");
   const [privateLogChannel,setPrivateLogChannel]=useState("");
   const [buyerRole,setBuyerRole]=useState("");
@@ -113,6 +145,7 @@ export default function ShiireVendingManager({
   const [pricePayPay,setPricePayPay]=useState(100);
   const [priceKyash,setPriceKyash]=useState(100);
   const [emoji,setEmoji]=useState("");
+  const [editingProductId,setEditingProductId]=useState("");
 
   const [notifyEnabled,setNotifyEnabled]=useState(false);
   const [notifyChannel,setNotifyChannel]=useState("");
@@ -134,6 +167,7 @@ export default function ShiireVendingManager({
     setMachineName(machine?.name??"");
     setPanelTitle(machine?.panel_title??"");
     setPanelDescription(machine?.panel_description??"");
+    setPanelImageUrl(machine?.panel_image_url??"");
     setPublicLogChannel(machine?.public_log_channel_id??"");
     setPrivateLogChannel(machine?.private_log_channel_id??"");
     setBuyerRole(machine?.role_id??"");
@@ -231,21 +265,44 @@ export default function ShiireVendingManager({
   async function addProduct(){
     if(!selected) return;
     if(!sourceId) return onError(new Error("仕入れ商品を選択してください"));
+    const payload={
+      supplierProductId:sourceId,
+      name:productName.trim()||"Xアカウント",
+      description:productDescription,
+      pricePayPay:Number(pricePayPay),
+      priceKyash:Number(priceKyash),
+      emoji:emoji.trim()||null
+    };
+    if(editingProductId){
+      await mutate(
+        `/api/guilds/${guildId}/shiire/vending/${selected.id}/products/${editingProductId}`,
+        {method:"PATCH",body:JSON.stringify(payload)},
+        "販売商品を更新しました"
+      );
+      setEditingProductId("");
+      return;
+    }
     await mutate(
       `/api/guilds/${guildId}/shiire/vending/${selected.id}/products`,
-      {
-        method:"POST",
-        body:JSON.stringify({
-          supplierProductId:sourceId,
-          name:productName.trim()||"Xアカウント",
-          description:productDescription,
-          pricePayPay:Number(pricePayPay),
-          priceKyash:Number(priceKyash),
-          emoji:emoji.trim()||null
-        })
-      },
+      {method:"POST",body:JSON.stringify(payload)},
       "仕入れ在庫を自販機商品へ紐付けました"
     );
+  }
+
+  function editProduct(product:Product){
+    setEditingProductId(product.id);
+    setSourceId(product.supplier_product_id);
+    setProductName(product.name);
+    setProductDescription(product.description);
+    setPricePayPay(product.price_paypay);
+    setPriceKyash(product.price_kyash);
+    setEmoji(product.emoji??"");
+  }
+
+  function cancelProductEdit(){
+    setEditingProductId("");
+    setProductDescription("");
+    setEmoji("");
   }
 
   async function deleteProduct(productId:string){
@@ -272,6 +329,44 @@ export default function ShiireVendingManager({
       },
       "在庫入荷通知を保存しました"
     );
+  }
+
+  async function uploadPanelImage(file:File){
+    if(!selected) return;
+    setPanelImageBusy(true);
+    try{
+      const dataUrl=await prepareShiirePanelImage(file);
+      const result=await api<{url:string}>(
+        `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel-image`,
+        {method:"POST",body:JSON.stringify({dataUrl})},
+        30_000
+      );
+      setPanelImageUrl(result.url);
+      onNotice("仕入れBOTパネル画像をアップロードしました");
+      await load();
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setPanelImageBusy(false);
+    }
+  }
+
+  async function removePanelImage(){
+    if(!selected||!panelImageUrl) return;
+    setPanelImageBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel-image`,
+        {method:"DELETE"}
+      );
+      setPanelImageUrl("");
+      onNotice("仕入れBOTパネル画像を削除しました");
+      await load();
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setPanelImageBusy(false);
+    }
   }
 
   async function publishPanel(){
@@ -484,6 +579,36 @@ export default function ShiireVendingManager({
                 rows={4}
               />
             </label>
+            <div className="field">
+              <span>パネル画像</span>
+              {panelImageUrl&&(
+                <img
+                  src={panelImageUrl}
+                  alt="仕入れBOT自販機パネル"
+                  style={{maxWidth:"100%",maxHeight:260,borderRadius:12,objectFit:"contain"}}
+                />
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                disabled={panelImageBusy}
+                onChange={event=>{
+                  const file=event.target.files?.[0];
+                  if(file) void uploadPanelImage(file);
+                  event.currentTarget.value="";
+                }}
+              />
+              {panelImageUrl&&(
+                <button
+                  type="button"
+                  className="danger"
+                  disabled={panelImageBusy}
+                  onClick={()=>void removePanelImage()}
+                >
+                  パネル画像を削除
+                </button>
+              )}
+            </div>
           </section>
 
           <section className="two-col">
@@ -531,9 +656,16 @@ export default function ShiireVendingManager({
                 <span>商品説明</span>
                 <textarea value={productDescription} onChange={e=>setProductDescription(e.target.value)} rows={3} />
               </label>
-              <button className="primary" onClick={()=>void addProduct()} disabled={busy||!sourceId}>
-                販売商品へ追加
-              </button>
+              <div className="button-row">
+                <button className="primary" onClick={()=>void addProduct()} disabled={busy||!sourceId}>
+                  {editingProductId?"商品変更を保存":"販売商品へ追加"}
+                </button>
+                {editingProductId&&(
+                  <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
+                    編集をキャンセル
+                  </button>
+                )}
+              </div>
 
               <div className="list-stack">
                 {(selected.products??[]).map(product=>(
@@ -543,9 +675,14 @@ export default function ShiireVendingManager({
                       在庫 {product.stock_count} / 販売 {product.sales_count} /
                       PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
                     </span>
-                    <button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>
-                      商品を削除
-                    </button>
+                    <div className="button-row">
+                      <button className="secondary" onClick={()=>editProduct(product)} disabled={busy}>
+                        商品を編集
+                      </button>
+                      <button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>
+                        商品を削除
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
