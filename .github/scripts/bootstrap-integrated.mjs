@@ -101,6 +101,10 @@ service = service.replaceAll(
   "String(env.MAIN_BOT_APPLICATION_ID ?? \"\").trim()",
   "effectiveMainBotApplicationId(env)"
 );
+service = service.replaceAll(
+  "env.MAIN_BOT_APPLICATION_ID.trim()",
+  "effectiveMainBotApplicationId(env)"
+);
 service += `
 
 export async function handleIntegratedSecurityRequest(
@@ -338,7 +342,7 @@ write("bot-factory.json", JSON.stringify({
         label: "Application ID",
         type: "text",
         required: true,
-        pattern: "^\\\\d{17,20}$"
+        pattern: "^\\d{17,20}$"
       },
       {
         key: "DISCORD_PUBLIC_KEY",
