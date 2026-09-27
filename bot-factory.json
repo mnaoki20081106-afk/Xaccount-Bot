@@ -4,9 +4,7 @@
   "provider": "cloudflare",
   "working_directory": "apps/worker",
   "wrangler_config": "wrangler.jsonc",
-  "d1_migrations": [
-    "DB"
-  ],
+  "d1_migrations": [],
   "setup": {
     "title": "Xaccount-Bot",
     "description": "Discordサーバー管理とSecurityを1つのBOTとして起動します。Discordから取得する値には取得手順を表示し、内部暗号鍵などのランダム値はFactoryが生成・暗号化保存・再利用します。初回デプロイ後は、発行されたWorker URLをDiscord Developer Portalにも設定してください。",
@@ -204,5 +202,11 @@
         "Discord側のURL設定後はWorkerの再デプロイは不要です。"
       ]
     }
-  }
+  },
+  "d1_schema_files": [
+    {
+      "binding": "DB",
+      "file": "schema.sql"
+    }
+  ]
 }
