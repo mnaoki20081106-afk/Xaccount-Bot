@@ -9,41 +9,83 @@
   ],
   "setup": {
     "title": "Xaccount-Bot",
-    "description": "Discordサーバー管理とSecurityを1つのBOTとして起動します。",
+    "description": "Discordサーバー管理とSecurityを1つのBOTとして起動します。Discord側で取得する値には取得手順を表示し、内部ランダム値はFactoryが生成・管理します。",
     "fields": [
       {
         "key": "DISCORD_BOT_TOKEN",
-        "label": "Discord BOT Token",
+        "label": "BOT Token",
         "type": "secret",
         "required": true,
-        "help": "Discord Developer Portal > Bot から取得します。"
+        "source": {
+          "title": "BOT Tokenの取得方法",
+          "steps": [
+            "Discord Developer PortalでXaccount-Bot用Applicationを開く",
+            "左メニューのBotを開く",
+            "Token欄でReset TokenまたはCopyを押して値をコピーする"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
       },
       {
         "key": "DISCORD_APPLICATION_ID",
         "label": "Application ID",
         "type": "text",
         "required": true,
-        "pattern": "^\\d{17,20}$"
+        "pattern": "^\\d{17,20}$",
+        "source": {
+          "title": "Application IDの取得方法",
+          "steps": [
+            "Discord Developer PortalでXaccount-Bot用Applicationを開く",
+            "General Informationを開く",
+            "Application IDのCopyを押す"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
       },
       {
         "key": "DISCORD_PUBLIC_KEY",
         "label": "Public Key",
-        "type": "text",
-        "required": true
+        "type": "secret",
+        "required": true,
+        "source": {
+          "title": "Public Keyの取得方法",
+          "steps": [
+            "Discord Developer PortalでXaccount-Bot用Applicationを開く",
+            "General Informationを開く",
+            "Public Keyをコピーする"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
       },
       {
         "key": "DISCORD_CLIENT_SECRET",
         "label": "Client Secret",
         "type": "secret",
-        "required": true
+        "required": true,
+        "source": {
+          "title": "Client Secretの取得方法",
+          "steps": [
+            "Discord Developer PortalでXaccount-Bot用Applicationを開く",
+            "OAuth2を開く",
+            "Client Secretをコピーする。表示できない場合はReset Secretを使う"
+          ],
+          "url": "https://discord.com/developers/applications",
+          "link_label": "Discord Developer Portalを開く ↗"
+        }
       },
       {
         "key": "SESSION_ENCRYPTION_KEY",
         "label": "Session Encryption Key",
         "type": "secret",
         "required": true,
-        "pattern": "^.{32,}$",
-        "help": "32文字以上のランダム値を使用します。"
+        "help": "Factoryが生成・暗号化保存し、同じBOTを同じCloudflareアカウントへ再デプロイすると同じ値を再利用します。",
+        "generate": {
+          "strategy": "base64",
+          "bytes": 32
+        }
       },
       {
         "key": "DASHBOARD_PASSWORD",
@@ -51,15 +93,17 @@
         "type": "secret",
         "required": true,
         "pattern": "^.{12,}$",
-        "help": "GitHub Pages管理画面へのログインに使用します。"
+        "placeholder": "12文字以上",
+        "help": "GitHub Pagesの管理画面へログインするため、ここは自分で分かる値を設定します。"
       },
       {
         "key": "SHIIRE_BRIDGE_SECRET",
-        "label": "仕入れBOT連携 Secret",
+        "label": "Discord-Shiire連携 Secret",
         "type": "secret",
         "required": false,
         "pattern": "^.{32,}$",
-        "help": "Discord-Shiireと連携する場合のみ。同じ32文字以上の値を設定します。"
+        "placeholder": "Discord-Shiire側と同じ32文字以上の値",
+        "help": "仕入れBOTと連携する場合のみ入力します。別リポジトリと同じ値を共有する必要があるためFactory自動生成にはしません。"
       }
     ],
     "discord": {
@@ -69,14 +113,16 @@
           "label": "Server Members Intent",
           "required": true,
           "description": "入退室検知・Anti-Raid・メンバー保護に必要です。",
-          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents"
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents",
+          "url": "https://discord.com/developers/applications"
         },
         {
           "id": "message-content-intent",
           "label": "Message Content Intent",
           "required": true,
           "description": "Anti-Spam・Phishing・危険リンク判定に必要です。",
-          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents"
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents",
+          "url": "https://discord.com/developers/applications"
         }
       ],
       "permissions": [
@@ -122,18 +168,21 @@
           "id": "role-order-human-admin",
           "label": "人間の管理者ロールをXaccount-Botより上に配置",
           "required": true,
-          "description": "人間の管理者を自動制裁対象にしないロール階層を維持します。"
+          "description": "人間の管理者を自動制裁対象にせず、管理者が常にBOTを管理できる階層にします。",
+          "path": "Discord > サーバー設定 > ロール"
         },
         {
           "id": "role-order-bot",
           "label": "Xaccount-Botを操作対象ロールより上に配置",
           "required": true,
-          "description": "Discordのロール階層制限により必要です。"
+          "description": "認証ロール付与・危険ロール解除などを行えるようDiscordのロール階層制限を満たします。",
+          "path": "Discord > サーバー設定 > ロール"
         }
       ],
       "notes": [
         "1つのDiscord Application / 1つのBOT Tokenで管理機能とSecurity機能を動かします。",
-        "Security用に別BOTを追加する必要はありません。"
+        "Security用に別BOTを追加する必要はありません。",
+        "SESSION_ENCRYPTION_KEYはFactory管理値なので手入力・再生成は不要です。"
       ]
     }
   }
