@@ -371,6 +371,10 @@ export async function handleShiireServiceBridge(
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:linkAmount});
           return json(env,{ok:true,status:"completed",amount:linkAmount});
         }
+        await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
+          stage:"PAYPAY_ACCEPT_SUBMITTED",
+          amount:linkAmount
+        });
         const result=await acceptPayPayLink(link,account);
         if(result.ok){
           await recordUsedLink(env,method,idempotencyKey,linkHash);
@@ -387,15 +391,34 @@ export async function handleShiireServiceBridge(
 
       const account=await getKyashAccount(env,OWNER_ID);
       if(!account) return json(env,{error:"KYASH_NOT_CONFIGURED"},409);
+      await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
+        stage:"KYASH_RECEIVE_SUBMITTED"
+      });
       const result=await receiveKyashLink(link,account);
-      if(result.amount<amount){
-        await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
-        return json(env,{error:"KYASH_AMOUNT_INSUFFICIENT",linkAmount:result.amount,required:amount},409);
-      }
       if(result.ok){
+        if(result.amount<amount){
+          await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
+          return json(env,{error:"KYASH_AMOUNT_INSUFFICIENT",linkAmount:result.amount,required:amount},409);
+        }
         await recordUsedLink(env,method,idempotencyKey,linkHash);
         await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",result);
         return json(env,{ok:true,status:"completed",amount:result.amount});
+      }
+      if(wasPending){
+        await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
+          ...result,
+          reason:"AMBIGUOUS_PREVIOUS_KYASH_RECEIVE"
+        });
+        return json(env,{
+          ok:false,
+          status:"pending",
+          amount:result.amount,
+          reason:"AMBIGUOUS_PREVIOUS_KYASH_RECEIVE"
+        },202);
+      }
+      if(result.amount<amount&&result.amount>0){
+        await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
+        return json(env,{error:"KYASH_AMOUNT_INSUFFICIENT",linkAmount:result.amount,required:amount},409);
       }
       await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
       return json(env,{ok:false,status:"rejected",amount:result.amount},409);
