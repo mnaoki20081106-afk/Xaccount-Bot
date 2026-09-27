@@ -795,23 +795,25 @@ test('verification panel deployment points directly to unified oauth', async t =
     'an unusable verification panel must not be posted'
   );
 
-  const settings=await request(
-    mf,
-    `/api/guilds/${guildId}/settings`,
-    token,
-    'PUT',
-    {verifiedRoleId:targetRoleId,minAccountAgeDays:0}
-  );
-  assert.equal(settings.status,200,JSON.stringify(settings.body));
-
+  // The selected role can arrive with the panel request if the user clicks
+  // immediately after changing/saving the setting. It must be persisted first.
   const deployed=await request(
     mf,
     `/api/guilds/${guildId}/verification/panel`,
     token,
     'POST',
-    {channelId:chatChannelId}
+    {channelId:chatChannelId,verifiedRoleId:targetRoleId}
   );
   assert.equal(deployed.status,200,JSON.stringify(deployed.body));
+  assert.equal(deployed.body.verifiedRoleId,targetRoleId);
+
+  const persistedSettings=await request(
+    mf,
+    `/api/guilds/${guildId}/settings`,
+    token
+  );
+  assert.equal(persistedSettings.status,200,JSON.stringify(persistedSettings.body));
+  assert.equal(persistedSettings.body.verifiedRoleId,targetRoleId);
 
   const post=calls.find(call=>
     call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`

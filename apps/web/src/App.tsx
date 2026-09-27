@@ -402,6 +402,10 @@ export default function App() {
       setFeedback({ kind: "error", message: "サーバーを選択してください" });
       return;
     }
+    if (kind === "verification" && !settings?.verifiedRoleId) {
+      setFeedback({ kind: "error", message: "先に認証後ロールを選択してください" });
+      return;
+    }
     if (!channelId) {
       setFeedback({
         kind: "error",
@@ -429,7 +433,12 @@ export default function App() {
     try {
       await api(`/api/guilds/${selectedId}/${kind}/panel`, {
         method: "POST",
-        body: JSON.stringify({ channelId })
+        body: JSON.stringify({
+          channelId,
+          ...(kind === "verification"
+            ? { verifiedRoleId: settings?.verifiedRoleId ?? null }
+            : {})
+        })
       });
       const channelName =
         meta?.channels.find((channel) => channel.id === channelId)?.name ?? channelId;
@@ -1099,7 +1108,9 @@ export default function App() {
                   type="button"
                   className="primary"
                   disabled={
+                  busy ||
                   panelAction !== null ||
+                  !settings.verifiedRoleId ||
                   !verificationPanelChannel ||
                   selectedVerificationChannel?.botCanPost === false
                   }
