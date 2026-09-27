@@ -1,0 +1,22 @@
+name: Shiire Vending CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build --workspace @dsm/worker
+      - run: npm run test --workspace @dsm/worker
+      - run: npm run build --workspace @dsm/web
+      - run: npm run test --workspace @dsm/web
