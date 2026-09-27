@@ -120,18 +120,38 @@ export async function handleShiireDashboardProxy(
   const suffix=match[2]??"";
   const target="/bridge/main/guilds/"+guildId+suffix+url.search;
   const body=["GET","HEAD"].includes(request.method)?"":await request.text();
-  const response=await signedShiireFetch(env,target,{
-    method:request.method,
-    body:body||undefined
-  });
-  const text=await response.text();
-  return new Response(text,{
-    status:response.status,
-    headers:{
-      "Content-Type":response.headers.get("Content-Type")??"application/json; charset=utf-8",
-      "Cache-Control":"no-store"
+  try{
+    const response=await signedShiireFetch(env,target,{
+      method:request.method,
+      body:body||undefined
+    });
+    const text=await response.text();
+    return new Response(text,{
+      status:response.status,
+      headers:{
+        "Content-Type":response.headers.get("Content-Type")??"application/json; charset=utf-8",
+        "Cache-Control":"no-store"
+      }
+    });
+  }catch(error){
+    const message=error instanceof Error?error.message:String(error);
+    if(message==="SHIIRE_API_BASE_URL_NOT_CONFIGURED"){
+      return json(env,{
+        error:"SHIIRE_API_BASE_URL_NOT_CONFIGURED",
+        message:"Discord-Shiire Workerの実URLをSHIIRE_API_BASE_URLへ設定してください。推測URLでは接続しません。"
+      },503);
     }
-  });
+    if(message==="SHIIRE_BRIDGE_SECRET_NOT_CONFIGURED"){
+      return json(env,{
+        error:"SHIIRE_BRIDGE_SECRET_NOT_CONFIGURED",
+        message:"Xaccount-BotとDiscord-Shiireの両方へ同じSHIIRE_BRIDGE_SECRETを設定してください。"
+      },503);
+    }
+    return json(env,{
+      error:"SHIIRE_BRIDGE_UNREACHABLE",
+      message:"Discord-Shiireへ接続できません: "+message.slice(0,180)
+    },502);
+  }
 }
 
 function hexBytes(value:string):Uint8Array|null{
