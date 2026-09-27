@@ -323,6 +323,7 @@ export async function handleShiireServiceBridge(
         try{response=JSON.parse(receipt.response_json??"{}");}catch{}
         return json(env,{ok:true,status:"completed",duplicate:true,...response});
       }
+      const wasPending=receipt?.status==="PENDING";
 
       if(method==="paypay"){
         const account=await getPayPay(env,OWNER_ID,env.SESSION_ENCRYPTION_KEY);
@@ -335,6 +336,17 @@ export async function handleShiireServiceBridge(
           return json(env,{error:"PAYPAY_AMOUNT_INSUFFICIENT",linkAmount,required:amount},409);
         }
         if(currentStatus==="SUCCESS"||currentStatus==="COMPLETED"){
+          if(!wasPending){
+            await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
+              amount:linkAmount,
+              reason:"PAYPAY_LINK_ALREADY_COMPLETED"
+            });
+            return json(env,{
+              error:"PAYPAY_LINK_ALREADY_COMPLETED",
+              linkAmount,
+              required:amount
+            },409);
+          }
           await recordUsedLink(env,method,idempotencyKey,linkHash);
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:linkAmount});
           return json(env,{ok:true,status:"completed",amount:linkAmount});
