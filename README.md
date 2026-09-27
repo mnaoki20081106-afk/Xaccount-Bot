@@ -67,3 +67,84 @@ Repository Variable VITE_API_BASE_URL にはFactoryでデプロイされたWorke
 - mnaoki20081106-afk/Discord-Security
 
 両方の実装をそのまま再利用できる部分は維持し、Worker境界だけを同一プロセス内の内部呼び出しへ置き換えています。
+
+
+## 仕入れbot 自販機
+
+メイン管理画面には、既存の **自販機** とは完全に分離した **仕入れbot** タブがあります。
+
+このタブは Discord-Shiire のXアカウント自動仕入れ在庫を直接販売するための管理画面です。Xアカウント認証情報そのものは Xaccount-Bot へコピーしません。
+
+役割分担:
+
+```text
+Xaccount-Bot
+  ├─ 管理画面セッション
+  ├─ 仕入れbotタブ
+  ├─ 既存PayPay/Kyash受取設定
+  └─ HMAC bridge
+            |
+            v
+Discord-Shiire
+  ├─ HStora自動仕入れ
+  ├─ AES-GCM暗号化在庫
+  ├─ 自販機 / パネル
+  ├─ 在庫入荷通知
+  ├─ 注文予約
+  └─ 購入者DM納品
+```
+
+決済資格情報を2つのWorkerへ複製しないため、Discord-Shiire は署名付き内部APIでXaccount-Botの既存PayPay/Kyash受取処理を利用します。
+
+### 必須接続設定
+
+Xaccount-Bot Worker:
+
+```text
+SHIIRE_BRIDGE_SECRET
+SHIIRE_API_BASE_URL
+```
+
+Discord-Shiire Worker:
+
+```text
+SHIIRE_BRIDGE_SECRET
+```
+
+`SHIIRE_BRIDGE_SECRET` は両方に同じ強いランダム値を設定してください。
+
+`SHIIRE_API_BASE_URL` は、実際にデプロイされた Discord-Shiire Worker の HTTPS origin を設定します。
+
+例のホスト名を推測して設定しないでください。未設定時、管理画面は `SHIIRE_API_BASE_URL_NOT_CONFIGURED` を返して停止します。
+
+### 仕入れbotタブから管理できるもの
+
+- Discord-Shiire Botの導入状態
+- 既存PayPay/Kyash受取設定の利用可否
+- Shiire自販機の作成
+- HStora仕入れ商品と販売商品の紐付け
+- PayPay/Kyash販売価格
+- 商品名 / 説明 / 絵文字
+- 商品編集
+- 自販機パネルタイトル / 説明
+- パネル画像アップロード
+- Discordパネル設置 / 更新
+- 購入後ロール
+- 公開 / 非公開購入ログ
+- 在庫入荷通知 ON/OFF
+- 入荷通知チャンネル / メンションロール
+- クーポン
+- 注文履歴
+
+### Bridge安全設計
+
+- HMAC-SHA256
+- timestamp制限
+- one-time nonce
+- replay拒否
+- 決済idempotency key
+- 使用済み送金リンク重複拒否
+- 新規入力された「既に完了済み」のPayPayリンクは新規決済として扱わない
+- Discord-ShiireからXaccount-BotへXアカウント認証情報は送信しない
+
+既存の **自販機** 機能は変更せず、そのまま利用できます。
