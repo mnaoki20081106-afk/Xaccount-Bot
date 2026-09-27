@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "xaccount-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      },
+      {
+        "name": "SECURITY_GATEWAY",
+        "class_name": "DiscordSecurityGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "discord-gateway-v1",
+      "new_sqlite_classes": ["DiscordGateway"]
+    },
+    {
+      "tag": "integrated-security-gateway-v1",
+      "new_sqlite_classes": ["DiscordSecurityGateway"]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
+    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Xaccount-Bot/",
+    "PAYPAY_ENV": "sandbox"
+  }
+}

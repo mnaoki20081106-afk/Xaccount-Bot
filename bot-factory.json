@@ -1,0 +1,140 @@
+{
+  "name": "xaccount-bot",
+  "runtime": "worker",
+  "provider": "cloudflare",
+  "working_directory": "apps/worker",
+  "wrangler_config": "wrangler.jsonc",
+  "d1_migrations": [
+    "DB"
+  ],
+  "setup": {
+    "title": "Xaccount-Bot",
+    "description": "Discordサーバー管理とSecurityを1つのBOTとして起動します。",
+    "fields": [
+      {
+        "key": "DISCORD_BOT_TOKEN",
+        "label": "Discord BOT Token",
+        "type": "secret",
+        "required": true,
+        "help": "Discord Developer Portal > Bot から取得します。"
+      },
+      {
+        "key": "DISCORD_APPLICATION_ID",
+        "label": "Application ID",
+        "type": "text",
+        "required": true,
+        "pattern": "^\\d{17,20}$"
+      },
+      {
+        "key": "DISCORD_PUBLIC_KEY",
+        "label": "Public Key",
+        "type": "text",
+        "required": true
+      },
+      {
+        "key": "DISCORD_CLIENT_SECRET",
+        "label": "Client Secret",
+        "type": "secret",
+        "required": true
+      },
+      {
+        "key": "SESSION_ENCRYPTION_KEY",
+        "label": "Session Encryption Key",
+        "type": "secret",
+        "required": true,
+        "pattern": "^.{32,}$",
+        "help": "32文字以上のランダム値を使用します。"
+      },
+      {
+        "key": "DASHBOARD_PASSWORD",
+        "label": "管理サイト Password",
+        "type": "secret",
+        "required": true,
+        "pattern": "^.{12,}$",
+        "help": "GitHub Pages管理画面へのログインに使用します。"
+      },
+      {
+        "key": "SHIIRE_BRIDGE_SECRET",
+        "label": "仕入れBOT連携 Secret",
+        "type": "secret",
+        "required": false,
+        "pattern": "^.{32,}$",
+        "help": "Discord-Shiireと連携する場合のみ。同じ32文字以上の値を設定します。"
+      }
+    ],
+    "discord": {
+      "intents": [
+        {
+          "id": "server-members-intent",
+          "label": "Server Members Intent",
+          "required": true,
+          "description": "入退室検知・Anti-Raid・メンバー保護に必要です。",
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents"
+        },
+        {
+          "id": "message-content-intent",
+          "label": "Message Content Intent",
+          "required": true,
+          "description": "Anti-Spam・Phishing・危険リンク判定に必要です。",
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents"
+        }
+      ],
+      "permissions": [
+        {
+          "id": "manage-guild",
+          "label": "サーバーの管理",
+          "required": true,
+          "description": "サーバー設定・監査・保護機能に使用します。"
+        },
+        {
+          "id": "manage-channels",
+          "label": "チャンネルの管理",
+          "required": true,
+          "description": "サーバー編集・復元・Lockdownに必要です。"
+        },
+        {
+          "id": "manage-roles",
+          "label": "ロールの管理",
+          "required": true,
+          "description": "認証ロール付与と危険ロール解除に必要です。"
+        },
+        {
+          "id": "kick-ban",
+          "label": "メンバーをキック / BAN",
+          "required": true,
+          "description": "高信頼度の悪性BOTや攻撃への対処に必要です。"
+        },
+        {
+          "id": "moderate-members",
+          "label": "メンバーをタイムアウト",
+          "required": true,
+          "description": "スパム・荒らしへの可逆的な制裁に必要です。"
+        },
+        {
+          "id": "manage-messages-webhooks",
+          "label": "メッセージ / Webhookの管理",
+          "required": true,
+          "description": "危険メッセージ削除とWebhook保護に必要です。"
+        }
+      ],
+      "checks": [
+        {
+          "id": "role-order-human-admin",
+          "label": "人間の管理者ロールをXaccount-Botより上に配置",
+          "required": true,
+          "description": "人間の管理者を自動制裁対象にしないロール階層を維持します。"
+        },
+        {
+          "id": "role-order-bot",
+          "label": "Xaccount-Botを操作対象ロールより上に配置",
+          "required": true,
+          "description": "Discordのロール階層制限により必要です。"
+        }
+      ],
+      "notes": [
+        "1つのDiscord Application / 1つのBOT Tokenで管理機能とSecurity機能を動かします。",
+        "Security用に別BOTを追加する必要はありません。"
+      ]
+    }
+  }
+}

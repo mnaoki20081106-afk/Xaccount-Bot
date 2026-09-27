@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/BackupManager.tsx","./src/MemberActivityManager.tsx","./src/RoleManager.tsx","./src/SecurityManager.tsx","./src/VendingManager.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/ServerEditor/index.tsx","./vite.config.ts"],"version":"5.9.3"}

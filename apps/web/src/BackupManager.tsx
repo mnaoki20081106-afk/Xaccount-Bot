@@ -1,0 +1,516 @@
+import { useEffect, useState } from "react";
+import { api } from "./api";
+
+type Backup = {
+  id:string;
+  sourceGuildId:string;
+  sourceGuildName:string;
+  label:string|null;
+  createdAt:number;
+  schemaVersion:number;
+  roleCount:number;
+  channelCount:number;
+  memberCount:number;
+  recoveryMemberCount:number;
+  warnings:string[];
+};
+
+type RestoreStats = {
+  rolesCreated:number;
+  rolesUpdated:number;
+  channelsCreated:number;
+  channelsUpdated:number;
+  membersAdded:number;
+  membersAlreadyPresent:number;
+  membersSkippedNoConsent:number;
+  membersRevoked:number;
+  membersFailed:number;
+  memberTimeoutsRestored:number;
+  bansRestored:number;
+  guildExtrasRestored:number;
+  panelsRestored:number;
+  productsRestored:number;
+  vendingMachinesRestored:number;
+  warnings:string[];
+};
+
+type RestoreJob = {
+  id:string;
+  backupId:string;
+  targetGuildId:string;
+  status:"queued"|"running"|"completed"|"failed"|"cancelled";
+  phase:string;
+  cursor:number;
+  result:RestoreStats;
+  error:string|null;
+  createdAt:number;
+  updatedAt:number;
+};
+
+type Preview = {
+  source:{id:string;name:string};
+  target:{id:string;name:string};
+  counts:{
+    roles:number;
+    missingRoles:number;
+    channels:number;
+    missingChannels:number;
+    members:number;
+    bans:number;
+    recoveryRegistered:number;
+    botPanels:number;
+    vendingMachines:number;
+  };
+  behavior:{
+    destructive:boolean;
+    deletesExisting:boolean;
+    reusesMatching:boolean;
+    memberRestoreRequiresPriorConsent:boolean;
+  };
+  warnings:string[];
+};
+
+type RecoveryStatus = {
+  registered:number;
+  registrationMode?:"verification";
+  separatePanelAvailable?:boolean;
+};
+
+type Props = {
+  guildId:string;
+  channels:Array<{id:string;name:string;type?:string;botCanPost?:boolean}>;
+  onNotice:(message:string)=>void;
+  onError:(message:string)=>void;
+};
+
+function formatDate(value:number){
+  return new Intl.DateTimeFormat("ja-JP",{
+    year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",second:"2-digit"
+  }).format(new Date(value));
+}
+
+function phaseLabel(phase:string){
+  const labels:Record<string,string>={
+    preflight:"事前確認",
+    roles:"ロール",
+    categories:"カテゴリ",
+    channels:"チャンネル",
+    positions:"配置・サーバー設定",
+    "guild-extras":"Welcome/Widget",
+    bans:"BAN一覧",
+    "bot-settings":"BOT設定",
+    "legacy-products":"商品",
+    vending:"自販機",
+    panels:"パネル",
+    members:"メンバー",
+    done:"完了"
+  };
+  return labels[phase]??phase;
+}
+
+export default function BackupManager({
+  guildId,onNotice,onError
+}:Props){
+  const [backups,setBackups]=useState<Backup[]>([]);
+  const [jobs,setJobs]=useState<RestoreJob[]>([]);
+  const [recovery,setRecovery]=useState<RecoveryStatus|null>(null);
+  const [label,setLabel]=useState("");
+  const [busy,setBusy]=useState<string|null>(null);
+  const [preview,setPreview]=useState<{backup:Backup;data:Preview}|null>(null);
+  const [confirmText,setConfirmText]=useState("");
+
+  async function load(){
+    try{
+      const [backupRows,jobRows,recoveryRow]=await Promise.all([
+        api<Backup[]>("/api/backups"),
+        api<RestoreJob[]>("/api/restore-jobs?targetGuildId="+encodeURIComponent(guildId)),
+        api<RecoveryStatus>("/api/guilds/"+guildId+"/recovery/status")
+      ]);
+      setBackups(backupRows);
+      setJobs(jobRows);
+      setRecovery(recoveryRow);
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }
+  }
+
+  useEffect(()=>{
+    void load();
+  },[guildId]);
+
+  useEffect(()=>{
+    const active=jobs.some(job=>job.status==="queued"||job.status==="running");
+    if(!active) return;
+    const timer=window.setInterval(()=>void load(),8000);
+    return ()=>window.clearInterval(timer);
+  },[jobs,guildId]);
+
+  async function createBackup(){
+    setBusy("create");
+    try{
+      const created=await api<Backup>("/api/guilds/"+guildId+"/backups",{
+        method:"POST",
+        body:JSON.stringify({label:label.trim()||undefined})
+      },120_000);
+      setLabel("");
+      onNotice(
+        "バックアップを作成しました。"+
+        ` ロール${created.roleCount} / チャンネル${created.channelCount} / メンバー${created.memberCount}`
+      );
+      await load();
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }finally{
+      setBusy(null);
+    }
+  }
+
+  async function showPreview(backup:Backup){
+    setBusy("preview:"+backup.id);
+    try{
+      const data=await api<Preview>("/api/backups/"+backup.id+"/restore/preview",{
+        method:"POST",
+        body:JSON.stringify({targetGuildId:guildId})
+      },45_000);
+      setPreview({backup,data});
+      setConfirmText("");
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }finally{
+      setBusy(null);
+    }
+  }
+
+  async function startRestore(){
+    if(!preview||confirmText!=="復元") return;
+    const id=preview.backup.id;
+    setBusy("restore:"+id);
+    try{
+      const job=await api<RestoreJob>("/api/backups/"+id+"/restore",{
+        method:"POST",
+        body:JSON.stringify({targetGuildId:guildId})
+      },45_000);
+      setPreview(null);
+      setConfirmText("");
+      onNotice("復元ジョブを開始しました。Discord APIの制限を避けながら段階的に復元します。");
+      setJobs(current=>[job,...current.filter(item=>item.id!==job.id)]);
+      await load();
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }finally{
+      setBusy(null);
+    }
+  }
+
+  async function deleteBackup(backup:Backup){
+    if(!window.confirm(
+      `「${backup.label||backup.sourceGuildName}」のバックアップを削除します。復元できなくなります。よろしいですか？`
+    )) return;
+    setBusy("delete:"+backup.id);
+    try{
+      await api("/api/backups/"+backup.id,{method:"DELETE"});
+      onNotice("バックアップを削除しました");
+      await load();
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }finally{
+      setBusy(null);
+    }
+  }
+
+  async function cancelJob(job:RestoreJob){
+    setBusy("cancel:"+job.id);
+    try{
+      await api("/api/restore-jobs/"+job.id,{method:"DELETE"});
+      onNotice("復元ジョブを停止しました");
+      await load();
+    }catch(reason){
+      onError(reason instanceof Error?reason.message:String(reason));
+    }finally{
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="backup-manager">
+      <div className="backup-hero card">
+        <div>
+          <span className="eyebrow">DISASTER RECOVERY</span>
+          <h2>バックアップ管理</h2>
+          <p className="muted">
+            Discord上の構成・権限・メンバー情報と、認証・商品・自販機などDSM側の設定を
+            暗号化して保存します。復元は既存項目を削除せず、差分を段階的に合わせます。
+          </p>
+        </div>
+        <button className="secondary" onClick={()=>void load()} disabled={busy!==null}>
+          再読み込み
+        </button>
+      </div>
+
+      <article className="card backup-coverage">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">RECOVERY COVERAGE</span>
+            <h3>復元できる範囲とDiscord側の制約</h3>
+          </div>
+        </div>
+        <div className="backup-callout">
+          <strong>復元対象</strong>
+          <span>
+            サーバー基本設定、@everyoneを含むロール権限、カテゴリ/チャンネル配置と権限、
+            メンバーID・ロール・ニックネーム・有効なタイムアウト、BAN一覧、
+            Welcome Screen / Server Widget、DSMの認証・商品・自販機・在庫・クーポン・パネル設定を復元します。
+          </span>
+        </div>
+        <div className="backup-callout">
+          <strong>メンバー自動復元の条件</strong>
+          <span>
+            メンバー一覧の取得にはDiscord Developer Portalの Server Members Intent
+            （GUILD_MEMBERS）が必要です。自動再参加は、障害発生前に本人が復旧登録で
+            guilds.join を許可したメンバーだけが対象です。
+          </span>
+        </div>
+        <div className="backup-callout">
+          <strong>Discord API上、そのまま復元できないもの</strong>
+          <span>
+            過去メッセージを元の投稿者・元のMessage IDのまま戻すこと、外部Integrationや他社Botを
+            本人/提供元の再認証なしで再導入すること、Server Boost・所有権・監査ログ・元の招待コードを
+            そのまま再現することはできません。現時点の絵文字・ステッカーはメタデータ保存までで、
+            画像実体の再アップロードは復元対象外です。
+          </span>
+        </div>
+      </article>
+
+      <div className="backup-grid">
+        <article className="card">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">SNAPSHOT</span>
+              <h3>新しいバックアップ</h3>
+            </div>
+          </div>
+          <label className="field">
+            <span>メモ / 名前</span>
+            <input
+              value={label}
+              onChange={event=>setLabel(event.target.value)}
+              placeholder="例: 大規模変更の前"
+              maxLength={80}
+            />
+          </label>
+          <div className="backup-callout">
+            <strong>自動保護</strong>
+            <span>
+              手動バックアップに加えて、24時間以上新しいバックアップが無いサーバーは自動取得します。
+              自動バックアップは各サーバー14世代を保持します。
+            </span>
+          </div>
+          <div className="backup-callout">
+            <strong>取得対象</strong>
+            <span>
+              サーバー基本設定、ロール・権限・並び順、カテゴリ/チャンネル、
+              メンバーID・ロール・タイムアウト、BAN一覧、Welcome Screen / Widget、絵文字/ステッカー情報、認証設定、商品、自販機、
+              在庫、クーポン、パネル設置情報。
+            </span>
+          </div>
+          <button
+            className="primary"
+            onClick={()=>void createBackup()}
+            disabled={busy!==null}
+          >
+            {busy==="create"?"取得中...":"今すぐバックアップを作成"}
+          </button>
+        </article>
+
+        <article className="card">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">MEMBER RECOVERY</span>
+              <h3>メンバー自動復元</h3>
+            </div>
+            <span className="backup-count">{recovery?.registered??0} 登録</span>
+          </div>
+          <p className="muted">
+            復旧用メンバー登録は「認証」タブの認証パネルへ統合されています。
+            ユーザーは認証を1回完了するだけで、認証ロールの付与と公式OAuthの
+            <code>guilds.join</code> 登録が同時に完了し、そのまま自動復元対象になります。
+          </p>
+          <div className="backup-callout">
+            <strong>別の復旧認証は不要</strong>
+            <span>
+              新しい「復旧登録パネル」は設置しません。認証パネルを唯一の登録導線として使うため、
+              通常のメンバーが2種類の認証を行う必要はありません。
+            </span>
+          </div>
+          <div className="backup-callout">
+            <strong>旧方式からの移行</strong>
+            <span>
+              以前の認証方式ですでに認証済みでも、この登録数に含まれていないメンバーだけは、
+              認証パネルから一度認証し直すと復旧対象へ統合されます。
+            </span>
+          </div>
+        </article>
+      </div>
+
+      {jobs.length>0&&(
+        <article className="card backup-jobs">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">RESTORE JOBS</span>
+              <h3>復元状況</h3>
+            </div>
+          </div>
+          <div className="backup-job-list">
+            {jobs.map(job=>{
+              const active=job.status==="queued"||job.status==="running";
+              return (
+                <div className={"backup-job "+job.status} key={job.id}>
+                  <div>
+                    <strong>
+                      {job.status==="completed"?(job.result.warnings?.length||job.result.membersFailed?"復元完了（注意あり）":"復元完了"):
+                        job.status==="failed"?"復元失敗":
+                        job.status==="cancelled"?"停止済み":"復元中"}
+                    </strong>
+                    <small>
+                      {phaseLabel(job.phase)} · 更新 {formatDate(job.updatedAt)}
+                    </small>
+                  </div>
+                  <div className="backup-job-stats">
+                    <span>ロール +{job.result.rolesCreated}</span>
+                    <span>チャンネル +{job.result.channelsCreated}</span>
+                    <span>メンバー +{job.result.membersAdded}</span>
+                    <span>BAN +{job.result.bansRestored||0}</span>
+                    <span>タイムアウト +{job.result.memberTimeoutsRestored||0}</span>
+                    <span>パネル +{job.result.panelsRestored}</span>
+                  </div>
+                  {job.error&&<div className="backup-job-error">{job.error}</div>}
+                  {job.result.warnings?.length>0&&(
+                    <details>
+                      <summary>注意 {job.result.warnings.length}件</summary>
+                      <ul>{job.result.warnings.slice(-8).map((item,index)=><li key={index}>{item}</li>)}</ul>
+                    </details>
+                  )}
+                  {active&&(
+                    <button
+                      className="danger subtle"
+                      onClick={()=>void cancelJob(job)}
+                      disabled={busy!==null}
+                    >
+                      復元を停止
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </article>
+      )}
+
+      <article className="card">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">ARCHIVES</span>
+            <h3>保存済みバックアップ</h3>
+          </div>
+          <span className="backup-count">{backups.length} 件</span>
+        </div>
+        {backups.length===0?(
+          <div className="backup-empty">まだバックアップはありません。</div>
+        ):(
+          <div className="backup-list">
+            {backups.map(backup=>(
+              <div className="backup-row" key={backup.id}>
+                <div className="backup-main">
+                  <strong>{backup.label||backup.sourceGuildName}</strong>
+                  <span>{backup.sourceGuildName}</span>
+                  <small>{formatDate(backup.createdAt)}</small>
+                </div>
+                <div className="backup-stats">
+                  <span><b>{backup.roleCount}</b> ロール</span>
+                  <span><b>{backup.channelCount}</b> チャンネル</span>
+                  <span><b>{backup.memberCount}</b> メンバー</span>
+                  <span><b>{backup.recoveryMemberCount}</b> 自動復元登録</span>
+                </div>
+                {backup.warnings?.length>0&&(
+                  <details className="backup-warning">
+                    <summary>取得時の注意 {backup.warnings.length}件</summary>
+                    <ul>{backup.warnings.map((item,index)=><li key={index}>{item}</li>)}</ul>
+                  </details>
+                )}
+                <div className="button-row">
+                  <button
+                    className="primary"
+                    onClick={()=>void showPreview(backup)}
+                    disabled={busy!==null}
+                  >
+                    {busy==="preview:"+backup.id?"確認中...":"このサーバーへ復元"}
+                  </button>
+                  <button
+                    className="danger subtle"
+                    onClick={()=>void deleteBackup(backup)}
+                    disabled={busy!==null}
+                  >
+                    削除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </article>
+
+      {preview&&(
+        <div className="backup-modal-backdrop" role="presentation">
+          <div className="backup-modal card" role="dialog" aria-modal="true">
+            <span className="eyebrow">RESTORE PREVIEW</span>
+            <h2>復元内容を確認</h2>
+            <p>
+              <strong>{preview.data.source.name}</strong> のバックアップを
+              <strong> {preview.data.target.name}</strong> に復元します。
+            </p>
+            <div className="preview-metrics">
+              <span>ロール <b>{preview.data.counts.roles}</b> / 新規見込み {preview.data.counts.missingRoles}</span>
+              <span>チャンネル <b>{preview.data.counts.channels}</b> / 新規見込み {preview.data.counts.missingChannels}</span>
+              <span>メンバー <b>{preview.data.counts.members}</b></span>
+              <span>BAN <b>{preview.data.counts.bans}</b></span>
+              <span>復旧登録 <b>{preview.data.counts.recoveryRegistered}</b></span>
+              <span>パネル <b>{preview.data.counts.botPanels}</b></span>
+              <span>自販機 <b>{preview.data.counts.vendingMachines}</b></span>
+            </div>
+            <div className="backup-safe">
+              <strong>安全モード</strong>
+              <span>既存チャンネル/ロールは削除しません。一致するものを再利用し、不足分を追加します。</span>
+            </div>
+            {preview.data.warnings.length>0&&(
+              <div className="alert error">
+                {preview.data.warnings.map((warning,index)=><div key={index}>{warning}</div>)}
+              </div>
+            )}
+            <label className="field">
+              <span>開始するには「復元」と入力</span>
+              <input
+                value={confirmText}
+                onChange={event=>setConfirmText(event.target.value)}
+                placeholder="復元"
+                autoComplete="off"
+              />
+            </label>
+            <div className="button-row">
+              <button className="secondary" onClick={()=>setPreview(null)} disabled={busy!==null}>
+                キャンセル
+              </button>
+              <button
+                className="primary"
+                onClick={()=>void startRestore()}
+                disabled={busy!==null||confirmText!=="復元"}
+              >
+                {busy?.startsWith("restore:")?"開始中...":"復元ジョブを開始"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}

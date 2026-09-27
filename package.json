@@ -1,0 +1,20 @@
+{
+  "name": "discord-server-manager",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/server",
+    "apps/web",
+    "apps/worker"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace @dsm/server",
+    "dev:web": "npm run dev --workspace @dsm/web",
+    "build": "npm run build --workspaces",
+    "start": "npm run start --workspace @dsm/server",
+    "deploy:worker": "cd apps/worker && npx wrangler deploy"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
