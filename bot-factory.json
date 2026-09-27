@@ -107,6 +107,15 @@
         "pattern": "^.{32,}$",
         "placeholder": "Discord-Shiire側と同じ32文字以上の値",
         "help": "仕入れBOTと連携する場合のみ入力します。別リポジトリと同じ値を共有する必要があるためFactory自動生成にはしません。"
+      },
+      {
+        "key": "SHIIRE_API_BASE_URL",
+        "label": "Discord-Shiire Worker URL",
+        "type": "text",
+        "required": false,
+        "pattern": "^https://[^\\s/]+(?:/)?$",
+        "placeholder": "https://<実際のDiscord-Shiire Worker URL>",
+        "help": "仕入れbotタブを使う場合のみ設定します。Discord-Shiireをデプロイした後に発行された実際のWorker HTTPS originを入力してください。推測URLは使用しません。"
       }
     ],
     "discord": {
