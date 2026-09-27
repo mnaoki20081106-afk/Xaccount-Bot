@@ -3,9 +3,7 @@
   "name": "xaccount-bot",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": true,
   "durable_objects": {
@@ -23,15 +21,11 @@
   "migrations": [
     {
       "tag": "discord-gateway-v1",
-      "new_sqlite_classes": [
-        "DiscordGateway"
-      ]
+      "new_sqlite_classes": ["DiscordGateway"]
     },
     {
       "tag": "integrated-security-gateway-v1",
-      "new_sqlite_classes": [
-        "DiscordSecurityGateway"
-      ]
+      "new_sqlite_classes": ["DiscordSecurityGateway"]
     }
   ],
   "d1_databases": [
@@ -42,9 +36,7 @@
     }
   ],
   "triggers": {
-    "crons": [
-      "* * * * *"
-    ]
+    "crons": ["* * * * *"]
   },
   "vars": {
     "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
