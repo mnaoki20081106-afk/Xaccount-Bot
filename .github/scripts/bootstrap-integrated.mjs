@@ -149,84 +149,7 @@ export async function runIntegratedSecurityScheduled(env: Env): Promise<void> {
 `;
 write("apps/worker/src/security/service.ts", service);
 
-write("apps/worker/src/security-bridge.ts", `import type { Env } from "./types";
-import { handleIntegratedSecurityRequest } from "./security/service";
-
-export function securityBridgeConfigured(env: Env): boolean {
-  return Boolean(
-    env.SECURITY_GATEWAY &&
-    env.DISCORD_BOT_TOKEN?.trim() &&
-    env.DISCORD_APPLICATION_ID?.trim()
-  );
-}
-
-export async function securityBridgeFetch(
-  env: Env,
-  path: string,
-  init: RequestInit = {}
-): Promise<Response> {
-  if (!securityBridgeConfigured(env)) {
-    throw new Error("Integrated Security is not configured");
-  }
-
-  const url = new URL(
-    path.replace(/^\\//, ""),
-    "https://integrated-security.internal/"
-  );
-
-  const method = String(init.method ?? "GET").toUpperCase();
-  const request = new Request(url.toString(), {
-    ...init,
-    method,
-    body: method === "GET" || method === "HEAD" ? undefined : init.body,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {})
-    }
-  });
-
-  return handleIntegratedSecurityRequest(request, env);
-}
-
-export async function securityBridgeJson<T>(
-  env: Env,
-  path: string,
-  init: RequestInit = {}
-): Promise<T> {
-  const response = await securityBridgeFetch(env, path, init);
-  const text = await response.text();
-  if (!response.ok) {
-    let message = text;
-    try {
-      const parsed = JSON.parse(text) as { message?: string; error?: string };
-      message = parsed.message ?? parsed.error ?? text;
-    } catch {
-      // keep raw text
-    }
-    throw new Error(
-      "Integrated Security API " + response.status + ": " + message.slice(0, 300)
-    );
-  }
-  return text ? JSON.parse(text) as T : undefined as T;
-}
-
-export async function openSecurityMaintenanceLease(
-  env: Env,
-  guildId: string,
-  scope: "dashboard_edit" | "restore",
-  seconds: number
-): Promise<{ id: string; expiresAt: number } | null> {
-  if (!securityBridgeConfigured(env)) return null;
-  return securityBridgeJson(env, "/internal/guilds/" + guildId + "/maintenance", {
-    method: "POST",
-    body: JSON.stringify({
-      actorId: env.DISCORD_APPLICATION_ID,
-      scope,
-      seconds
-    })
-  });
-}
-`);
+write("apps/worker/src/security-bridge.ts", "import type { Env } from \"./types\";\nimport { handleIntegratedSecurityRequest } from \"./security/service\";\n\nfunction normalizeSecurityApiBaseUrl(raw?: string): string | null {\n  let value = raw?.trim() ?? \"\";\n  if (!value) return null;\n  if (\n    (value.startsWith('\"') && value.endsWith('\"')) ||\n    (value.startsWith(\"'\") && value.endsWith(\"'\"))\n  ) {\n    value = value.slice(1, -1).trim();\n  }\n  value = value.replace(/^SECURITY_API_BASE_URL\\s*=\\s*/i, \"\").trim();\n  if (!value) return null;\n  if (!/^[a-z][a-z0-9+.-]*:\\/\\//i.test(value)) {\n    value = \"https://\" + value;\n  }\n  try {\n    const url = new URL(value);\n    if (url.protocol !== \"https:\" && url.protocol !== \"http:\") return null;\n    if (!url.hostname) return null;\n    url.hash = \"\";\n    url.search = \"\";\n    url.pathname = url.pathname.replace(/\\/+$/, \"\") + \"/\";\n    return url.toString();\n  } catch {\n    return null;\n  }\n}\n\nfunction localSecurityConfigured(env: Env): boolean {\n  return Boolean(\n    env.SECURITY_GATEWAY &&\n    env.DISCORD_BOT_TOKEN?.trim() &&\n    env.DISCORD_APPLICATION_ID?.trim()\n  );\n}\n\nfunction legacySecurityConfigured(env: Env): boolean {\n  return Boolean(\n    normalizeSecurityApiBaseUrl(env.SECURITY_API_BASE_URL) &&\n    env.SECURITY_BRIDGE_SECRET?.trim() &&\n    env.SECURITY_BRIDGE_SECRET.trim().length >= 32\n  );\n}\n\nexport function securityBridgeConfigured(env: Env): boolean {\n  return localSecurityConfigured(env) || legacySecurityConfigured(env);\n}\n\nfunction hex(bytes: ArrayBuffer): string {\n  return [...new Uint8Array(bytes)]\n    .map(value => value.toString(16).padStart(2, \"0\"))\n    .join(\"\");\n}\n\nasync function hmacHex(secret: string, value: string): Promise<string> {\n  const key = await crypto.subtle.importKey(\n    \"raw\",\n    new TextEncoder().encode(secret),\n    { name: \"HMAC\", hash: \"SHA-256\" },\n    false,\n    [\"sign\"]\n  );\n  return hex(await crypto.subtle.sign(\n    \"HMAC\",\n    key,\n    new TextEncoder().encode(value)\n  ));\n}\n\nexport async function securityBridgeFetch(\n  env: Env,\n  path: string,\n  init: RequestInit = {}\n): Promise<Response> {\n  const method = String(init.method ?? \"GET\").toUpperCase();\n\n  if (localSecurityConfigured(env)) {\n    const url = new URL(\n      path.replace(/^\\//, \"\"),\n      \"https://integrated-security.internal/\"\n    );\n    const request = new Request(url.toString(), {\n      ...init,\n      method,\n      body: method === \"GET\" || method === \"HEAD\" ? undefined : init.body,\n      headers: {\n        \"Content-Type\": \"application/json\",\n        ...(init.headers ?? {})\n      }\n    });\n    return handleIntegratedSecurityRequest(request, env);\n  }\n\n  if (!legacySecurityConfigured(env)) {\n    throw new Error(\"Integrated Security is not configured\");\n  }\n\n  const base = normalizeSecurityApiBaseUrl(env.SECURITY_API_BASE_URL);\n  if (!base) throw new Error(\"SECURITY_API_BASE_URL is invalid\");\n\n  const url = new URL(path.replace(/^\\//, \"\"), base);\n  const body =\n    typeof init.body === \"string\"\n      ? init.body\n      : init.body == null\n        ? \"\"\n        : String(init.body);\n  const timestamp = String(Date.now());\n  const nonce = crypto.randomUUID().replace(/-/g, \"\");\n  const canonical =\n    timestamp + \"\\n\" +\n    nonce + \"\\n\" +\n    method + \"\\n\" +\n    url.pathname + url.search + \"\\n\" +\n    body;\n  const signature = await hmacHex(env.SECURITY_BRIDGE_SECRET!, canonical);\n  const request = new Request(url.toString(), {\n    ...init,\n    method,\n    body: body || undefined,\n    headers: {\n      \"Content-Type\": \"application/json\",\n      \"X-Security-Timestamp\": timestamp,\n      \"X-Security-Nonce\": nonce,\n      \"X-Security-Signature\": signature,\n      ...(init.headers ?? {})\n    }\n  });\n  if (env.SECURITY_SERVICE) return env.SECURITY_SERVICE.fetch(request);\n  return fetch(request);\n}\n\nexport async function securityBridgeJson<T>(\n  env: Env,\n  path: string,\n  init: RequestInit = {}\n): Promise<T> {\n  const response = await securityBridgeFetch(env, path, init);\n  const text = await response.text();\n  if (!response.ok) {\n    let message = text;\n    try {\n      const parsed = JSON.parse(text) as { message?: string; error?: string };\n      message = parsed.message ?? parsed.error ?? text;\n    } catch {\n      // keep raw text\n    }\n    throw new Error(\n      (localSecurityConfigured(env) ? \"Integrated Security API \" : \"Security Bot API \") +\n      response.status + \": \" + message.slice(0, 300)\n    );\n  }\n  return text ? JSON.parse(text) as T : undefined as T;\n}\n\nexport async function openSecurityMaintenanceLease(\n  env: Env,\n  guildId: string,\n  scope: \"dashboard_edit\" | \"restore\",\n  seconds: number\n): Promise<{ id: string; expiresAt: number } | null> {\n  if (!securityBridgeConfigured(env)) return null;\n  return securityBridgeJson(env, \"/internal/guilds/\" + guildId + \"/maintenance\", {\n    method: \"POST\",\n    body: JSON.stringify({\n      actorId: env.DISCORD_APPLICATION_ID,\n      scope,\n      seconds\n    })\n  });\n}\n");
 
 let mainIndex = read("apps/worker/src/index.ts");
 mainIndex = replaceRequired(
@@ -238,13 +161,13 @@ mainIndex = replaceRequired(
 mainIndex = replaceRequired(
   mainIndex,
   '      const url=new URL(request.url);\n\n      if(request.method==="OPTIONS"){',
-  '      const url=new URL(request.url);\n      ctx.waitUntil(ensureDiscordSecurityGateway(env).catch(error=>console.error("integrated security gateway start failed",error)));\n\n      if(request.method==="OPTIONS"){',
+  '      const url=new URL(request.url);\n      if(env.SECURITY_GATEWAY){\n        ctx.waitUntil(ensureDiscordSecurityGateway(env).catch(error=>console.error("integrated security gateway start failed",error)));\n      }\n\n      if(request.method==="OPTIONS"){',
   "main fetch security startup"
 );
 mainIndex = replaceRequired(
   mainIndex,
   '      ensureDiscordGateway(env),\n      botAccessGuardSweep(env),',
-  '      ensureDiscordGateway(env),\n      runIntegratedSecurityScheduled(env),\n      botAccessGuardSweep(env),',
+  '      ensureDiscordGateway(env),\n      env.SECURITY_GATEWAY?runIntegratedSecurityScheduled(env):Promise.resolve(),\n      botAccessGuardSweep(env),',
   "main scheduled security"
 );
 write("apps/worker/src/index.ts", mainIndex);
