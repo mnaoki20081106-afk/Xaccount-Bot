@@ -30,6 +30,20 @@ https://mnaoki20081106-afk.github.io/Xaccount-Bot/
 
 Repository Variable VITE_API_BASE_URL にはFactoryでデプロイされたWorker URLを設定してください。
 
+## GitHub Pages の初回設定
+
+このリポジトリでは管理サイトのビルド自体は成功していますが、GitHub Pages のリポジトリ設定は GitHub App から有効化できません。
+
+初回のみ次を設定してください。
+
+1. GitHub の `Xaccount-Bot` → **Settings** → **Pages**
+2. **Build and deployment** の Source を **GitHub Actions** にする
+3. Bot Factory で Worker を起動した後、`Xaccount-Bot` → **Settings** → **Secrets and variables** → **Actions** → **Variables** に `VITE_API_BASE_URL` を追加
+4. 値には Factory がデプロイした `xaccount-bot` Worker の HTTPS URL を入れる
+5. Actions の **Deploy Xaccount-Bot dashboard to GitHub Pages** を再実行する
+
+管理サイトの想定URLは `https://mnaoki20081106-afk.github.io/Xaccount-Bot/` です。
+
 ## 必須Discord設定
 
 - Server Members Intent: ON
