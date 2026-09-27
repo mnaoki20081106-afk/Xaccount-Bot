@@ -82,6 +82,10 @@ import {
   securityBridgeJson
 } from "./security-bridge";
 import {
+  handleShiireDashboardProxy,
+  handleShiireServiceBridge
+} from "./shiire-bridge";
+import {
   accountCreatedAt,
   corsHeaders,
   encrypt,
@@ -3219,6 +3223,10 @@ export default {
         if(mediaResponse) return mediaResponse;
       }
       if(url.pathname.startsWith("/api/")){
+        const shiireServiceResponse=await handleShiireServiceBridge(request,env,url);
+        if(shiireServiceResponse) return shiireServiceResponse;
+        const shiireDashboardResponse=await handleShiireDashboardProxy(request,env,url);
+        if(shiireDashboardResponse) return shiireDashboardResponse;
         const backupResponse=await handleBackupApi(request,env,url);
         if(backupResponse) return backupResponse;
         const isVendingRoute=
