@@ -3,6 +3,7 @@ import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
+import ShiireVendingManager from "./ShiireVendingManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
@@ -155,7 +156,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -792,6 +793,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-shiire"
+                role="tab"
+                aria-controls="admin-panel-shiire"
+                aria-selected={activeView === "shiire"}
+                className={activeView === "shiire" ? "active" : ""}
+                onClick={() => setActiveView("shiire")}
+              >
+                仕入れbot
+              </button>
+              <button
+                type="button"
                 id="admin-tab-backup"
                 role="tab"
                 aria-controls="admin-panel-backup"
@@ -1290,6 +1302,25 @@ export default function App() {
                   onNotice={flash}
                   onError={fail}
                   />
+                </section>
+
+                <section
+                  id="admin-panel-shiire"
+                  className="admin-tab-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-tab-shiire"
+                  hidden={activeView !== "shiire"}
+                >
+                  {activeView === "shiire" && (
+                    <ShiireVendingManager
+                      key={"ShiireVendingManager:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      roles={meta.roles}
+                      onNotice={flash}
+                      onError={fail}
+                    />
+                  )}
                 </section>
               </>
             )}
