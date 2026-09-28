@@ -220,6 +220,7 @@ async function reservePaymentReceipt(
     amount:number;
   }
 ){
+  const claimOrderId="shiire:"+input.idempotencyKey;
   const existing=await env.DB.prepare(
     "SELECT * FROM shiire_payment_receipts WHERE idempotency_key=?"
   ).bind(input.idempotencyKey).first<any>();
@@ -229,20 +230,57 @@ async function reservePaymentReceipt(
       existing.link_hash!==input.linkHash||
       Number(existing.amount)!==input.amount
     ) throw new Error("IDEMPOTENCY_CONFLICT");
+    const existingClaim=await env.DB.prepare(
+      "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+    ).bind(input.linkHash).first<{order_id:string}>();
+    if(existingClaim&&existingClaim.order_id!==claimOrderId){
+      throw new Error("PAYMENT_LINK_ALREADY_USED");
+    }
+    if(!existingClaim){
+      try{
+        await env.DB.prepare(
+          "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?, 'shiire_pending', ?, ?)"
+        ).bind(input.linkHash,claimOrderId,Date.now()).run();
+      }catch{
+        const raced=await env.DB.prepare(
+          "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+        ).bind(input.linkHash).first<{order_id:string}>();
+        if(!raced||raced.order_id!==claimOrderId){
+          throw new Error("PAYMENT_LINK_ALREADY_USED");
+        }
+      }
+    }
     return existing;
   }
+
   const sameLink=await env.DB.prepare(
     "SELECT idempotency_key FROM shiire_payment_receipts WHERE link_hash=?"
   ).bind(input.linkHash).first<{idempotency_key:string}>();
   if(sameLink&&sameLink.idempotency_key!==input.idempotencyKey){
     throw new Error("PAYMENT_LINK_ALREADY_USED");
   }
+
   const used=await env.DB.prepare(
     "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
   ).bind(input.linkHash).first<{order_id:string}>();
-  if(used&&used.order_id!=="shiire:"+input.idempotencyKey){
+  if(used&&used.order_id!==claimOrderId){
     throw new Error("PAYMENT_LINK_ALREADY_USED");
   }
+  if(!used){
+    try{
+      await env.DB.prepare(
+        "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?, 'shiire_pending', ?, ?)"
+      ).bind(input.linkHash,claimOrderId,Date.now()).run();
+    }catch{
+      const raced=await env.DB.prepare(
+        "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+      ).bind(input.linkHash).first<{order_id:string}>();
+      if(!raced||raced.order_id!==claimOrderId){
+        throw new Error("PAYMENT_LINK_ALREADY_USED");
+      }
+    }
+  }
+
   const now=Date.now();
   await env.DB.prepare(
     "INSERT INTO shiire_payment_receipts("+
@@ -274,10 +312,23 @@ async function recordUsedLink(
   idempotencyKey:string,
   linkHash:string
 ){
-  await env.DB.prepare(
-    "INSERT OR IGNORE INTO vending_used_payment_links(link_hash,provider,order_id,used_at) "+
-    "VALUES (?,?,?,?)"
-  ).bind(linkHash,"shiire_"+method,"shiire:"+idempotencyKey,Date.now()).run();
+  const orderId="shiire:"+idempotencyKey;
+  const now=Date.now();
+  const existing=await env.DB.prepare(
+    "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+  ).bind(linkHash).first<{order_id:string}>();
+  if(existing&&existing.order_id!==orderId){
+    throw new Error("PAYMENT_LINK_ALREADY_USED");
+  }
+  if(existing){
+    await env.DB.prepare(
+      "UPDATE vending_used_payment_links SET provider=?,used_at=? WHERE link_hash=? AND order_id=?"
+    ).bind("shiire_"+method,now,linkHash,orderId).run();
+  }else{
+    await env.DB.prepare(
+      "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?,?,?,?)"
+    ).bind(linkHash,"shiire_"+method,orderId,now).run();
+  }
 }
 
 function bridgeError(env:Env,error:unknown):Response{
