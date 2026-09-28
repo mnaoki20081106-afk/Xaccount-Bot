@@ -3163,7 +3163,8 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"bot-coexistence-v70",
+          version:"member-activity-recovery-v1",
+          memberActivityRecovery:"gateway-plus-minute-reconcile",
           runtime:"cloudflare-workers",
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
