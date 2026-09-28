@@ -184,3 +184,12 @@ NO_SHADOWBAN
 Discord-ShiireとのBridge設定後は、Main管理画面の「仕入れbot」タブから資金上限・PayPay残高観測・USD/JPY観測・Dry Run・自動購入・自動仕入れ・Emergency Stop・Circuit Breaker解除・大量購入一時承認まで操作できます。
 
 LIVEへ切り替える操作と、LIVE中に自動購入/自動仕入れをONにする操作は確認ダイアログを要求します。Emergency Stopを解除しても自動購入・自動仕入れは自動では再開しません。
+
+
+### 仕入れbot: PayPay直接LTC購入の確認
+
+Discord-ShiireがPayPay手動操作待ち中にBinance LTC総残高の増加を検知した場合、Main BOT管理画面の「資金・LTC」に確認ボタンを表示します。
+
+直接LTC購入は残高増加だけでは自動確定しません。「このLTC購入を確認して再開」を押すと、Discord-ShiireがBinance残高を再取得して増加を再確認した上で、PayPay支出を確定し処理を再開します。
+
+JPY即時入金は、期待純増額を満たすJPY残高増加を確認できるため自動再開します。
