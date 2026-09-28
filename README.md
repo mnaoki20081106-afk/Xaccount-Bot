@@ -30,6 +30,8 @@ https://mnaoki20081106-afk.github.io/Xaccount-Bot/
 
 Repository Variable VITE_API_BASE_URL にはFactoryでデプロイされたWorker URLを設定してください。
 
+Pages workflowは`VITE_API_BASE_URL`未設定時にビルドを失敗させます。推測したworkers.dev URLへ自動フォールバックしません。
+
 ## GitHub Pages の初回設定
 
 このリポジトリでは管理サイトのビルド自体は成功していますが、GitHub Pages のリポジトリ設定は GitHub App から有効化できません。
@@ -109,7 +111,10 @@ Discord-Shiire Worker:
 
 ```text
 SHIIRE_BRIDGE_SECRET
+XACCOUNT_BOT_BASE_URL
 ```
+
+`XACCOUNT_BOT_BASE_URL` には、実際にデプロイされた Xaccount-Bot Worker の HTTPS origin を設定します。これは仕入れbot自販機のPayPay/Kyash決済委譲に必要です。
 
 `SHIIRE_BRIDGE_SECRET` は両方に同じ強いランダム値を設定してください。
 
@@ -172,3 +177,19 @@ NO_SHADOWBAN
 仕入れbotタブの「自動仕入れ条件」から、各クラスの価格上限・発注点・目標在庫・初回試験購入数・1回最大仕入れ数を変更できます。Dry Run解除と自動仕入れON/OFFはこの画面からは変更できません。
 
 販売商品は個別HStora商品IDではなく在庫クラスへ紐付けることを推奨します。これにより、最安の仕入先が商品Aから商品Bへ変わっても、同じDiscord自販機商品へ自動的に在庫が追加されます。
+
+
+### 仕入れbotの資金・安全設定
+
+Discord-ShiireとのBridge設定後は、Main管理画面の「仕入れbot」タブから資金上限・PayPay残高観測・USD/JPY観測・Dry Run・自動購入・自動仕入れ・Emergency Stop・Circuit Breaker解除・大量購入一時承認まで操作できます。
+
+LIVEへ切り替える操作と、LIVE中に自動購入/自動仕入れをONにする操作は確認ダイアログを要求します。Emergency Stopを解除しても自動購入・自動仕入れは自動では再開しません。
+
+
+### 仕入れbot: PayPay直接LTC購入の確認
+
+Discord-ShiireがPayPay手動操作待ち中にBinance LTC総残高の増加を検知した場合、Main BOT管理画面の「資金・LTC」に確認ボタンを表示します。
+
+直接LTC購入は残高増加だけでは自動確定しません。「このLTC購入を確認して再開」を押すと、Discord-ShiireがBinance残高を再取得して増加を再確認した上で、PayPay支出を確定し処理を再開します。
+
+JPY即時入金は、期待純増額を満たすJPY残高増加を確認できるため自動再開します。
