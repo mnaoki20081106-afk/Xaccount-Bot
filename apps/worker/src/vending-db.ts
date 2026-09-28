@@ -23,6 +23,7 @@ export type VmOrder = {
   payment_link_hash:string|null; payment_link_enc:string|null;
   reserved_until:number|null; created_at:number; updated_at:number;
   paid_at:number|null; delivered_at:number|null;
+  delivery_channel_id:string|null; delivery_message_id:string|null;
 };
 
 export type VmAchievementRoom = {
@@ -56,7 +57,7 @@ const schema=[
 "CREATE INDEX IF NOT EXISTS vending_stock_product_idx ON vending_stock(product_id,state,created_at)",
 "CREATE TABLE IF NOT EXISTS vending_coupons (code TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,owner_id TEXT NOT NULL,discount INTEGER NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_stock_notifications (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,role_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
-"CREATE TABLE IF NOT EXISTS vending_orders (id TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,payment_method TEXT NOT NULL,quantity INTEGER NOT NULL,unit_price INTEGER NOT NULL,discount_each INTEGER NOT NULL DEFAULT 0,total_amount INTEGER NOT NULL,status TEXT NOT NULL,payment_link_hash TEXT,payment_link_enc TEXT,reserved_until INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,paid_at INTEGER,delivered_at INTEGER)",
+"CREATE TABLE IF NOT EXISTS vending_orders (id TEXT PRIMARY KEY,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,payment_method TEXT NOT NULL,quantity INTEGER NOT NULL,unit_price INTEGER NOT NULL,discount_each INTEGER NOT NULL DEFAULT 0,total_amount INTEGER NOT NULL,status TEXT NOT NULL,payment_link_hash TEXT,payment_link_enc TEXT,reserved_until INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,paid_at INTEGER,delivered_at INTEGER,delivery_channel_id TEXT,delivery_message_id TEXT)",
 "CREATE INDEX IF NOT EXISTS vending_orders_status_idx ON vending_orders(status,reserved_until,created_at)",
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_orders_link_hash_unique ON vending_orders(payment_link_hash) WHERE payment_link_hash IS NOT NULL",
 "CREATE TABLE IF NOT EXISTS vending_payment_accounts (user_id TEXT PRIMARY KEY,paypay_phone_enc TEXT,paypay_password_enc TEXT,paypay_uuid TEXT,kyash_email_enc TEXT,kyash_password_enc TEXT,kyash_client_uuid TEXT,kyash_installation_uuid TEXT,kyash_access_token_enc TEXT,updated_at INTEGER NOT NULL)",
@@ -112,6 +113,21 @@ export async function ensureVendingSchema(env:Env){
     ).run();
   }
 
+  const orderColumns=(await env.DB.prepare(
+    "PRAGMA table_info(vending_orders)"
+  ).all<{name:string}>()).results;
+  const orderColumnNames=new Set(orderColumns.map(column=>column.name));
+  if(!orderColumnNames.has("delivery_channel_id")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_orders ADD COLUMN delivery_channel_id TEXT"
+    ).run();
+  }
+  if(!orderColumnNames.has("delivery_message_id")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_orders ADD COLUMN delivery_message_id TEXT"
+    ).run();
+  }
+
   ready=true;
 }
 
@@ -122,7 +138,9 @@ export async function cleanVendingExpired(env:Env){
     await releaseStock(env,row.id);
     await env.DB.prepare("UPDATE vending_orders SET status='expired',updated_at=? WHERE id=? AND status='awaiting_payment'").bind(now,row.id).run();
   }
-  await env.DB.prepare("UPDATE vending_orders SET status='paid',updated_at=? WHERE status='delivering' AND delivered_at IS NULL AND updated_at<?").bind(now,now-5*60_000).run();
+  // Do not automatically reset stale delivering orders to paid. A Discord DM
+  // may already have been accepted while a following D1 write failed; an
+  // automatic reset could resend sensitive delivery content.
   await env.DB.prepare("DELETE FROM vending_payment_login_challenges WHERE expires_at<?").bind(now).run();
 }
 
@@ -483,15 +501,68 @@ export async function getOrder(env:Env,id:string){ return await env.DB.prepare("
 export async function releaseStock(env:Env,orderId:string){ await env.DB.prepare("UPDATE vending_stock SET state='available',order_id=NULL,reserved_until=NULL WHERE order_id=? AND state='reserved'").bind(orderId).run(); }
 export async function orderStock(env:Env,orderId:string){ return (await env.DB.prepare("SELECT content FROM vending_stock WHERE order_id=? AND state='reserved' ORDER BY created_at ASC").bind(orderId).all<{content:string}>()).results.map(x=>x.content); }
 export async function attachPaymentLink(env:Env,orderId:string,link:string,secret:string){
-  const hash=await sha256Hex(link.trim());
-  if(await env.DB.prepare("SELECT link_hash FROM vending_used_payment_links WHERE link_hash=?").bind(hash).first()) throw new Error("LINK_USED");
-  await env.DB.prepare("UPDATE vending_orders SET payment_link_hash=?,payment_link_enc=?,updated_at=? WHERE id=? AND status='awaiting_payment'").bind(hash,await encrypt(secret,link.trim()),Date.now(),orderId).run();
+  const trimmed=link.trim();
+  const hash=await sha256Hex(trimmed);
+  const existing=await env.DB.prepare(
+    "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+  ).bind(hash).first<{order_id:string}>();
+  if(existing&&existing.order_id!==orderId) throw new Error("LINK_USED");
+
+  let insertedClaim=false;
+  if(!existing){
+    try{
+      await env.DB.prepare(
+        "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?, 'main_pending', ?, ?)"
+      ).bind(hash,orderId,Date.now()).run();
+      insertedClaim=true;
+    }catch{
+      const raced=await env.DB.prepare(
+        "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+      ).bind(hash).first<{order_id:string}>();
+      if(!raced||raced.order_id!==orderId) throw new Error("LINK_USED");
+    }
+  }
+
+  const now=Date.now();
+  const updated=await env.DB.prepare(
+    "UPDATE vending_orders SET payment_link_hash=?,payment_link_enc=?,status='payment_pending',reserved_until=NULL,updated_at=? WHERE id=? AND status='awaiting_payment'"
+  ).bind(hash,await encrypt(secret,trimmed),now,orderId).run();
+  if((updated.meta.changes??0)!==1){
+    if(insertedClaim){
+      await env.DB.prepare(
+        "DELETE FROM vending_used_payment_links WHERE link_hash=? AND order_id=? AND provider='main_pending'"
+      ).bind(hash,orderId).run().catch(()=>undefined);
+    }
+    throw new Error("ORDER_NOT_AVAILABLE");
+  }
   return hash;
+}
+export async function clearPaymentLink(env:Env,orderId:string){
+  const now=Date.now();
+  await env.DB.prepare(
+    "UPDATE vending_orders SET payment_link_hash=NULL,payment_link_enc=NULL,status='awaiting_payment',reserved_until=?,updated_at=? WHERE id=? AND status='payment_pending'"
+  ).bind(now+10*60_000,now,orderId).run();
 }
 export async function markPaid(env:Env,orderId:string,provider:string,hash:string|null){
   const now=Date.now();
-  if(hash) await env.DB.prepare("INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?,?,?,?)").bind(hash,provider,orderId,now).run();
-  await env.DB.prepare("UPDATE vending_orders SET status='paid',paid_at=?,updated_at=? WHERE id=?").bind(now,now,orderId).run();
+  if(hash){
+    const existing=await env.DB.prepare(
+      "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
+    ).bind(hash).first<{order_id:string}>();
+    if(existing&&existing.order_id!==orderId) throw new Error("LINK_USED");
+    if(existing){
+      await env.DB.prepare(
+        "UPDATE vending_used_payment_links SET provider=?,used_at=? WHERE link_hash=? AND order_id=?"
+      ).bind(provider,now,hash,orderId).run();
+    }else{
+      await env.DB.prepare(
+        "INSERT INTO vending_used_payment_links(link_hash,provider,order_id,used_at) VALUES (?,?,?,?)"
+      ).bind(hash,provider,orderId,now).run();
+    }
+  }
+  await env.DB.prepare(
+    "UPDATE vending_orders SET status='paid',paid_at=?,reserved_until=NULL,updated_at=? WHERE id=? AND status IN ('awaiting_payment','payment_pending')"
+  ).bind(now,now,orderId).run();
 }
 export async function claimDelivery(env:Env,orderId:string):Promise<boolean>{
   const result=await env.DB.prepare(
@@ -504,11 +575,33 @@ export async function resetDelivery(env:Env,orderId:string):Promise<void>{
     "UPDATE vending_orders SET status='paid',updated_at=? WHERE id=? AND status='delivering' AND delivered_at IS NULL"
   ).bind(Date.now(),orderId).run();
 }
+export async function markDeliverySent(
+  env:Env,
+  orderId:string,
+  channelId:string,
+  messageId:string
+){
+  const result=await env.DB.prepare(
+    "UPDATE vending_orders SET status='delivery_sent',delivery_channel_id=?,delivery_message_id=?,updated_at=? WHERE id=? AND status='delivering' AND delivered_at IS NULL"
+  ).bind(channelId,messageId,Date.now(),orderId).run();
+  if((result.meta.changes??0)!==1){
+    const current=await getOrder(env,orderId);
+    if(current?.status!=="delivery_sent"&&current?.status!=="delivered"){
+      throw new Error("DELIVERY_SENT_STATE_WRITE_FAILED");
+    }
+  }
+}
+export async function listDeliverySent(env:Env,limit=20){
+  const safe=Math.max(1,Math.min(50,Math.floor(limit)));
+  return (await env.DB.prepare(
+    "SELECT * FROM vending_orders WHERE status='delivery_sent' AND delivered_at IS NULL ORDER BY updated_at ASC LIMIT ?"
+  ).bind(safe).all<VmOrder>()).results;
+}
 export async function finishDelivery(env:Env,order:VmOrder){
   const now=Date.now();
   await env.DB.batch([
     env.DB.prepare("UPDATE vending_stock SET state='sold',sold_at=?,reserved_until=NULL WHERE order_id=? AND state='reserved'").bind(now,order.id),
-    env.DB.prepare("UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=? AND status='delivering'").bind(now,now,order.id),
+    env.DB.prepare("UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=? AND status IN ('delivering','delivery_sent')").bind(now,now,order.id),
     env.DB.prepare("UPDATE vending_products SET sales_count=sales_count+?,updated_at=? WHERE id=?").bind(order.quantity,now,order.product_id)
   ]);
 }
