@@ -470,12 +470,19 @@ export default function ShiireOperationsCenter({
             <article className="card shiire-kpi">
               <span>PayPay 観測残高</span>
               <strong>{yen(funding?.observedPayPay?.balanceJpy)}</strong>
-              <small>{funding?.observedPayPay?.fresh?"観測値は有効":"観測値が古い / 未設定"}</small>
+              <small>
+                {funding?.observedPayPay?.fresh
+                  ?"新規資金に利用可 "+yen(funding?.paypayFunding?.spendableJpy)
+                  :"観測値が古い / 未設定"}
+              </small>
             </article>
             <article className="card shiire-kpi">
-              <span>今回の購入可能額</span>
+              <span>LTC購入上限</span>
               <strong>{yen(payPayAllowed)}</strong>
-              <small>{funding?.allowance?.blockedReason||"各上限の最小値"}</small>
+              <small>
+                {funding?.allowance?.blockedReason||
+                  "既存Binance JPYも含めた購入ポリシー上限"}
+              </small>
             </article>
             <article className="card shiire-kpi">
               <span>Binance JPY</span>
