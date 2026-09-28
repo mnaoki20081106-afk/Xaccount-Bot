@@ -8,6 +8,7 @@ import {
 import {
   acceptPayPayLink,
   checkPayPayLink,
+  checkKyashLink,
   getKyashAccount,
   receiveKyashLink
 } from "./vending-payments";
@@ -367,8 +368,10 @@ export async function handleShiireServiceBridge(
               required:amount
             },409);
           }
-          await recordUsedLink(env,method,idempotencyKey,linkHash);
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:linkAmount});
+          await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
+            console.error("shiire paypay completed-link audit write failed",idempotencyKey,error)
+          );
           return json(env,{ok:true,status:"completed",amount:linkAmount});
         }
         await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
@@ -377,8 +380,10 @@ export async function handleShiireServiceBridge(
         });
         const result=await acceptPayPayLink(link,account);
         if(result.ok){
-          await recordUsedLink(env,method,idempotencyKey,linkHash);
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:result.amount});
+          await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
+            console.error("shiire paypay used-link audit write failed",idempotencyKey,error)
+          );
           return json(env,{ok:true,status:"completed",amount:result.amount});
         }
         if(result.pending){
@@ -391,17 +396,34 @@ export async function handleShiireServiceBridge(
 
       const account=await getKyashAccount(env,OWNER_ID);
       if(!account) return json(env,{error:"KYASH_NOT_CONFIGURED"},409);
+      const kyashInfo=await checkKyashLink(link);
+      if(!kyashInfo){
+        await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
+          reason:"KYASH_LINK_INVALID"
+        });
+        return json(env,{error:"KYASH_LINK_INVALID"},409);
+      }
+      if(kyashInfo.amount<amount){
+        await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
+          linkAmount:kyashInfo.amount,
+          required:amount
+        });
+        return json(env,{
+          error:"KYASH_AMOUNT_INSUFFICIENT",
+          linkAmount:kyashInfo.amount,
+          required:amount
+        },409);
+      }
       await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
-        stage:"KYASH_RECEIVE_SUBMITTED"
+        stage:"KYASH_RECEIVE_SUBMITTED",
+        amount:kyashInfo.amount
       });
       const result=await receiveKyashLink(link,account);
       if(result.ok){
-        if(result.amount<amount){
-          await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
-          return json(env,{error:"KYASH_AMOUNT_INSUFFICIENT",linkAmount:result.amount,required:amount},409);
-        }
-        await recordUsedLink(env,method,idempotencyKey,linkHash);
         await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",result);
+        await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
+          console.error("shiire kyash used-link audit write failed",idempotencyKey,error)
+        );
         return json(env,{ok:true,status:"completed",amount:result.amount});
       }
       if(wasPending){
