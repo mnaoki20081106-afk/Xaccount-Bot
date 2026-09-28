@@ -1,5 +1,8 @@
 import type { Env } from "./types";
-import { memberActivitySweep } from "./member-activity";
+import {
+  handleMemberActivityGatewayEvent,
+  memberActivitySweep
+} from "./member-activity";
 import {
   deleteBotGuildCache,
   forgetBotGuildMembership,
@@ -28,7 +31,7 @@ type GatewayPayload = {
 const STATE_KEY = "discord_gateway_state";
 const GUILD_MEMBERSHIP_SEED_KEY = "discord_gateway_guild_membership_seed_v1";
 const GATEWAY_VERSION = 10;
-const GATEWAY_INTENTS = 1 << 0; // GUILDS only; member events are handled by Security Gateway
+const GATEWAY_INTENTS = (1 << 0) | (1 << 1); // GUILDS + GUILD_MEMBERS
 const RECONNECT_CLOSE_CODE = 3001;
 
 function emptyState(): StoredGatewayState {
@@ -474,6 +477,24 @@ export class DiscordGateway {
           icon: guild.icon ?? null
         });
       }
+      return;
+    }
+
+    if (payload.t === "GUILD_MEMBER_ADD") {
+      await handleMemberActivityGatewayEvent(
+        this.env,
+        "join",
+        payload.d as never
+      );
+      return;
+    }
+
+    if (payload.t === "GUILD_MEMBER_REMOVE") {
+      await handleMemberActivityGatewayEvent(
+        this.env,
+        "leave",
+        payload.d as never
+      );
       return;
     }
 
