@@ -779,38 +779,94 @@ export default function ShiireOperationsCenter({
 
       {section==="funding"&&(
         <>
-          {detailBusy&&!binance&&<div className="progress"><span /></div>}
-          <section className="shiire-kpi-grid">
-            <article className="card shiire-kpi">
-              <span>PayPayマネー 観測残高</span>
-              <strong>{yen(funding?.observedPayPay?.balanceJpy)}</strong>
-              <small>
-                {funding?.observedPayPay?.fresh
-                  ?"新規資金に利用可 "+yen(funding?.paypayFunding?.spendableJpy)
-                  :"観測値が古い / 未設定"}
-              </small>
-            </article>
-            <article className="card shiire-kpi">
-              <span>LTC購入上限</span>
-              <strong>{yen(payPayAllowed)}</strong>
-              <small>
-                {funding?.allowance?.blockedReason||
-                  "既存Binance JPYも含めた購入ポリシー上限"}
-              </small>
-            </article>
-            <article className="card shiire-kpi">
-              <span>Binance JPY</span>
-              <strong>{yen(jpy?.free)}</strong>
-              <small>取引口座 Free</small>
-            </article>
-            <article className="card shiire-kpi">
-              <span>Binance LTC</span>
-              <strong>{num(Number(ltc?.free??0)+Number(ltc?.locked??0),8)} LTC</strong>
-              <small>目標 {num(overview?.settings.target_ltc_balance,8)} / 最大 {num(overview?.settings.max_ltc_balance,8)}</small>
-            </article>
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">LTC FUNDING MODE</span>
+                <h2>LTC補充方法</h2>
+                <p>
+                  今はHStora Main WalletへLTCを手動補充し、入金反映後から仕入れ・納品を自動化できます。
+                  Binance自動購入はサーバー側ロック解除後だけ選択できます。
+                </p>
+              </div>
+            </div>
+            <div className="shiire-control-buttons">
+              <button
+                className={manualFunding?"primary":"secondary"}
+                disabled={controlBusy}
+                onClick={()=>void setFundingMode("manual_hstora")}
+              >
+                HStoraへLTC手動補充
+              </button>
+              <button
+                className={!manualFunding?"primary":"secondary"}
+                disabled={controlBusy||!binanceServerUnlocked}
+                onClick={()=>void setFundingMode("binance_auto")}
+              >
+                Binance自動LTC購入{binanceServerUnlocked?"":"（ロック中）"}
+              </button>
+            </div>
+            <div className={"shiire-callout "+(manualFunding?"neutral":binanceServerUnlocked?"neutral":"warn")}>
+              <strong>{overview?.safety.fundingModeLabel??"読込中"}</strong>
+              <span>
+                {manualFunding
+                  ?"HStora WalletでLTCを補充してください。残高反映後は1分Cronで自動仕入れへ戻ります。"
+                  :binanceServerUnlocked
+                    ?"Binance自動購入のサーバー側ロックは解除済みです。"
+                    :"BINANCE_AUTO_FUNDING_ENABLEDがOFFのため実購入はできません。"}
+              </span>
+            </div>
           </section>
 
-          {pendingFunding&&(
+          {manualFunding&&(
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi">
+                <span>HSTORA Main Wallet</span>
+                <strong>{usd(hstoraBalance?.balance)}</strong>
+                <small>Wallet → Add Funds → LTC で補充</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>補充後</span>
+                <strong>{overview?.safety.autoProcurementEnabled?"自動再開":"仕入れOFF"}</strong>
+                <small>残高反映後の仕入れ・納品はBOTが処理</small>
+              </article>
+            </section>
+          )}
+
+          {!manualFunding&&detailBusy&&!binance&&<div className="progress"><span /></div>}
+          {!manualFunding&&(
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi">
+                <span>PayPayマネー 観測残高</span>
+                <strong>{yen(funding?.observedPayPay?.balanceJpy)}</strong>
+                <small>
+                  {funding?.observedPayPay?.fresh
+                    ?"新規資金に利用可 "+yen(funding?.paypayFunding?.spendableJpy)
+                    :"観測値が古い / 未設定"}
+                </small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>LTC購入上限</span>
+                <strong>{yen(payPayAllowed)}</strong>
+                <small>
+                  {funding?.allowance?.blockedReason||
+                    "既存Binance JPYも含めた購入ポリシー上限"}
+                </small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>Binance JPY</span>
+                <strong>{yen(jpy?.free)}</strong>
+                <small>取引口座 Free</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>Binance LTC</span>
+                <strong>{num(Number(ltc?.free??0)+Number(ltc?.locked??0),8)} LTC</strong>
+                <small>目標 {num(overview?.settings.target_ltc_balance,8)} / 最大 {num(overview?.settings.max_ltc_balance,8)}</small>
+              </article>
+            </section>
+          )}
+
+          {!manualFunding&&pendingFunding&&(
             <section className="card shiire-callout warn">
               <strong>PayPay → Binance 手動操作待ち</strong>
               <span>
