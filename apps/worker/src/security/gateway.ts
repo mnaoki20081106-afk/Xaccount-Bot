@@ -6,6 +6,10 @@ import type {
   GatewayStatus
 } from "./types";
 import { SecurityEngine } from "./engine";
+import {
+  handleMemberActivityGatewayEvent,
+  type GatewayMemberActivityEvent
+} from "../member-activity";
 
 type StoredGatewayState = GatewayStatus & {
   sequence: number | null;
@@ -527,11 +531,25 @@ export class DiscordSecurityGateway {
       return;
     }
     if (payload.t === "GUILD_MEMBER_ADD") {
-      const event = payload.d as DiscordMemberAddEvent;
+      const event = payload.d as DiscordMemberAddEvent & GatewayMemberActivityEvent;
       this.enqueueSecurityEvent(
         "member:" + event.guild_id,
         "security member event failed",
         () => this.engine.handleJoin(event)
+      );
+      this.enqueueSecurityEvent(
+        "member-activity:" + event.guild_id,
+        "member activity join event failed",
+        () => handleMemberActivityGatewayEvent(this.env, "join", event)
+      );
+      return;
+    }
+    if (payload.t === "GUILD_MEMBER_REMOVE") {
+      const event = payload.d as GatewayMemberActivityEvent;
+      this.enqueueSecurityEvent(
+        "member-activity:" + event.guild_id,
+        "member activity leave event failed",
+        () => handleMemberActivityGatewayEvent(this.env, "leave", event)
       );
       return;
     }
