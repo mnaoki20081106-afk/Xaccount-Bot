@@ -648,7 +648,14 @@ export default function ShiireOperationsCenter({
                 <HealthRow
                   label="Binance 出金"
                   ok={Boolean(withdrawal?.readyForLiveWithdrawal)}
-                  detail={withdrawal?.readyForLiveWithdrawal?"LIVE出金条件OK":"未設定または安全条件未達"}
+                  neutral={withdrawal?.configured===false}
+                  detail={
+                    withdrawal?.configured===false
+                      ?"未接続（現在のHStora手動入金では不要）"
+                      :withdrawal?.readyForLiveWithdrawal
+                        ?"LIVE出金条件OK"
+                        :"出金キーは設定済みですが安全条件未達"
+                  }
                 />
                 <HealthRow
                   label="暗号化キー"
