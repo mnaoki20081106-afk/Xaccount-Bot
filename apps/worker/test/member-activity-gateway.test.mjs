@@ -49,7 +49,7 @@ test("minute cron keeps the Gateway alive and reconciles missed member events", 
 test("member gateway reconciles independently of Worker cron", () => {
   assert.match(gatewaySource, /MEMBER_RECONCILE_INTERVAL_MS\s*=\s*60_000/);
   assert.match(gatewaySource, /lastReconcileAt/);
-  assert.match(gatewaySource, /memberActivity durable reconcile failed/);
+  assert.match(gatewaySource, /member activity durable reconcile failed/);
   assert.match(gatewaySource, /this\.state\.waitUntil/);
 });
 
