@@ -1,4 +1,6 @@
 import type { Env } from "./types";
+
+type MemberActivityEnv = Pick<Env, "DB" | "DISCORD_BOT_TOKEN">;
 import { botJson, type DiscordUser } from "./discord";
 import { snowflakeTime } from "./utils";
 
@@ -49,7 +51,7 @@ const MAX_DETAIL_NOTIFICATIONS = 24;
 
 let schemaReady: Promise<void> | null = null;
 
-async function ensureMemberActivitySchema(env: Env): Promise<void> {
+async function ensureMemberActivitySchema(env: MemberActivityEnv): Promise<void> {
   if (!schemaReady) {
     schemaReady = env.DB.batch([
       env.DB.prepare(`
@@ -106,7 +108,7 @@ function fromRow(row: MemberActivitySettingsRow): MemberActivitySettings {
 }
 
 async function getSettingsRow(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string
 ): Promise<MemberActivitySettingsRow> {
   await ensureMemberActivitySchema(env);
@@ -138,14 +140,14 @@ async function getSettingsRow(
 }
 
 export async function getMemberActivitySettings(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string
 ): Promise<MemberActivitySettings> {
   return fromRow(await getSettingsRow(env, guildId));
 }
 
 export async function saveMemberActivitySettings(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string,
   input: {
     enabled: boolean;
@@ -192,7 +194,7 @@ export async function saveMemberActivitySettings(
 }
 
 async function listGuildMembers(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string
 ): Promise<DiscordGuildMember[]> {
   const result: DiscordGuildMember[] = [];
@@ -214,7 +216,7 @@ async function listGuildMembers(
 }
 
 async function getSnapshot(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string
 ): Promise<MemberSnapshotRow[]> {
   const rows = await env.DB.prepare(
@@ -224,7 +226,7 @@ async function getSnapshot(
 }
 
 async function persistSnapshot(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string,
   members: DiscordGuildMember[],
   scanAt: number
@@ -327,7 +329,7 @@ function memberEmbed(
 }
 
 async function sendActivityMessage(
-  env: Env,
+  env: MemberActivityEnv,
   channelId: string,
   kind: "join" | "leave",
   user: DiscordUser,
@@ -344,7 +346,7 @@ async function sendActivityMessage(
 }
 
 async function sendOverflowSummary(
-  env: Env,
+  env: MemberActivityEnv,
   channelId: string,
   joined: number,
   left: number,
@@ -368,7 +370,7 @@ async function sendOverflowSummary(
 }
 
 async function syncGuild(
-  env: Env,
+  env: MemberActivityEnv,
   row: MemberActivitySettingsRow
 ): Promise<MemberActivitySettings> {
   if (row.enabled !== 1 || !row.channel_id) return fromRow(row);
@@ -465,7 +467,7 @@ async function syncGuild(
 }
 
 export async function primeMemberActivity(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string
 ): Promise<MemberActivitySettings> {
   const row = await getSettingsRow(env, guildId);
@@ -473,7 +475,7 @@ export async function primeMemberActivity(
 }
 
 export async function sendMemberActivityTest(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string,
   channelId: string
 ): Promise<void> {
@@ -495,7 +497,7 @@ export type GatewayMemberActivityEvent = {
   joined_at?: string | null;
 };
 
-export async function hasEnabledMemberActivity(env: Env): Promise<boolean> {
+export async function hasEnabledMemberActivity(env: MemberActivityEnv): Promise<boolean> {
   await ensureMemberActivitySchema(env);
   const row = await env.DB.prepare(`
     SELECT guild_id FROM member_activity_settings
@@ -506,7 +508,7 @@ export async function hasEnabledMemberActivity(env: Env): Promise<boolean> {
 }
 
 async function snapshotMember(
-  env: Env,
+  env: MemberActivityEnv,
   guildId: string,
   userId: string
 ): Promise<MemberSnapshotRow | null> {
@@ -518,7 +520,7 @@ async function snapshotMember(
 }
 
 async function retryActivityMessage(
-  env: Env,
+  env: MemberActivityEnv,
   channelId: string,
   kind: "join" | "leave",
   user: DiscordUser,
@@ -552,7 +554,7 @@ async function retryActivityMessage(
 }
 
 export async function handleMemberActivityGatewayEvent(
-  env: Env,
+  env: MemberActivityEnv,
   kind: "join" | "leave",
   event: GatewayMemberActivityEvent
 ): Promise<void> {
@@ -656,7 +658,7 @@ export async function handleMemberActivityGatewayEvent(
   ]);
 }
 
-export async function memberActivitySweep(env: Env): Promise<void> {
+export async function memberActivitySweep(env: MemberActivityEnv): Promise<void> {
   await ensureMemberActivitySchema(env);
   const rows = await env.DB.prepare(`
     SELECT * FROM member_activity_settings
