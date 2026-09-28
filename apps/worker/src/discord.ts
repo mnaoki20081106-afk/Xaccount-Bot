@@ -1,4 +1,6 @@
 import type { Env, GuildSettings, SessionRow } from "./types";
+
+type BotAuthEnv = Pick<Env, "DISCORD_BOT_TOKEN">;
 import { decrypt, encrypt, hexToBytes, toArrayBuffer } from "./utils";
 import { updateSessionTokens } from "./db";
 
@@ -54,7 +56,7 @@ export class DiscordApiError extends Error {
 }
 
 export async function botFetch(
-  env:Env,
+  env:BotAuthEnv,
   path:string,
   init:RequestInit={}
 ):Promise<Response>{
@@ -89,7 +91,7 @@ export async function botFetch(
 }
 
 export async function botJson<T>(
-  env:Env,
+  env:BotAuthEnv,
   path:string,
   init:RequestInit={}
 ):Promise<T>{
