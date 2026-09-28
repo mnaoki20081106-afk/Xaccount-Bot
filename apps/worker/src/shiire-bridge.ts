@@ -37,7 +37,20 @@ async function ensureBridgeSchema(env:Env){
 function shiireBaseUrl(env:Env):URL{
   const raw=env.SHIIRE_API_BASE_URL?.trim()??"";
   if(!raw) throw new Error("SHIIRE_API_BASE_URL_NOT_CONFIGURED");
-  return new URL(raw.endsWith("/")?raw:raw+"/");
+  let url:URL;
+  try{url=new URL(raw);}
+  catch{throw new Error("SHIIRE_API_BASE_URL_INVALID");}
+  if(
+    url.protocol!=="https:"||
+    url.username||
+    url.password||
+    url.search||
+    url.hash||
+    (url.pathname!=="/"&&url.pathname!=="")
+  ){
+    throw new Error("SHIIRE_API_BASE_URL_MUST_BE_HTTPS_ORIGIN");
+  }
+  return new URL(url.origin+"/");
 }
 
 async function sign(
@@ -140,6 +153,15 @@ export async function handleShiireDashboardProxy(
       return json(env,{
         error:"SHIIRE_API_BASE_URL_NOT_CONFIGURED",
         message:"Discord-Shiire Workerの実URLをSHIIRE_API_BASE_URLへ設定してください。推測URLでは接続しません。"
+      },503);
+    }
+    if(
+      message==="SHIIRE_API_BASE_URL_INVALID"||
+      message==="SHIIRE_API_BASE_URL_MUST_BE_HTTPS_ORIGIN"
+    ){
+      return json(env,{
+        error:message,
+        message:"SHIIRE_API_BASE_URLには https://host のWorker originだけを設定してください。パス・クエリ・認証情報は付けません。"
       },503);
     }
     if(message==="SHIIRE_BRIDGE_SECRET_NOT_CONFIGURED"){
