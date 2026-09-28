@@ -601,18 +601,33 @@ export async function handleMemberActivityGatewayEvent(
       : event.user;
 
   if (shouldNotify) {
-    const guild = await botJson<{ name: string }>(
-      env,
-      `/guilds/${event.guild_id}`
-    );
-    await retryActivityMessage(
-      env,
-      row.channel_id,
-      kind,
-      notificationUser,
-      memberCount,
-      guild.name
-    );
+    try {
+      const guild = await botJson<{ name: string }>(
+        env,
+        `/guilds/${event.guild_id}`
+      );
+      await retryActivityMessage(
+        env,
+        row.channel_id,
+        kind,
+        notificationUser,
+        memberCount,
+        guild.name
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await env.DB.prepare(`
+        UPDATE member_activity_settings
+        SET last_scan_at=?,last_error=?,updated_at=?
+        WHERE guild_id=?
+      `).bind(
+        now,
+        ("リアルタイム通知失敗: " + message).slice(0, 500),
+        now,
+        event.guild_id
+      ).run();
+      throw error;
+    }
   }
 
   if (kind === "join") {
