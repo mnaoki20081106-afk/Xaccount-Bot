@@ -5,14 +5,14 @@ import { json, randomId, sha256Hex } from "./utils";
 import { recordPanelDeployment } from "./backup-db";
 import { handleSupplyBridge } from "./supply-bridge";
 import {
-  addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, createCoupon, createMachine, createVmProduct,
+  addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, clearPaymentLink, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
-  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listMachines, listVmProducts,
-  markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
+  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listDeliverySent, listMachines, listVmProducts,
+  markDeliverySent, markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
   takePayChallenge, updateAchievementCountNameState, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
-  acceptPayPayLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
+  acceptPayPayLink, checkKyashLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
   payPayLoginOtp, payPayLoginStart, receiveKyashLink, saveKyashAccount, saveKyashChallenge,
   takeKyashChallenge
 } from "./vending-payments";
@@ -57,6 +57,7 @@ async function sendFile(
     body:form
   });
   if(!response.ok) throw new Error("Discord attachment send failed: "+response.status);
+  return response.json() as Promise<{id?:string}>;
 }
 
 async function machineOwned(env:Env,id:string,ownerId:string){
@@ -623,15 +624,48 @@ async function sendAchievementPurchase(
   }));
 }
 
+async function persistDeliverySent(
+  env:Env,
+  orderId:string,
+  channelId:string,
+  messageId:string
+){
+  let lastError:unknown=null;
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      await markDeliverySent(env,orderId,channelId,messageId);
+      return;
+    }catch(error){
+      lastError=error;
+    }
+  }
+  throw lastError instanceof Error
+    ?lastError
+    :new Error("DELIVERY_SENT_STATE_WRITE_FAILED");
+}
+
 async function deliver(env:Env,order:VmOrder){
-  if(order.delivered_at) return;
+  if(order.status==="delivery_sent"){
+    await finishDelivery(env,order);
+    return;
+  }
+  if(order.delivered_at||order.status==="delivered") return;
+  if(order.status!=="paid") return;
   if(!(await claimDelivery(env,order.id))) return;
+
+  let sent=false;
   try{
-    const vm=await getMachine(env,order.vending_machine_id),product=await getVmProduct(env,order.product_id); if(!vm||!product) throw new Error("ORDER_DATA_MISSING");
+    const vm=await getMachine(env,order.vending_machine_id);
+    const product=await getVmProduct(env,order.product_id);
+    if(!vm||!product) throw new Error("ORDER_DATA_MISSING");
     const items=product.infinite_stock?[product.infinite_content??""]:await orderStock(env,order.id);
     if(!product.infinite_stock&&items.length<order.quantity) throw new Error("RESERVED_STOCK_MISSING");
     const deliveredText=items.join("\n");
-    const dm=await botJson<{id:string}>(env,"/users/@me/channels",{method:"POST",body:JSON.stringify({recipient_id:order.user_id})});
+    const dm=await botJson<{id:string}>(
+      env,
+      "/users/@me/channels",
+      {method:"POST",body:JSON.stringify({recipient_id:order.user_id})}
+    );
     const purchaseEmbed={
       title:"購入が完了しました",
       color:5763719,
@@ -644,14 +678,58 @@ async function deliver(env:Env,order:VmOrder){
       ],
       timestamp:new Date().toISOString()
     };
+    const nonce=("vmd"+order.id.replace(/[^A-Za-z0-9]/g,"")).slice(0,25);
+    let message:{id?:string};
     if(deliveredText.length<=1800){
-      await send(env,dm.id,{content:deliveredText,embeds:[purchaseEmbed]});
+      message=await send(env,dm.id,{
+        content:deliveredText,
+        embeds:[purchaseEmbed],
+        allowed_mentions:{parse:[]},
+        nonce,
+        enforce_nonce:true
+      });
     }else{
-      await sendFile(env,dm.id,{embeds:[purchaseEmbed]},"purchase_"+order.id+".txt",deliveredText);
+      message=await sendFile(
+        env,
+        dm.id,
+        {
+          embeds:[purchaseEmbed],
+          allowed_mentions:{parse:[]},
+          nonce,
+          enforce_nonce:true
+        },
+        "purchase_"+order.id+".txt",
+        deliveredText
+      );
     }
-    if(vm.role_id) await botFetch(env,"/guilds/"+order.guild_id+"/members/"+order.user_id+"/roles/"+vm.role_id,{method:"PUT"}).catch(()=>undefined);
-    const log={embeds:[{title:"購入完了",color:5763719,fields:[{name:"商品",value:product.name,inline:true},{name:"個数",value:String(order.quantity),inline:true},{name:"金額",value:String(order.total_amount)+"円",inline:true},{name:"購入者",value:"<@"+order.user_id+">",inline:true},{name:"決済",value:order.payment_method.toUpperCase(),inline:true}]}]};
-    for(const channelId of [vm.public_log_channel_id,vm.local_log_channel_id]) if(channelId) await send(env,channelId,log).catch(()=>undefined);
+    if(!message.id) throw new Error("DELIVERY_MESSAGE_ID_MISSING");
+    sent=true;
+    await persistDeliverySent(env,order.id,dm.id,message.id);
+
+    if(vm.role_id){
+      await botFetch(
+        env,
+        "/guilds/"+order.guild_id+"/members/"+order.user_id+"/roles/"+vm.role_id,
+        {method:"PUT"}
+      ).catch(()=>undefined);
+    }
+    const log={
+      embeds:[{
+        title:"購入完了",
+        color:5763719,
+        fields:[
+          {name:"商品",value:product.name,inline:true},
+          {name:"個数",value:String(order.quantity),inline:true},
+          {name:"金額",value:String(order.total_amount)+"円",inline:true},
+          {name:"購入者",value:"<@"+order.user_id+">",inline:true},
+          {name:"決済",value:order.payment_method.toUpperCase(),inline:true}
+        ]
+      }],
+      allowed_mentions:{parse:[]}
+    };
+    for(const channelId of [vm.public_log_channel_id,vm.local_log_channel_id]){
+      if(channelId) await send(env,channelId,log).catch(()=>undefined);
+    }
     if(vm.private_log_channel_id){
       await sendFile(
         env,
@@ -661,16 +739,20 @@ async function deliver(env:Env,order:VmOrder){
         deliveredText
       ).catch(()=>undefined);
     }
-    await finishDelivery(env,order);
-    await sendAchievementPurchase(env,order,vm,product).catch(error=>{
+
+    const sentOrder=await getOrder(env,order.id);
+    if(!sentOrder) throw new Error("ORDER_NOT_FOUND_AFTER_SEND");
+    await finishDelivery(env,sentOrder);
+    await sendAchievementPurchase(env,sentOrder,vm,product).catch(error=>{
       console.error("vending achievement log failed",order.id,error);
     });
   }catch(error){
-    await resetDelivery(env,order.id);
+    if(!sent){
+      await resetDelivery(env,order.id).catch(()=>undefined);
+    }
     throw error;
   }
 }
-
 async function tryDeliver(env:Env,order:VmOrder):Promise<boolean>{
   try{
     await deliver(env,order);
@@ -692,7 +774,11 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
     }
     if(id.startsWith("vm:retry:")){
       const orderId=id.slice(9),order=await getOrder(env,orderId);
-      if(!order||order.user_id!==interaction.member?.user?.id||order.status!=="paid"){
+      if(
+        !order||
+        order.user_id!==interaction.member?.user?.id||
+        !["paid","delivery_sent"].includes(order.status)
+      ){
         return ires(eph("再試行できる注文がありません。"));
       }
       const ok=await tryDeliver(env,order);
@@ -714,7 +800,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       return ires({type:9,data:{custom_id:"vm:order:"+vmId+":"+method+":"+productId,title:"購入情報入力",components:[{type:1,components:[{type:4,custom_id:"quantity",label:"購入数",style:1,value:"1",required:true,max_length:5}]},{type:1,components:[{type:4,custom_id:"coupon",label:"クーポンコード（任意）",style:1,required:false,max_length:50}]}]}});
     }
     if(id.startsWith("vm:pay:")){
-      const orderId=id.slice(7),order=await getOrder(env,orderId); if(!order||order.user_id!==interaction.member?.user?.id) return ires(eph("注文が見つかりません。"));
+      const orderId=id.slice(7),order=await getOrder(env,orderId); if(!order||order.user_id!==interaction.member?.user?.id||order.status!=="awaiting_payment") return ires(eph("支払い可能な注文が見つかりません。"));
       return ires({type:9,data:{custom_id:"vm:paymodal:"+orderId,title:(order.payment_method==="paypay"?"PayPay":"Kyash")+"決済",components:[{type:1,components:[{type:4,custom_id:"link",label:"送金リンク",style:1,required:true,placeholder:order.payment_method==="paypay"?"https://pay.paypay.ne.jp/...":"https://kyash.me/payments/..."}]}]}});
     }
   }
@@ -740,36 +826,142 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       return ires(eph("**"+product.name+"** × "+order.quantity+"\n支払額: **"+order.total_amount+"円**\n10分以内に送金リンクを入力してください。",[{type:1,components:[{type:2,style:3,label:"送金リンクを入力",custom_id:"vm:pay:"+order.id}]}]));
     }
     if(id.startsWith("vm:paymodal:")){
-      const orderId=id.slice(12),order=await getOrder(env,orderId); if(!order||order.user_id!==interaction.member?.user?.id||order.status!=="awaiting_payment") return ires(eph("注文が失効しています。"));
-      const link=String(interaction.data.components?.[0]?.components?.[0]?.value??"").trim(); if(!link) return ires(eph("送金リンクを入力してください。"));
-      let hash:string; try{hash=await attachPaymentLink(env,order.id,link,env.SESSION_ENCRYPTION_KEY);}catch{return ires(eph("この送金リンクは既に使用されています。"));}
-      const vm=await getMachine(env,order.vending_machine_id); if(!vm) return ires(eph("自販機が見つかりません。"));
+      const orderId=id.slice(12);
+      const order=await getOrder(env,orderId);
+      if(
+        !order||
+        order.user_id!==interaction.member?.user?.id||
+        order.status!=="awaiting_payment"
+      ){
+        return ires(eph("注文が失効しています。"));
+      }
+      const link=String(
+        interaction.data.components?.[0]?.components?.[0]?.value??""
+      ).trim();
+      if(!link) return ires(eph("送金リンクを入力してください。"));
+
+      const vm=await getMachine(env,order.vending_machine_id);
+      if(!vm) return ires(eph("自販機が見つかりません。"));
+
       if(order.payment_method==="paypay"){
-        const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY); if(!account) return ires(eph("販売者のPayPayが未登録です。"));
-        const info=await checkPayPayLink(link); const amount=Number(info?.payload?.message?.data?.amount??0); if(amount<order.total_amount) return ires(eph("金額が不足しています。必要: "+order.total_amount+"円 / リンク: "+amount+"円"));
-        const result=await acceptPayPayLink(link,account);
+        const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY);
+        if(!account) return ires(eph("販売者のPayPayが未登録です。"));
+        const info=await checkPayPayLink(link);
+        const amount=Number(info?.payload?.message?.data?.amount??0);
+        if(!info||!Number.isFinite(amount)){
+          return ires(eph("PayPay送金リンクを確認できませんでした。"));
+        }
+        if(amount<order.total_amount){
+          return ires(eph(
+            "金額が不足しています。必要: "+order.total_amount+
+            "円 / リンク: "+amount+"円"
+          ));
+        }
+
+        let hash:string;
+        try{
+          hash=await attachPaymentLink(
+            env,
+            order.id,
+            link,
+            env.SESSION_ENCRYPTION_KEY
+          );
+        }catch{
+          return ires(eph("この送金リンクは別の注文で既に使用・予約されています。"));
+        }
+
+        let result;
+        try{
+          result=await acceptPayPayLink(link,account);
+        }catch(error){
+          console.error("PayPay receive ambiguous",order.id,error);
+          return ires(eph(
+            "PayPay受取結果を確定できませんでした。二重受取防止のため在庫を保持したまま自動確認します。"
+          ));
+        }
         if(result.ok){
           await markPaid(env,order.id,"paypay",hash);
           const paid=await getOrder(env,order.id);
           const delivered=paid?await tryDeliver(env,paid):false;
           return ires(eph(
-            delivered?"決済と納品が完了しました。DMを確認してください。":"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
-            delivered?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+            delivered
+              ?"決済と納品が完了しました。DMを確認してください。"
+              :"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
+            delivered?undefined:[{type:1,components:[{
+              type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id
+            }]}]
           ));
         }
-        if(result.pending){return ires(eph("PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"));}
-        return ires(eph("PayPay決済を確認できませんでした。"));
+        if(result.pending){
+          return ires(eph(
+            "PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"
+          ));
+        }
+        await clearPaymentLink(env,order.id);
+        return ires(eph(
+          "PayPay決済を確認できませんでした。別の有効な送金リンクを入力してください。"
+        ));
       }
+
       if(order.payment_method==="kyash"){
-        const account=await getKyashAccount(env,vm.owner_id); if(!account) return ires(eph("販売者のKyashが未登録です。"));
-        const result=await receiveKyashLink(link,account); if(result.amount<order.total_amount) return ires(eph("金額が不足しています。必要: "+order.total_amount+"円 / リンク: "+result.amount+"円"));
-        if(!result.ok) return ires(eph("Kyash決済を確認できませんでした。"));
+        const account=await getKyashAccount(env,vm.owner_id);
+        if(!account) return ires(eph("販売者のKyashが未登録です。"));
+        const info=await checkKyashLink(link);
+        if(!info) return ires(eph("Kyash送金リンクを確認できませんでした。"));
+        if(info.amount<order.total_amount){
+          return ires(eph(
+            "金額が不足しています。必要: "+order.total_amount+
+            "円 / リンク: "+info.amount+"円"
+          ));
+        }
+
+        let hash:string;
+        try{
+          hash=await attachPaymentLink(
+            env,
+            order.id,
+            link,
+            env.SESSION_ENCRYPTION_KEY
+          );
+        }catch{
+          return ires(eph("この送金リンクは別の注文で既に使用・予約されています。"));
+        }
+
+        let result;
+        try{
+          result=await receiveKyashLink(link,account);
+        }catch(error){
+          console.error("Kyash receive ambiguous",order.id,error);
+          return ires(eph(
+            "Kyash受取結果を確定できませんでした。二重受取防止のため注文を保留しています。"
+          ));
+        }
+        if(!result.ok){
+          await clearPaymentLink(env,order.id);
+          return ires(eph("Kyash決済を確認できませんでした。別の送金リンクを入力してください。"));
+        }
+        if(result.amount<order.total_amount){
+          console.error(
+            "Kyash amount changed after precheck",
+            order.id,
+            result.amount,
+            order.total_amount
+          );
+          return ires(eph(
+            "Kyash受取後の金額整合性を確認できません。自動納品を停止しました。"
+          ));
+        }
+
         await markPaid(env,order.id,"kyash",hash);
         const paid=await getOrder(env,order.id);
         const delivered=paid?await tryDeliver(env,paid):false;
         return ires(eph(
-          delivered?"決済と納品が完了しました。DMを確認してください。":"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
-          delivered?undefined:[{type:1,components:[{type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id}]}]
+          delivered
+            ?"決済と納品が完了しました。DMを確認してください。"
+            :"決済は完了しましたがDM納品に失敗しました。DMを開いて再試行してください。",
+          delivered?undefined:[{type:1,components:[{
+            type:2,style:1,label:"納品を再試行",custom_id:"vm:retry:"+order.id
+          }]}]
         ));
       }
     }
@@ -779,7 +971,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
 
 export async function vendingSweep(env:Env){
   await ensureVendingSchema(env); await cleanVendingExpired(env);
-  const pending=(await env.DB.prepare("SELECT id FROM vending_orders WHERE status='awaiting_payment' AND payment_method='paypay' AND payment_link_enc IS NOT NULL ORDER BY updated_at ASC LIMIT 8").all<{id:string}>()).results;
+  const pending=(await env.DB.prepare("SELECT id FROM vending_orders WHERE status='payment_pending' AND payment_method='paypay' AND payment_link_enc IS NOT NULL ORDER BY updated_at ASC LIMIT 8").all<{id:string}>()).results;
   for(const row of pending){
     const order=await getOrder(env,row.id); if(!order||!order.payment_link_enc) continue;
     try{
@@ -788,6 +980,14 @@ export async function vendingSweep(env:Env){
         await markPaid(env,order.id,"paypay",order.payment_link_hash); const paid=await getOrder(env,order.id); if(paid) await deliver(env,paid);
       }
     }catch(e){console.error("vending sweep",row.id,e);}
+  }
+
+  for(const order of await listDeliverySent(env,20)){
+    try{
+      await finishDelivery(env,order);
+    }catch(error){
+      console.error("vending delivery finalize failed",order.id,error);
+    }
   }
 
   const countRooms=await listAchievementCountRooms(env);
