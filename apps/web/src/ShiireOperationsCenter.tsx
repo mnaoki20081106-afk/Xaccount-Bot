@@ -424,6 +424,47 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  async function approveBulkPurchase(){
+    if(!confirm(
+      "今後10分間、設定された大量購入閾値以上の仕入れを許可しますか？対象商品・単価・在庫目標を確認してください。"
+    )) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/bulk-approval`,
+        {method:"POST",body:JSON.stringify({minutes:10})},
+        20_000
+      );
+      onNotice("大量購入を10分間承認しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function resetBreaker(key:string){
+    if(!confirm(
+      `Circuit Breaker「${key}」を解除しますか？原因を確認・解消してから解除してください。`
+    )) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/circuit-breakers/${encodeURIComponent(key)}/reset`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      onNotice(`Circuit Breaker「${key}」を解除しました`);
+      await loadOverview(false);
+      if(section==="logs") await loadDetail("logs");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
   const payPayAllowed=funding?.allowance?.allowedJpy;
   const pendingFunding=funding?.pendingManualFunding;
   const withdrawal=settledData(overview?.withdrawalSafety);
@@ -830,14 +871,14 @@ export default function ShiireOperationsCenter({
             </div>
             <div className="shiire-control-buttons">
               <button
-                className={overview?.safety.dryRun?"secondary":"danger"}
+                className={overview?.safety.dryRun?"danger":"secondary"}
                 disabled={controlBusy||overview?.safety.emergencyStop}
                 onClick={()=>void updateAutomation({dry_run:!overview?.safety.dryRun})}
               >
                 {overview?.safety.dryRun?"Dry Runを解除":"Dry Runへ戻す"}
               </button>
               <button
-                className={overview?.safety.autoPurchaseEnabled?"danger":"secondary"}
+                className={overview?.safety.autoPurchaseEnabled?"secondary":"danger"}
                 disabled={controlBusy||overview?.safety.emergencyStop}
                 onClick={()=>void updateAutomation({
                   auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
@@ -846,7 +887,7 @@ export default function ShiireOperationsCenter({
                 LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
               </button>
               <button
-                className={overview?.safety.autoProcurementEnabled?"danger":"secondary"}
+                className={overview?.safety.autoProcurementEnabled?"secondary":"danger"}
                 disabled={controlBusy||overview?.safety.emergencyStop}
                 onClick={()=>void updateAutomation({
                   auto_procurement_enabled:!overview?.safety.autoProcurementEnabled
@@ -939,6 +980,21 @@ export default function ShiireOperationsCenter({
               <strong>{num(overview?.settings.max_batch_purchase,0)}件</strong>
               <small>誤大量購入防止</small>
             </article>
+          </section>
+
+          <section className="card shiire-callout warn">
+            <strong>大量購入の一時承認</strong>
+            <span>
+              設定閾値以上の仕入れは自動で止まります。内容を確認した時だけ10分間承認してください。
+              現在の承認期限: {when(overview?.settings.bulk_approval_until)}
+            </span>
+            <button
+              className="danger"
+              disabled={controlBusy}
+              onClick={()=>void approveBulkPurchase()}
+            >
+              10分間だけ大量購入を承認
+            </button>
           </section>
 
           <section className="two-col">
@@ -1077,6 +1133,13 @@ export default function ShiireOperationsCenter({
                     <strong>{row.key}</strong>
                     <span>{row.reason||"OPEN"}</span>
                     <small>{when(row.updated_at)}</small>
+                    <button
+                      className="secondary"
+                      disabled={controlBusy}
+                      onClick={()=>void resetBreaker(String(row.key))}
+                    >
+                      原因確認後に解除
+                    </button>
                   </div>
                 ))}
             </article>
