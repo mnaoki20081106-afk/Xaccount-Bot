@@ -3,7 +3,7 @@ import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
-import ShiireVendingManager from "./ShiireVendingManager";
+import ShiireOperationsCenter from "./ShiireOperationsCenter";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
@@ -1312,8 +1312,8 @@ export default function App() {
                   hidden={activeView !== "shiire"}
                 >
                   {activeView === "shiire" && (
-                    <ShiireVendingManager
-                      key={"ShiireVendingManager:"+selectedId}
+                    <ShiireOperationsCenter
+                      key={"ShiireOperationsCenter:"+selectedId}
                       guildId={selectedId!}
                       channels={meta.channels}
                       roles={meta.roles}
