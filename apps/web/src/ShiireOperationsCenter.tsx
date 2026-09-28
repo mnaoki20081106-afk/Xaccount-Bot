@@ -68,6 +68,16 @@ type LogDetail={
   fundingEvents:Array<any>;
   cryptoTransactions:Array<any>;
 };
+type FundingControls={
+  reserve_jpy:number;
+  max_purchase_jpy:number;
+  daily_purchase_limit_jpy:number;
+  weekly_purchase_limit_jpy:number;
+  monthly_purchase_limit_jpy:number;
+  min_purchase_jpy:number;
+  target_ltc_balance:number;
+  max_ltc_balance:number;
+};
 
 const sections:Array<{id:Section;label:string;hint:string}>=[
   {id:"overview",label:"概要",hint:"今の状態"},
@@ -137,6 +147,10 @@ export default function ShiireOperationsCenter({
   const [logs,setLogs]=useState<LogDetail|null>(null);
   const [busy,setBusy]=useState(false);
   const [detailBusy,setDetailBusy]=useState(false);
+  const [fundingControls,setFundingControls]=useState<FundingControls|null>(null);
+  const [payPayObservation,setPayPayObservation]=useState(0);
+  const [usdJpyObservation,setUsdJpyObservation]=useState(0);
+  const [controlBusy,setControlBusy]=useState(false);
 
   const funding=settledData(overview?.funding);
   const ltc=settledData(overview?.balances.binanceLtc);
@@ -185,6 +199,18 @@ export default function ShiireOperationsCenter({
         25_000
       );
       setOverview(data);
+      setFundingControls({
+        reserve_jpy:Number(data.settings?.reserve_jpy??0),
+        max_purchase_jpy:Number(data.settings?.max_purchase_jpy??0),
+        daily_purchase_limit_jpy:Number(data.settings?.daily_purchase_limit_jpy??0),
+        weekly_purchase_limit_jpy:Number(data.settings?.weekly_purchase_limit_jpy??0),
+        monthly_purchase_limit_jpy:Number(data.settings?.monthly_purchase_limit_jpy??0),
+        min_purchase_jpy:Number(data.settings?.min_purchase_jpy??0),
+        target_ltc_balance:Number(data.settings?.target_ltc_balance??0),
+        max_ltc_balance:Number(data.settings?.max_ltc_balance??0)
+      });
+      setPayPayObservation(Number(data.settings?.observed_paypay_balance_jpy??0));
+      setUsdJpyObservation(Number(data.settings?.usd_jpy_rate??0));
     }catch(reason){
       onError(reason);
     }finally{
@@ -245,6 +271,9 @@ export default function ShiireOperationsCenter({
     setInventory(null);
     setOrders(null);
     setLogs(null);
+    setFundingControls(null);
+    setPayPayObservation(0);
+    setUsdJpyObservation(0);
     setSection("overview");
     void loadOverview();
   },[guildId]);
@@ -257,6 +286,142 @@ export default function ShiireOperationsCenter({
     await loadOverview();
     if(section!=="overview"&&section!=="vending") await loadDetail(section);
     onNotice("仕入れbotの運用情報を更新しました");
+  }
+
+  async function saveFundingControls(){
+    if(!fundingControls) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/funding-settings`,
+        {
+          method:"PATCH",
+          body:JSON.stringify(fundingControls)
+        },
+        20_000
+      );
+      onNotice("資金上限を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function savePayPayObservation(){
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/funding/paypay-observation`,
+        {
+          method:"POST",
+          body:JSON.stringify({balanceJpy:Math.floor(Number(payPayObservation))})
+        },
+        20_000
+      );
+      onNotice("PayPay残高の観測値を更新しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveUsdJpyObservation(){
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/funding/usd-jpy-observation`,
+        {
+          method:"POST",
+          body:JSON.stringify({rate:Number(usdJpyObservation)})
+        },
+        20_000
+      );
+      onNotice("USD/JPY観測値を更新しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function cancelPendingFunding(){
+    if(!confirm("現在のPayPay手動操作待ちを取り消しますか？実際に送金・購入済みなら先に残高を確認してください。")) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/funding/pending/cancel`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      onNotice("PayPay手動操作待ちを取り消しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function updateAutomation(
+    patch:{
+      dry_run?:boolean;
+      auto_purchase_enabled?:boolean;
+      auto_procurement_enabled?:boolean;
+    }
+  ){
+    if(!overview) return;
+    const turningLive=patch.dry_run===false&&overview.safety.dryRun;
+    const enablingWhileLive=
+      !overview.safety.dryRun&&(
+        patch.auto_purchase_enabled===true||
+        patch.auto_procurement_enabled===true
+      );
+    const confirmLive=turningLive||enablingWhileLive;
+    if(confirmLive&&!confirm(
+      "เงินจริงを動かす可能性がある設定です。資金上限・残高・API接続・仕入対象を確認済みですか？"
+    )) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/automation-settings`,
+        {
+          method:"PATCH",
+          body:JSON.stringify({...patch,confirmLive})
+        },
+        20_000
+      );
+      onNotice("自動運転設定を更新しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function setEmergencyStop(enabled:boolean){
+    if(!enabled&&!confirm(
+      "Emergency Stopを解除しますか？自動購入・自動仕入れはOFFのままです。"
+    )) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/emergency-stop${enabled?"":"/reset"}`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      onNotice(enabled?"Emergency Stopを有効にしました":"Emergency Stopを解除しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
   }
 
   const payPayAllowed=funding?.allowance?.allowedJpy;
@@ -288,9 +453,18 @@ export default function ShiireOperationsCenter({
             </div>
             <p>{overallState.detail}</p>
           </div>
-          <button className="secondary" onClick={()=>void refresh()} disabled={busy||detailBusy}>
-            {busy||detailBusy?"更新中…":"すべて更新"}
-          </button>
+          <div className="shiire-hero-actions">
+            <button
+              className={overview?.safety.emergencyStop?"secondary":"danger"}
+              onClick={()=>void setEmergencyStop(!overview?.safety.emergencyStop)}
+              disabled={busy||detailBusy||controlBusy||!overview}
+            >
+              {overview?.safety.emergencyStop?"停止解除":"EMERGENCY STOP"}
+            </button>
+            <button className="secondary" onClick={()=>void refresh()} disabled={busy||detailBusy||controlBusy}>
+              {busy||detailBusy||controlBusy?"更新中…":"すべて更新"}
+            </button>
+          </div>
         </div>
         <div className="shiire-safety-strip">
           <span className={overview?.safety.dryRun?"safe":"live"}>
@@ -322,11 +496,11 @@ export default function ShiireOperationsCenter({
         <>
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi">
-              <span>PAYPAY 使用可能額</span>
+              <span>LTC購入上限</span>
               <strong>{yen(payPayAllowed)}</strong>
               <small>
-                観測 {yen(funding?.observedPayPay?.effectiveBalanceJpy)}
-                {funding?.observedPayPay?.fresh?" / 最新":" / 要更新"}
+                新規PayPay資金 {yen(funding?.paypayFunding?.spendableJpy)}
+                {funding?.observedPayPay?.fresh?" / 観測有効":" / PayPay観測要更新"}
               </small>
             </article>
             <article className="card shiire-kpi">
@@ -516,8 +690,172 @@ export default function ShiireOperationsCenter({
                   Binance公式PayPay購入画面で購入する経路も利用できます。
                 </span>
               )}
+              <button
+                className="danger"
+                disabled={controlBusy}
+                onClick={()=>void cancelPendingFunding()}
+              >
+                手動操作待ちを取り消す
+              </button>
             </section>
           )}
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">FUNDING CONTROLS</span>
+                <h2>資金上限を設定</h2>
+                <p>既存Binance JPYと新規PayPay支出は別計算です。0の上限は自動購入を止める安全側設定です。</p>
+              </div>
+              <button
+                className="primary"
+                disabled={controlBusy||!fundingControls}
+                onClick={()=>void saveFundingControls()}
+              >
+                資金上限を保存
+              </button>
+            </div>
+            {fundingControls&&(
+              <div className="form-grid two">
+                <FundingInput
+                  label="PayPayに残す金額 reserve_jpy"
+                  value={fundingControls.reserve_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,reserve_jpy:value})}
+                />
+                <FundingInput
+                  label="1回のLTC購入上限"
+                  value={fundingControls.max_purchase_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,max_purchase_jpy:value})}
+                />
+                <FundingInput
+                  label="1日購入上限"
+                  value={fundingControls.daily_purchase_limit_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,daily_purchase_limit_jpy:value})}
+                />
+                <FundingInput
+                  label="1週間購入上限"
+                  value={fundingControls.weekly_purchase_limit_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,weekly_purchase_limit_jpy:value})}
+                />
+                <FundingInput
+                  label="1か月購入上限"
+                  value={fundingControls.monthly_purchase_limit_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,monthly_purchase_limit_jpy:value})}
+                />
+                <FundingInput
+                  label="最低LTC購入額"
+                  value={fundingControls.min_purchase_jpy}
+                  step={1}
+                  onChange={value=>setFundingControls({...fundingControls,min_purchase_jpy:value})}
+                />
+                <FundingInput
+                  label="Binance LTC目標残高"
+                  value={fundingControls.target_ltc_balance}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,target_ltc_balance:value})}
+                />
+                <FundingInput
+                  label="Binance LTC最大残高"
+                  value={fundingControls.max_ltc_balance}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,max_ltc_balance:value})}
+                />
+              </div>
+            )}
+          </section>
+
+          <section className="two-col">
+            <article className="card">
+              <span className="eyebrow">MANUAL OBSERVATION</span>
+              <h2>PayPay残高</h2>
+              <p className="shiire-muted">
+                PayPay残高はBOTが直接取得しません。新規PayPay資金が必要な時だけ、この観測値とreserve_jpyを使います。
+              </p>
+              <label className="field">
+                <span>現在のPayPay残高（円）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={payPayObservation}
+                  onChange={event=>setPayPayObservation(Number(event.target.value))}
+                />
+              </label>
+              <button
+                className="primary"
+                disabled={controlBusy}
+                onClick={()=>void savePayPayObservation()}
+              >
+                PayPay観測値を保存
+              </button>
+            </article>
+            <article className="card">
+              <span className="eyebrow">FX OBSERVATION</span>
+              <h2>USD / JPY</h2>
+              <p className="shiire-muted">
+                HStoraのUSD価格を円上限と比較するために使います。急変値はCircuit Breakerで拒否します。
+              </p>
+              <label className="field">
+                <span>現在のUSD/JPY</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={usdJpyObservation}
+                  onChange={event=>setUsdJpyObservation(Number(event.target.value))}
+                />
+              </label>
+              <button
+                className="primary"
+                disabled={controlBusy}
+                onClick={()=>void saveUsdJpyObservation()}
+              >
+                USD/JPY観測値を保存
+              </button>
+            </article>
+          </section>
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">AUTOMATION SAFETY</span>
+                <h2>自動運転</h2>
+                <p>初期状態はDry Runです。LIVE化・LIVE中の自動ONは確認ダイアログを必須にしています。</p>
+              </div>
+            </div>
+            <div className="shiire-control-buttons">
+              <button
+                className={overview?.safety.dryRun?"secondary":"danger"}
+                disabled={controlBusy||overview?.safety.emergencyStop}
+                onClick={()=>void updateAutomation({dry_run:!overview?.safety.dryRun})}
+              >
+                {overview?.safety.dryRun?"Dry Runを解除":"Dry Runへ戻す"}
+              </button>
+              <button
+                className={overview?.safety.autoPurchaseEnabled?"danger":"secondary"}
+                disabled={controlBusy||overview?.safety.emergencyStop}
+                onClick={()=>void updateAutomation({
+                  auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
+                })}
+              >
+                LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
+              </button>
+              <button
+                className={overview?.safety.autoProcurementEnabled?"danger":"secondary"}
+                disabled={controlBusy||overview?.safety.emergencyStop}
+                onClick={()=>void updateAutomation({
+                  auto_procurement_enabled:!overview?.safety.autoProcurementEnabled
+                })}
+              >
+                自動仕入れ {overview?.safety.autoProcurementEnabled?"OFFにする":"ONにする"}
+              </button>
+            </div>
+          </section>
 
           <section className="two-col">
             <article className="card">
@@ -797,6 +1135,26 @@ export default function ShiireOperationsCenter({
       )}
     </div>
   );
+}
+
+function FundingInput({
+  label,value,step,onChange
+}:{
+  label:string;
+  value:number;
+  step:number;
+  onChange:(value:number)=>void;
+}){
+  return <label className="field">
+    <span>{label}</span>
+    <input
+      type="number"
+      min="0"
+      step={step}
+      value={value}
+      onChange={event=>onChange(Number(event.target.value))}
+    />
+  </label>;
 }
 
 function HealthRow({
