@@ -987,13 +987,17 @@ async function requireMessageChannel(env:Env,guildId:string,channelId:string):Pr
   if(!/^\d+$/.test(channelId)) throw new HttpError(400,"設置先チャンネルが不正です");
 
   let channels:DiscordChannel[];
+  let roles:DiscordRole[];
   try{
-    channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+    [channels,roles]=await Promise.all([
+      botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`),
+      botJson<DiscordRole[]>(env,`/guilds/${guildId}/roles`)
+    ]);
   }catch(error){
     const detail=error instanceof Error?error.message:String(error);
     throw new HttpError(
       502,
-      "設置先チャンネル一覧の取得に失敗しました: "+detail.slice(0,220)
+      "通知先チャンネルの権限確認に失敗しました: "+detail.slice(0,220)
     );
   }
 
@@ -1001,13 +1005,32 @@ async function requireMessageChannel(env:Env,guildId:string,channelId:string):Pr
   if(!channel){
     throw new HttpError(
       404,
-      "設置先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
+      "通知先チャンネルが見つかりません。チャンネル一覧を再読み込みしてください"
     );
   }
   if(![0,5].includes(channel.type)){
     throw new HttpError(
       400,
-      "パネルはテキストまたはアナウンスチャンネルに設置してください"
+      "通知先はテキストまたはアナウンスチャンネルを選択してください"
+    );
+  }
+
+  const member=await getBotGuildMember(env,guildId,roles);
+  const effective=botChannelPermissions(
+    guildId,
+    env.DISCORD_APPLICATION_ID.trim(),
+    roles,
+    member,
+    channel
+  );
+  if((effective&PANEL_PERMISSION_MASK)!==PANEL_PERMISSION_MASK){
+    const missing:string[]=[];
+    if((effective&1024n)!==1024n) missing.push("チャンネルを見る");
+    if((effective&2048n)!==2048n) missing.push("メッセージを送信");
+    if((effective&16384n)!==16384n) missing.push("リンクを埋め込む");
+    throw new HttpError(
+      409,
+      "BOTが通知先へ投稿できません。不足権限: "+missing.join(" / ")
     );
   }
 }
