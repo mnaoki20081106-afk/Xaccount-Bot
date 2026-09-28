@@ -33,9 +33,9 @@ test("member activity uses the integrated Security Gateway member feed", () => {
   assert.match(memberSource, /handleMemberActivityGatewayEvent/);
 });
 
-test("minute cron keeps the shared Discord Gateway alive without member polling", () => {
+test("minute cron keeps the Gateway alive and reconciles missed member events", () => {
   const scheduled = indexSource.slice(indexSource.indexOf("async scheduled"));
-  assert.doesNotMatch(scheduled, /memberActivitySweep\(env\)/);
+  assert.match(scheduled, /memberActivitySweep\(env\)/);
   assert.match(scheduled, /ensureDiscordGateway\(env\)/);
   assert.match(gatewaySource, /discord-gateway\.internal\/start/);
   assert.doesNotMatch(gatewaySource, /enabled \? "start" : "stop"/);
