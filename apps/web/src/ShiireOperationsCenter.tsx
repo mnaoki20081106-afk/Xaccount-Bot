@@ -916,10 +916,11 @@ export default function ShiireOperationsCenter({
             </section>
           )}
 
-          <section className="card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">FUNDING CONTROLS</span>
+          {!manualFunding&&(
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">FUNDING CONTROLS</span>
                 <h2>資金上限を設定</h2>
                 <p>既存Binance JPYと新規PayPay支出は別計算です。0の上限は自動購入を止める安全側設定です。</p>
               </div>
@@ -982,12 +983,14 @@ export default function ShiireOperationsCenter({
                   onChange={value=>setFundingControls({...fundingControls,max_ltc_balance:value})}
                 />
               </div>
-            )}
-          </section>
+              )}
+            </section>
+          )}
 
           <section className="two-col">
-            <article className="card">
-              <span className="eyebrow">MANUAL OBSERVATION</span>
+            {!manualFunding&&(
+              <article className="card">
+                <span className="eyebrow">MANUAL OBSERVATION</span>
               <h2>PayPayマネー残高</h2>
               <p className="shiire-muted">
                 BOTはPayPay残高を直接取得しません。ここにはBinance JapanへのJPY即時入金にも使える
@@ -1011,7 +1014,8 @@ export default function ShiireOperationsCenter({
               >
                 PayPay観測値を保存
               </button>
-            </article>
+              </article>
+            )}
             <article className="card">
               <span className="eyebrow">FX OBSERVATION</span>
               <h2>USD / JPY</h2>
@@ -1054,15 +1058,17 @@ export default function ShiireOperationsCenter({
               >
                 {overview?.safety.dryRun?"Dry Runを解除":"Dry Runへ戻す"}
               </button>
-              <button
-                className={overview?.safety.autoPurchaseEnabled?"secondary":"danger"}
-                disabled={controlBusy||overview?.safety.emergencyStop}
-                onClick={()=>void updateAutomation({
-                  auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
-                })}
-              >
-                LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
-              </button>
+              {!manualFunding&&(
+                <button
+                  className={overview?.safety.autoPurchaseEnabled?"secondary":"danger"}
+                  disabled={controlBusy||overview?.safety.emergencyStop}
+                  onClick={()=>void updateAutomation({
+                    auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
+                  })}
+                >
+                  LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
+                </button>
+              )}
               <button
                 className={overview?.safety.autoProcurementEnabled?"secondary":"danger"}
                 disabled={controlBusy||overview?.safety.emergencyStop}
@@ -1075,9 +1081,10 @@ export default function ShiireOperationsCenter({
             </div>
           </section>
 
-          <section className="two-col">
-            <article className="card">
-              <span className="eyebrow">SPENDING LIMITS</span>
+          {!manualFunding&&(
+            <section className="two-col">
+              <article className="card">
+                <span className="eyebrow">SPENDING LIMITS</span>
               <h2>資金上限</h2>
               <div className="shiire-detail-grid">
                 <Detail label="reserve_jpy" value={yen(overview?.settings.reserve_jpy)} />
@@ -1102,12 +1109,14 @@ export default function ShiireOperationsCenter({
                   detail={(withdrawal?.allowlistedLtcAddressCount??0)+"件"}
                 />
               </div>
-            </article>
-          </section>
+              </article>
+            </section>
+          )}
 
           <section className="two-col">
-            <article className="card">
-              <span className="eyebrow">BINANCE DETAIL</span>
+            {!manualFunding&&(
+              <article className="card">
+                <span className="eyebrow">BINANCE DETAIL</span>
               <h2>Binance Japan</h2>
               <div className="shiire-detail-grid">
                 <Detail label="LTC Free" value={num(settledData(binance?.balances.ltc)?.free,8)+" LTC"} />
@@ -1115,13 +1124,18 @@ export default function ShiireOperationsCenter({
                 <Detail label="JPY Free" value={yen(settledData(binance?.balances.jpy)?.free)} />
                 <Detail label="LTC/JPY" value={yen(settledData(binance?.market)?.priceJpy)} />
               </div>
-            </article>
+              </article>
+            )}
             <article className="card">
               <span className="eyebrow">HOT WALLET</span>
               <h2>専用LTC Wallet</h2>
               <div className="shiire-callout neutral">
-                <strong>現在は未接続</strong>
-                <span>{String(hotWallet?.health?.details?.reason??"専用署名ウォレットはまだ接続されていません。")}</span>
+                <strong>{manualFunding?"現在の補充先はHStora Main Wallet":"現在は未接続"}</strong>
+                <span>
+                  {manualFunding
+                    ?"秘密鍵をWorkerへ保存せず、HStora WalletへLTCを手動補充します。"
+                    :String(hotWallet?.health?.details?.reason??"専用署名ウォレットはまだ接続されていません。")}
+                </span>
               </div>
               <div className="shiire-detail-grid">
                 <Detail label="目標LTC" value={num(overview?.settings.wallet_target_ltc,8)} />
