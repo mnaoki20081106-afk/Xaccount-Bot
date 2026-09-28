@@ -72,7 +72,10 @@ import {
   saveMemberActivitySettings,
   sendMemberActivityTest
 } from "./member-activity";
-import { ensureDiscordGateway } from "./discord-gateway";
+import {
+  discordGatewayStatus,
+  ensureDiscordGateway
+} from "./discord-gateway";
 import { ensureDiscordSecurityGateway } from "./security/gateway";
 import { runIntegratedSecurityScheduled } from "./security/service";
 export { DiscordGateway } from "./discord-gateway";
@@ -3134,6 +3137,13 @@ export default {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
     try{
       const url=new URL(request.url);
+      if(env.DISCORD_GATEWAY){
+        ctx.waitUntil(
+          ensureDiscordGateway(env).catch(error=>
+            console.error("member activity gateway start failed",error)
+          )
+        );
+      }
       if(env.SECURITY_GATEWAY){
         ctx.waitUntil(ensureDiscordSecurityGateway(env).catch(error=>console.error("integrated security gateway start failed",error)));
       }
@@ -3184,11 +3194,22 @@ export default {
           discordApiError=error instanceof Error?error.message:String(error);
         }
 
+        const memberGateway=await discordGatewayStatus(env).catch(error=>({
+          connected:false,
+          lastHeartbeatAck:null,
+          lastEventAt:null,
+          reconnectAttempts:0,
+          lastCloseCode:null,
+          lastCloseReason:error instanceof Error?error.message:String(error),
+          lastReconcileAt:null
+        }));
+
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"member-activity-recovery-v1",
-          memberActivityRecovery:"gateway-plus-minute-reconcile",
+          version:"member-activity-isolated-v2",
+          memberActivityRecovery:"dedicated-gateway-plus-do-reconcile",
           runtime:"cloudflare-workers",
+          memberGateway,
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
             publicKey:Boolean(env.DISCORD_PUBLIC_KEY),
