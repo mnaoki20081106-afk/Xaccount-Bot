@@ -20,3 +20,9 @@ jobs:
       - run: npm run test --workspace @dsm/worker
       - run: npm run build --workspace @dsm/web
       - run: npm run test --workspace @dsm/web
+      - name: Inspect live Xaccount Worker health
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 1 \
+            https://xaccount-bot.mnaoki20081106.workers.dev/health
+          echo
