@@ -19,18 +19,22 @@ const indexSource = await readFile(
   "utf8"
 );
 
-test("member activity uses the integrated Security Gateway member feed", () => {
-  assert.match(securityGatewaySource, /GUILD_MEMBER_ADD/);
-  assert.match(securityGatewaySource, /GUILD_MEMBER_REMOVE/);
-  assert.match(securityGatewaySource, /handleMemberActivityGatewayEvent/);
+test("member activity uses its dedicated GUILDS + GUILD_MEMBERS gateway", () => {
+  assert.match(gatewaySource, /payload\.t === "GUILD_MEMBER_ADD"/);
+  assert.match(gatewaySource, /payload\.t === "GUILD_MEMBER_REMOVE"/);
+  assert.match(gatewaySource, /handleMemberActivityGatewayEvent/);
   assert.match(
-    securityGatewaySource,
-    /GATEWAY_INTENTS[\s\S]*GUILD_MEMBERS/
+    gatewaySource,
+    /GATEWAY_INTENTS\s*=\s*\(1 << 0\) \| \(1 << 1\)/
   );
-  assert.doesNotMatch(gatewaySource, /payload\.t === "GUILD_MEMBER_ADD"/);
-  assert.doesNotMatch(gatewaySource, /payload\.t === "GUILD_MEMBER_REMOVE"/);
-  assert.match(gatewaySource, /GATEWAY_INTENTS\s*=\s*1 << 0/);
   assert.match(memberSource, /handleMemberActivityGatewayEvent/);
+});
+
+test("security gateway cannot become a dependency of member activity", () => {
+  assert.match(securityGatewaySource, /GUILD_MEMBER_ADD/);
+  assert.doesNotMatch(securityGatewaySource, /GUILD_MEMBER_REMOVE/);
+  assert.doesNotMatch(securityGatewaySource, /handleMemberActivityGatewayEvent/);
+  assert.doesNotMatch(securityGatewaySource, /GatewayMemberActivityEvent/);
 });
 
 test("minute cron keeps the Gateway alive and reconciles missed member events", () => {
