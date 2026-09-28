@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import ShiireVendingManager from "./ShiireVendingManager";
+import "./shiire-operations.css";
 
 type Channel={id:string;name:string;type?:string};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
