@@ -272,6 +272,39 @@ export default function SecurityManager({
     void load();
   }, [guildId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshStatus = async () => {
+      try {
+        const data = await api<Overview>(
+          `/api/guilds/${guildId}/security-center`,
+          {},
+          15_000
+        );
+        if (cancelled) return;
+        setOverview(current =>
+          current
+            ? {
+                ...current,
+                installed: data.installed,
+                status: data.status
+              }
+            : data
+        );
+      } catch {
+        // Explicit refresh surfaces connection errors. Background polling is
+        // intentionally quiet to avoid repeated notices.
+      }
+    };
+    const timer = window.setInterval(() => {
+      void refreshStatus();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [guildId]);
+
   function setModule(key: keyof SecurityModules, value: boolean) {
     if (!draft) return;
     setDraft({
