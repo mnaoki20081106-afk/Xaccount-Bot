@@ -320,7 +320,7 @@ export default function ShiireOperationsCenter({
         },
         20_000
       );
-      onNotice("PayPay残高の観測値を更新しました");
+      onNotice("Binanceで利用可能なPayPayマネー観測値を更新しました");
       await loadOverview(false);
     }catch(reason){
       onError(reason);
@@ -716,7 +716,7 @@ export default function ShiireOperationsCenter({
           {detailBusy&&!binance&&<div className="progress"><span /></div>}
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi">
-              <span>PayPay 観測残高</span>
+              <span>PayPayマネー 観測残高</span>
               <strong>{yen(funding?.observedPayPay?.balanceJpy)}</strong>
               <small>
                 {funding?.observedPayPay?.fresh
@@ -866,12 +866,14 @@ export default function ShiireOperationsCenter({
           <section className="two-col">
             <article className="card">
               <span className="eyebrow">MANUAL OBSERVATION</span>
-              <h2>PayPay残高</h2>
+              <h2>PayPayマネー残高</h2>
               <p className="shiire-muted">
-                PayPay残高はBOTが直接取得しません。新規PayPay資金が必要な時だけ、この観測値とreserve_jpyを使います。
+                BOTはPayPay残高を直接取得しません。ここにはBinance JapanへのJPY即時入金にも使える
+                PayPayマネー残高だけを入力してください。PayPayマネーライトや期間限定ポイントは含めません。
+                この観測値とreserve_jpyから新規PayPay支出可能額を計算します。
               </p>
               <label className="field">
-                <span>現在のPayPay残高（円）</span>
+                <span>Binanceで利用可能なPayPayマネー（円）</span>
                 <input
                   type="number"
                   min="0"
