@@ -34,6 +34,7 @@ type Product={
   id:string;
   vending_machine_id:string;
   supplier_product_id:string;
+  procurement_class:"TOP_SEARCH"|"NO_SHADOWBAN"|null;
   name:string;
   description:string;
   price_paypay:number;
@@ -200,9 +201,9 @@ export default function ShiireVendingManager({
       setSelectedId(nextId);
       const machine=nextMachines.find(row=>row.id===nextId)??null;
       applySelected(machine);
-      if(!sourceId&&nextSources.products?.[0]){
-        setSourceId(nextSources.products[0].supplier_product_id);
-        setProductName(nextSources.products[0].title||"Xアカウント");
+      if(!sourceId){
+        setSourceId("class:TOP_SEARCH");
+        setProductName("検索トップXアカウント");
       }
     }catch(reason){
       onError(reason);
@@ -266,8 +267,16 @@ export default function ShiireVendingManager({
   async function addProduct(){
     if(!selected) return;
     if(!sourceId) return onError(new Error("仕入れ商品を選択してください"));
+    const procurementClass=
+      sourceId==="class:TOP_SEARCH"
+        ?"TOP_SEARCH"
+        :sourceId==="class:NO_SHADOWBAN"
+          ?"NO_SHADOWBAN"
+          :null;
     const payload={
-      supplierProductId:sourceId,
+      ...(procurementClass
+        ?{procurementClass}
+        :{supplierProductId:sourceId}),
       name:productName.trim()||"Xアカウント",
       description:productDescription,
       pricePayPay:Number(pricePayPay),
@@ -292,7 +301,11 @@ export default function ShiireVendingManager({
 
   function editProduct(product:Product){
     setEditingProductId(product.id);
-    setSourceId(product.supplier_product_id);
+    setSourceId(
+      product.procurement_class
+        ?"class:"+product.procurement_class
+        :product.supplier_product_id
+    );
     setProductName(product.name);
     setProductDescription(product.description);
     setPricePayPay(product.price_paypay);
@@ -626,16 +639,34 @@ export default function ShiireVendingManager({
                     onChange={e=>{
                       const id=e.target.value;
                       setSourceId(id);
+                      if(id==="class:TOP_SEARCH"){
+                        setProductName("検索トップXアカウント");
+                        return;
+                      }
+                      if(id==="class:NO_SHADOWBAN"){
+                        setProductName("No Shadowban Xアカウント");
+                        return;
+                      }
                       const source=sources.find(row=>row.supplier_product_id===id);
                       if(source) setProductName(source.title||"Xアカウント");
                     }}
                   >
                     <option value="">選択してください</option>
-                    {sources.map(source=>(
-                      <option key={source.supplier_product_id} value={source.supplier_product_id}>
-                        {source.title||source.supplier_product_id}
+                    <optgroup label="自動仕入れ在庫クラス">
+                      <option value="class:TOP_SEARCH">
+                        TOP_SEARCH — 検索トップ在庫をまとめて販売
                       </option>
-                    ))}
+                      <option value="class:NO_SHADOWBAN">
+                        NO_SHADOWBAN — TOP表記なし・No Shadowban在庫
+                      </option>
+                    </optgroup>
+                    <optgroup label="個別HStora商品（上級設定）">
+                      {sources.map(source=>(
+                        <option key={source.supplier_product_id} value={source.supplier_product_id}>
+                          [{source.procurement_class??"未分類"}] {source.title||source.supplier_product_id}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </label>
                 <label className="field">
@@ -677,6 +708,9 @@ export default function ShiireVendingManager({
                   <div className="serverless-note" key={product.id}>
                     <strong>{product.emoji} {product.name}</strong>
                     <span>
+                      {product.procurement_class
+                        ?product.procurement_class+" / "
+                        :"個別商品 / "}
                       在庫 {product.stock_count} / 販売 {product.sales_count} /
                       PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
                     </span>
