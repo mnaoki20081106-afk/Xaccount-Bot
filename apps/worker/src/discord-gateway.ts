@@ -11,14 +11,22 @@ import {
   upsertBotGuildCache
 } from "./db";
 
-type StoredGatewayState = {
+export type DiscordGatewayStatus = {
+  connected: boolean;
+  lastHeartbeatAck: number | null;
+  lastEventAt: number | null;
+  reconnectAttempts: number;
+  lastCloseCode: number | null;
+  lastCloseReason: string | null;
+  lastReconcileAt: number | null;
+};
+
+type StoredGatewayState = DiscordGatewayStatus & {
   sessionId: string | null;
   sequence: number | null;
   resumeUrl: string | null;
   heartbeatInterval: number | null;
   lastHeartbeatSent: number | null;
-  lastHeartbeatAck: number | null;
-  reconnectAttempts: number;
 };
 
 type GatewayPayload = {
@@ -33,16 +41,22 @@ const GUILD_MEMBERSHIP_SEED_KEY = "discord_gateway_guild_membership_seed_v1";
 const GATEWAY_VERSION = 10;
 const GATEWAY_INTENTS = (1 << 0) | (1 << 1); // GUILDS + GUILD_MEMBERS
 const RECONNECT_CLOSE_CODE = 3001;
+const MEMBER_RECONCILE_INTERVAL_MS = 60_000;
 
 function emptyState(): StoredGatewayState {
   return {
+    connected: false,
     sessionId: null,
     sequence: null,
     resumeUrl: null,
     heartbeatInterval: null,
     lastHeartbeatSent: null,
     lastHeartbeatAck: null,
-    reconnectAttempts: 0
+    lastEventAt: null,
+    reconnectAttempts: 0,
+    lastCloseCode: null,
+    lastCloseReason: null,
+    lastReconcileAt: null
   };
 }
 
@@ -82,6 +96,34 @@ export async function ensureDiscordGateway(env: Env): Promise<void> {
   }
 }
 
+export async function discordGatewayStatus(env: Env): Promise<DiscordGatewayStatus> {
+  if (!env.DISCORD_GATEWAY) return {
+    connected: false,
+    lastHeartbeatAck: null,
+    lastEventAt: null,
+    reconnectAttempts: 0,
+    lastCloseCode: null,
+    lastCloseReason: "DISCORD_GATEWAY binding missing",
+    lastReconcileAt: null
+  };
+  const id = env.DISCORD_GATEWAY.idFromName("member-activity");
+  const response = await env.DISCORD_GATEWAY.get(id).fetch(
+    "https://discord-gateway.internal/status"
+  );
+  if (!response.ok) {
+    return {
+      connected: false,
+      lastHeartbeatAck: null,
+      lastEventAt: null,
+      reconnectAttempts: 0,
+      lastCloseCode: null,
+      lastCloseReason: "status unavailable: " + response.status,
+      lastReconcileAt: null
+    };
+  }
+  return await response.json() as DiscordGatewayStatus;
+}
+
 export class DiscordGateway {
   private socket: WebSocket | null = null;
   private plannedClose = false;
@@ -94,6 +136,18 @@ export class DiscordGateway {
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
+    if (path === "/status" && request.method === "GET") {
+      const stored = await this.loadState();
+      return Response.json({
+        connected: Boolean(this.socket) && stored.connected,
+        lastHeartbeatAck: stored.lastHeartbeatAck,
+        lastEventAt: stored.lastEventAt,
+        reconnectAttempts: stored.reconnectAttempts,
+        lastCloseCode: stored.lastCloseCode,
+        lastCloseReason: stored.lastCloseReason,
+        lastReconcileAt: stored.lastReconcileAt
+      } satisfies DiscordGatewayStatus);
+    }
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
@@ -143,11 +197,29 @@ export class DiscordGateway {
       return;
     }
 
+    const now = Date.now();
     this.sendHeartbeat(stored);
-    stored.lastHeartbeatSent = Date.now();
+    stored.lastHeartbeatSent = now;
+
+    const reconcileDue =
+      stored.lastReconcileAt === null ||
+      now - stored.lastReconcileAt >= MEMBER_RECONCILE_INTERVAL_MS;
+    if (reconcileDue) {
+      stored.lastReconcileAt = now;
+    }
+
     await this.saveState(stored);
+
+    if (reconcileDue) {
+      this.state.waitUntil(
+        memberActivitySweep(this.env).catch(error => {
+          console.error("member activity durable reconcile failed", error);
+        })
+      );
+    }
+
     await this.state.storage.setAlarm(
-      Date.now() + Math.max(1_000, stored.heartbeatInterval)
+      now + Math.max(1_000, stored.heartbeatInterval)
     );
   }
 
@@ -274,14 +346,24 @@ export class DiscordGateway {
 
       const clearSession = closeNeedsFreshSession(event.code);
       const delay = isFatalGatewayClose(event.code) ? 60_000 : undefined;
-      void this.scheduleReconnect(clearSession, delay);
+      void this.scheduleReconnect(
+        clearSession,
+        delay,
+        event.code,
+        event.reason || "websocket closed"
+      );
     });
 
     socket.addEventListener("error", () => {
       if (this.socket !== socket) return;
       this.socket = null;
       if (this.plannedClose) return;
-      void this.scheduleReconnect(false);
+      void this.scheduleReconnect(
+        false,
+        undefined,
+        null,
+        "websocket error"
+      );
     });
 
     await this.state.storage.setAlarm(Date.now() + 10_000);
@@ -289,13 +371,18 @@ export class DiscordGateway {
 
   private async scheduleReconnect(
     clearSession: boolean,
-    forcedDelay?: number
+    forcedDelay?: number,
+    closeCode?: number | null,
+    closeReason?: string
   ): Promise<void> {
     const stored = await this.loadState();
+    stored.connected = false;
     stored.reconnectAttempts += 1;
     stored.heartbeatInterval = null;
     stored.lastHeartbeatSent = null;
     stored.lastHeartbeatAck = null;
+    if (closeCode !== undefined) stored.lastCloseCode = closeCode;
+    if (closeReason !== undefined) stored.lastCloseReason = closeReason;
 
     if (clearSession) {
       stored.sessionId = null;
@@ -376,6 +463,8 @@ export class DiscordGateway {
       }
 
       case 0:
+        stored.lastEventAt = Date.now();
+        await this.saveState(stored);
         await this.handleDispatch(payload, stored);
         return;
     }
@@ -438,9 +527,12 @@ export class DiscordGateway {
         resume_gateway_url?: string;
         guilds?: Array<{ id?: string }>;
       };
+      stored.connected = true;
       stored.sessionId = ready.session_id ?? null;
       stored.resumeUrl = ready.resume_gateway_url ?? stored.resumeUrl;
       stored.reconnectAttempts = 0;
+      stored.lastCloseCode = null;
+      stored.lastCloseReason = null;
       await this.saveState(stored);
 
       const guildIds=(ready.guilds ?? [])
@@ -450,13 +542,23 @@ export class DiscordGateway {
       await this.state.storage.put(GUILD_MEMBERSHIP_SEED_KEY,1);
 
       // A fresh Identify cannot replay events from before the connection.
-      // Reconcile once here, then all subsequent notifications are Gateway-driven.
-      await memberActivitySweep(this.env);
+      // Reconcile in the background so a large member list never blocks Gateway
+      // heartbeat/dispatch processing.
+      stored.lastReconcileAt = Date.now();
+      await this.saveState(stored);
+      this.state.waitUntil(
+        memberActivitySweep(this.env).catch(error => {
+          console.error("member activity READY reconcile failed", error);
+        })
+      );
       return;
     }
 
     if (payload.t === "RESUMED") {
+      stored.connected = true;
       stored.reconnectAttempts = 0;
+      stored.lastCloseCode = null;
+      stored.lastCloseReason = null;
       await this.saveState(stored);
       return;
     }
