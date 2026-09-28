@@ -10,15 +10,26 @@ const memberSource = await readFile(
   new URL("../src/member-activity.ts", import.meta.url),
   "utf8"
 );
+const securityGatewaySource = await readFile(
+  new URL("../src/security/gateway.ts", import.meta.url),
+  "utf8"
+);
 const indexSource = await readFile(
   new URL("../src/index.ts", import.meta.url),
   "utf8"
 );
 
-test("member activity uses Discord Gateway member events", () => {
-  assert.match(gatewaySource, /GUILD_MEMBER_ADD/);
-  assert.match(gatewaySource, /GUILD_MEMBER_REMOVE/);
-  assert.match(gatewaySource, /GATEWAY_INTENTS\s*=\s*\(1 << 0\) \| \(1 << 1\)/);
+test("member activity uses the integrated Security Gateway member feed", () => {
+  assert.match(securityGatewaySource, /GUILD_MEMBER_ADD/);
+  assert.match(securityGatewaySource, /GUILD_MEMBER_REMOVE/);
+  assert.match(securityGatewaySource, /handleMemberActivityGatewayEvent/);
+  assert.match(
+    securityGatewaySource,
+    /GATEWAY_INTENTS[\s\S]*GUILD_MEMBERS/
+  );
+  assert.doesNotMatch(gatewaySource, /payload\.t === "GUILD_MEMBER_ADD"/);
+  assert.doesNotMatch(gatewaySource, /payload\.t === "GUILD_MEMBER_REMOVE"/);
+  assert.match(gatewaySource, /GATEWAY_INTENTS\s*=\s*1 << 0/);
   assert.match(memberSource, /handleMemberActivityGatewayEvent/);
 });
 
