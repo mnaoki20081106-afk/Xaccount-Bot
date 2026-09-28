@@ -349,6 +349,32 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  async function confirmDirectLtcFunding(){
+    if(!confirm(
+      "BinanceのLTC総残高が保留開始時より増えていることを確認しました。今回の増加をPayPay直接購入として確定し、仕入れ処理を再開しますか？"
+    )) return;
+    setControlBusy(true);
+    try{
+      const result=await api<{confirmedSpendJpy:number;detectedLtcIncrease:number}>(
+        `/api/guilds/${guildId}/shiire/operations/funding/confirm-direct-ltc`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      onNotice(
+        "LTC直接購入を確定しました: "+
+        yen(result.confirmedSpendJpy)+
+        " / +"+
+        num(result.detectedLtcIncrease,8)+
+        " LTC"
+      );
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
   async function cancelPendingFunding(){
     if(!confirm("現在のPayPay手動操作待ちを取り消しますか？実際に送金・購入済みなら先に残高を確認してください。")) return;
     setControlBusy(true);
@@ -716,7 +742,8 @@ export default function ShiireOperationsCenter({
               <strong>PayPay → Binance 手動操作待ち</strong>
               <span>
                 最大 {yen(pendingFunding.amountJpy)} をPayPay残高から予約中です。
-                BOTはBinanceの実残高増加を検知して再開します。
+                JPY即時入金は金額まで確認できれば自動再開します。
+                LTC直接購入はLTC総残高の増加を検知後、誤判定防止のため管理者確認が必要です。
               </span>
               {Number(pendingFunding.jpyDepositGrossJpy??0)>0&&(
                 <span>
@@ -726,10 +753,29 @@ export default function ShiireOperationsCenter({
                 </span>
               )}
               {Number(pendingFunding.directLtcBudgetJpy??0)>0&&(
-                <span>
-                  LTC直接購入: {yen(pendingFunding.directLtcBudgetJpy)} 分を
-                  Binance公式PayPay購入画面で購入する経路も利用できます。
-                </span>
+                <>
+                  <span>
+                    LTC直接購入: {yen(pendingFunding.directLtcBudgetJpy)} 分を
+                    Binance公式PayPay購入画面で購入する経路も利用できます。
+                  </span>
+                  {pendingFunding.directLtcIncreaseDetected&&(
+                    <div className="shiire-callout neutral">
+                      <strong>LTC増加を検知しました</strong>
+                      <span>
+                        基準 {num(pendingFunding.binanceLtcBaseline,8)} LTC →
+                        現在 {num(pendingFunding.currentBinanceLtcTotal,8)} LTC
+                        （+{num(pendingFunding.detectedLtcIncrease,8)} LTC）
+                      </span>
+                      <button
+                        className="primary"
+                        disabled={controlBusy}
+                        onClick={()=>void confirmDirectLtcFunding()}
+                      >
+                        このLTC購入を確認して再開
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               <button
                 className="danger"
