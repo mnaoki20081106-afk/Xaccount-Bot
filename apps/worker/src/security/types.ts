@@ -131,6 +131,9 @@ export type GatewayStatus = {
   lastEventAt: number | null;
   reconnectAttempts: number;
   botUserId: string | null;
+  lastCloseCode: number | null;
+  lastCloseReason: string | null;
+  lastMemberReconcileAt: number | null;
 };
 
 export type AuditLogChange = {
