@@ -26,6 +26,7 @@ type Overview={
     hotWallet:{health:any;balanceLtc:number|null};
   };
   withdrawalSafety:Settled<any>;
+  providerIssues:Array<{provider:string;error:string}>;
   inventory:Record<string,number>;
   inventoryByClass:Record<string,Record<string,number>>;
   today:{
@@ -146,7 +147,10 @@ export default function ShiireOperationsCenter({
   const topReserved=classReserved(overview,"TOP_SEARCH");
   const shadowReady=classReady(overview,"NO_SHADOWBAN");
   const shadowReserved=classReserved(overview,"NO_SHADOWBAN");
-  const blockers=(overview?.circuitBreakers?.length??0)+(overview?.recentErrors?.length??0);
+  const blockers=
+    (overview?.circuitBreakers?.length??0)+
+    (overview?.recentErrors?.length??0)+
+    (overview?.providerIssues?.length??0);
 
   const overallState=useMemo(()=>{
     if(!overview) return {label:"読込中",tone:"warn",detail:"Discord-Shiireの状態を取得しています"};
@@ -155,6 +159,13 @@ export default function ShiireOperationsCenter({
     }
     if(overview.circuitBreakers.length){
       return {label:"要確認",tone:"bad",detail:"Circuit Breakerが開いています"};
+    }
+    if(overview.providerIssues?.length){
+      return {
+        label:"API要確認",
+        tone:"bad",
+        detail:"外部Providerの取得に失敗しています。残高が「—」のままでも正常扱いにしません"
+      };
     }
     if(overview.safety.dryRun){
       return {label:"DRY RUN",tone:"good",detail:"เงินจริงを動かさない安全モードです"};
@@ -421,9 +432,17 @@ export default function ShiireOperationsCenter({
             <article className="card">
               <span className="eyebrow">ATTENTION</span>
               <h2>最近の異常</h2>
-              {(overview?.circuitBreakers.length??0)===0&&(overview?.recentErrors.length??0)===0
-                ?<div className="shiire-empty">現在、開いているBreakerや直近エラーはありません。</div>
+              {(overview?.circuitBreakers.length??0)===0&&
+                (overview?.recentErrors.length??0)===0&&
+                (overview?.providerIssues.length??0)===0
+                ?<div className="shiire-empty">現在、Provider障害・開いているBreaker・直近エラーはありません。</div>
                 :<>
+                  {(overview?.providerIssues??[]).slice(0,5).map((row)=>(
+                    <div className="shiire-event danger" key={"provider:"+row.provider}>
+                      <strong>{row.provider} API</strong>
+                      <span>{row.error}</span>
+                    </div>
+                  ))}
                   {(overview?.circuitBreakers??[]).slice(0,5).map((row:any)=>(
                     <div className="shiire-event danger" key={"breaker:"+row.key}>
                       <strong>{row.key}</strong>
@@ -740,9 +759,15 @@ export default function ShiireOperationsCenter({
               <EventList rows={logs?.fundingEvents??[]} />
             </article>
             <article className="card">
-              <span className="eyebrow">CRYPTO TRANSACTIONS</span>
-              <h2>暗号資産トランザクション</h2>
-              <EventList rows={logs?.cryptoTransactions??[]} />
+              <span className="eyebrow">WALLET TRANSFERS</span>
+              <h2>専用ウォレット送金履歴</h2>
+              {overview?.integrations.dedicatedHotWallet==="disabled"
+                ?<div className="shiire-empty">
+                  専用LTC Walletは現在未接続です。Binance→HStora入金は手動境界のため、
+                  この一覧が空でも異常ではありません。BinanceでのLTC購入は左の「資金イベント」に記録されます。
+                </div>
+                :<EventList rows={logs?.cryptoTransactions??[]} />
+              }
             </article>
           </section>
         </>
