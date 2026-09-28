@@ -45,8 +45,24 @@ test("minute cron keeps the Gateway alive and reconciles missed member events", 
   assert.doesNotMatch(gatewaySource, /enabled \? "start" : "stop"/);
 });
 
-test("fresh gateway sessions reconcile once before event-driven operation", () => {
-  assert.match(gatewaySource, /await memberActivitySweep\(this\.env\)/);
+test("member gateway reconciles independently of Worker cron", () => {
+  assert.match(gatewaySource, /MEMBER_RECONCILE_INTERVAL_MS\s*=\s*60_000/);
+  assert.match(gatewaySource, /lastReconcileAt/);
+  assert.match(gatewaySource, /memberActivity durable reconcile failed/);
+  assert.match(gatewaySource, /this\.state\.waitUntil/);
+});
+
+test("normal Worker traffic self-starts the member gateway", () => {
+  const fetchHandler = indexSource.slice(indexSource.indexOf("async fetch"));
+  assert.match(fetchHandler, /ensureDiscordGateway\(env\)/);
+  assert.match(fetchHandler, /member activity gateway start failed/);
+});
+
+test("health exposes dedicated member gateway diagnostics", () => {
+  assert.match(gatewaySource, /discord-gateway\.internal\/status/);
+  assert.match(indexSource, /discordGatewayStatus\(env\)/);
+  assert.match(indexSource, /member-activity-isolated-v2/);
+  assert.match(indexSource, /dedicated-gateway-plus-do-reconcile/);
 });
 
 test("gateway guild events maintain the dashboard guild cache", () => {
