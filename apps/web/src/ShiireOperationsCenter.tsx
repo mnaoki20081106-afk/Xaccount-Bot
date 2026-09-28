@@ -603,28 +603,45 @@ export default function ShiireOperationsCenter({
         <>
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi">
-              <span>LTC購入上限</span>
-              <strong>{yen(payPayAllowed)}</strong>
+              <span>LTC補充方法</span>
+              <strong>{overview?.safety.fundingModeLabel??"—"}</strong>
               <small>
-                新規PayPay資金 {yen(funding?.paypayFunding?.spendableJpy)}
-                {funding?.observedPayPay?.fresh?" / 観測有効":" / PayPay観測要更新"}
+                {manualFunding
+                  ?"HStora残高反映後、仕入れを自動再開"
+                  :binanceServerUnlocked
+                    ?"Binanceサーバーロック解除済み"
+                    :"Binanceサーバーロック中"}
               </small>
             </article>
-            <article className="card shiire-kpi">
-              <span>BINANCE LTC</span>
-              <strong>{num(Number(ltc?.free??0)+Number(ltc?.locked??0),8)} LTC</strong>
-              <small>Free {num(ltc?.free,8)} / Locked {num(ltc?.locked,8)}</small>
-            </article>
+            {!manualFunding&&(
+              <>
+                <article className="card shiire-kpi">
+                  <span>LTC購入上限</span>
+                  <strong>{yen(payPayAllowed)}</strong>
+                  <small>
+                    新規PayPay資金 {yen(funding?.paypayFunding?.spendableJpy)}
+                    {funding?.observedPayPay?.fresh?" / 観測有効":" / PayPay観測要更新"}
+                  </small>
+                </article>
+                <article className="card shiire-kpi">
+                  <span>BINANCE LTC</span>
+                  <strong>{num(Number(ltc?.free??0)+Number(ltc?.locked??0),8)} LTC</strong>
+                  <small>Free {num(ltc?.free,8)} / Locked {num(ltc?.locked,8)}</small>
+                </article>
+              </>
+            )}
             <article className="card shiire-kpi">
               <span>HSTORA 残高</span>
               <strong>{usd(hstoraBalance?.balance)}</strong>
               <small>Pending {usd(hstoraBalance?.pending_balance)}</small>
             </article>
-            <article className="card shiire-kpi">
-              <span>LTC / JPY</span>
-              <strong>{yen(market?.priceJpy)}</strong>
-              <small>公式市場データ</small>
-            </article>
+            {!manualFunding&&(
+              <article className="card shiire-kpi">
+                <span>LTC / JPY</span>
+                <strong>{yen(market?.priceJpy)}</strong>
+                <small>公式市場データ</small>
+              </article>
+            )}
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 在庫</span>
               <strong>{topReady}</strong>
@@ -684,19 +701,28 @@ export default function ShiireOperationsCenter({
               </div>
               <div className="shiire-health-list">
                 <HealthRow label="HStora API" ok={Boolean(overview?.integrations.hstoraConfigured)} />
-                <HealthRow label="Binance 取引API" ok={Boolean(overview?.integrations.binanceTradeConfigured)} />
-                <HealthRow
-                  label="Binance 出金"
-                  ok={Boolean(withdrawal?.readyForLiveWithdrawal)}
-                  neutral={withdrawal?.configured===false}
-                  detail={
-                    withdrawal?.configured===false
-                      ?"未接続（現在のHStora手動入金では不要）"
-                      :withdrawal?.readyForLiveWithdrawal
-                        ?"LIVE出金条件OK"
-                        :"出金キーは設定済みですが安全条件未達"
-                  }
-                />
+                {!manualFunding&&(
+                  <>
+                    <HealthRow
+                      label="Binance 自動購入ロック"
+                      ok={binanceServerUnlocked}
+                      detail={binanceServerUnlocked?"解除済み":"サーバー側でロック中"}
+                    />
+                    <HealthRow label="Binance 取引API" ok={Boolean(overview?.integrations.binanceTradeConfigured)} />
+                    <HealthRow
+                      label="Binance 出金"
+                      ok={Boolean(withdrawal?.readyForLiveWithdrawal)}
+                      neutral={withdrawal?.configured===false}
+                      detail={
+                        withdrawal?.configured===false
+                          ?"未接続"
+                          :withdrawal?.readyForLiveWithdrawal
+                            ?"LIVE出金条件OK"
+                            :"出金キーは設定済みですが安全条件未達"
+                      }
+                    />
+                  </>
+                )}
                 <HealthRow
                   label="暗号化キー"
                   ok={Boolean(overview?.integrations.credentialsEncryptionConfigured)}
