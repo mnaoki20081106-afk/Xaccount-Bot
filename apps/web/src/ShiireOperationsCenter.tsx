@@ -492,7 +492,23 @@ export default function ShiireOperationsCenter({
           {pendingFunding&&(
             <section className="card shiire-callout warn">
               <strong>PayPay → Binance 手動操作待ち</strong>
-              <span>{yen(pendingFunding.amountJpy)} の資金移動が必要です。BOTは残高増加を検知して再開します。</span>
+              <span>
+                最大 {yen(pendingFunding.amountJpy)} をPayPay残高から予約中です。
+                BOTはBinanceの実残高増加を検知して再開します。
+              </span>
+              {Number(pendingFunding.jpyDepositGrossJpy??0)>0&&(
+                <span>
+                  JPY即時入金: PayPayから {yen(pendingFunding.jpyDepositGrossJpy)} 支払い →
+                  Binance JPYが最低 {yen(pendingFunding.expectedJpyCreditJpy)} 増えれば完了扱い。
+                  現行の110円入金手数料を織り込み済みです。
+                </span>
+              )}
+              {Number(pendingFunding.directLtcBudgetJpy??0)>0&&(
+                <span>
+                  LTC直接購入: {yen(pendingFunding.directLtcBudgetJpy)} 分を
+                  Binance公式PayPay購入画面で購入する経路も利用できます。
+                </span>
+              )}
             </section>
           )}
 
