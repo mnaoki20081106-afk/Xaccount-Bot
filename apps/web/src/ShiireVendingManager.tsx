@@ -642,10 +642,12 @@ export default function ShiireVendingManager({
                 <label className="field">
                   <span>PayPay価格</span>
                   <input type="number" min="0" value={pricePayPay} onChange={e=>setPricePayPay(Number(e.target.value))} />
+                  <small>0円にするとPayPay販売を無効化します。</small>
                 </label>
                 <label className="field">
                   <span>Kyash価格</span>
                   <input type="number" min="0" value={priceKyash} onChange={e=>setPriceKyash(Number(e.target.value))} />
+                  <small>0円にするとKyash販売を無効化します。</small>
                 </label>
                 <label className="field">
                   <span>絵文字</span>
