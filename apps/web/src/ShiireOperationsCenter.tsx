@@ -13,6 +13,9 @@ type Overview={
   safety:{
     dryRun:boolean;
     emergencyStop:boolean;
+    fundingMode:"manual_hstora"|"binance_auto";
+    fundingModeLabel:string;
+    binanceAutoFundingServerEnabled:boolean;
     autoPurchaseEnabled:boolean;
     autoProcurementEnabled:boolean;
   };
@@ -223,12 +226,16 @@ export default function ShiireOperationsCenter({
     setDetailBusy(true);
     try{
       if(target==="funding"){
-        const data=await api<BinanceDetail>(
-          `/api/guilds/${guildId}/shiire/operations/binance`,
-          {},
-          25_000
-        );
-        setBinance(data);
+        if(overview?.safety.fundingMode==="manual_hstora"){
+          setBinance(null);
+        }else{
+          const data=await api<BinanceDetail>(
+            `/api/guilds/${guildId}/shiire/operations/binance`,
+            {},
+            25_000
+          );
+          setBinance(data);
+        }
       }else if(target==="procurement"){
         const [nextOrders,nextHstora]=await Promise.all([
           api<OrderDetail>(
@@ -286,6 +293,32 @@ export default function ShiireOperationsCenter({
     await loadOverview();
     if(section!=="overview"&&section!=="vending") await loadDetail(section);
     onNotice("仕入れbotの運用情報を更新しました");
+  }
+
+  async function setFundingMode(mode:"manual_hstora"|"binance_auto"){
+    if(
+      mode==="binance_auto"&&
+      !confirm("Binance自動LTC購入モードへ切り替えますか？ サーバー側ロックが解除済みの場合だけ有効になります。")
+    ) return;
+    setControlBusy(true);
+    try{
+      await api(
+        `/api/guilds/${guildId}/shiire/funding/mode`,
+        {method:"POST",body:JSON.stringify({mode})},
+        20_000
+      );
+      onNotice(
+        mode==="manual_hstora"
+          ?"HStoraへのLTC手動補充モードへ切り替えました"
+          :"Binance自動LTC購入モードへ切り替えました"
+      );
+      setBinance(null);
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
   }
 
   async function saveFundingControls(){
@@ -491,6 +524,10 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  const manualFunding=overview?.safety.fundingMode==="manual_hstora";
+  const binanceServerUnlocked=Boolean(
+    overview?.safety.binanceAutoFundingServerEnabled
+  );
   const payPayAllowed=funding?.allowance?.allowedJpy;
   const pendingFunding=funding?.pendingManualFunding;
   const withdrawal=settledData(overview?.withdrawalSafety);
@@ -538,7 +575,10 @@ export default function ShiireOperationsCenter({
             {overview?.safety.dryRun?"DRY RUN":"LIVE"}
           </span>
           <span>自動仕入れ {overview?.safety.autoProcurementEnabled?"ON":"OFF"}</span>
-          <span>LTC自動購入 {overview?.safety.autoPurchaseEnabled?"ON":"OFF"}</span>
+          <span>資金 {overview?.safety.fundingModeLabel??"—"}</span>
+          {!manualFunding&&(
+            <span>LTC自動購入 {overview?.safety.autoPurchaseEnabled?"ON":"OFF"}</span>
+          )}
           <span>更新 {when(overview?.generatedAt)}</span>
         </div>
       </section>
