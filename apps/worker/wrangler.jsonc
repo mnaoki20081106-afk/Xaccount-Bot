@@ -9,10 +9,6 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "DISCORD_GATEWAY",
-        "class_name": "DiscordGateway"
-      },
-      {
         "name": "SECURITY_GATEWAY",
         "class_name": "DiscordSecurityGateway"
       }
@@ -26,6 +22,10 @@
     {
       "tag": "integrated-security-gateway-v1",
       "new_sqlite_classes": ["DiscordSecurityGateway"]
+    },
+    {
+      "tag": "remove-member-gateway-v2",
+      "deleted_classes": ["DiscordGateway"]
     }
   ],
   "d1_databases": [
