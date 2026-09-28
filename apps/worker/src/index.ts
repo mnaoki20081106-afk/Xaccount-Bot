@@ -77,7 +77,6 @@ import {
   gatewayStatus as unifiedGatewayStatus
 } from "./security/gateway";
 import { runIntegratedSecurityScheduled } from "./security/service";
-export { DiscordGateway } from "./discord-gateway";
 export { DiscordSecurityGateway } from "./security/gateway";
 import {
   openSecurityMaintenanceLease,
