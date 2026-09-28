@@ -26,6 +26,7 @@ type SourceProduct={
   currency:string;
   unit_price:number;
   stock_available:number;
+  procurement_class:"TOP_SEARCH"|"NO_SHADOWBAN"|null;
   qualified:number;
   last_seen_at:number;
 };
@@ -511,8 +512,10 @@ export default function ShiireVendingManager({
               <div className="serverless-note" key={source.supplier_product_id}>
                 <strong>{source.title||("#"+source.supplier_product_id)}</strong>
                 <span>
-                  ID {source.supplier_product_id} / {source.currency} {source.unit_price} /
-                  HStora表示在庫 {source.stock_available} / {source.qualified?"Qualified":"未承認"}
+                  {source.procurement_class??"未分類"} / ID {source.supplier_product_id} /
+                  {source.currency} {source.unit_price} /
+                  HStora表示在庫 {source.stock_available} /
+                  {source.qualified?"Qualified":"未承認"}
                 </span>
               </div>
             ))}
