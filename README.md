@@ -30,6 +30,8 @@ https://mnaoki20081106-afk.github.io/Xaccount-Bot/
 
 Repository Variable VITE_API_BASE_URL にはFactoryでデプロイされたWorker URLを設定してください。
 
+Pages workflowは`VITE_API_BASE_URL`未設定時にビルドを失敗させます。推測したworkers.dev URLへ自動フォールバックしません。
+
 ## GitHub Pages の初回設定
 
 このリポジトリでは管理サイトのビルド自体は成功していますが、GitHub Pages のリポジトリ設定は GitHub App から有効化できません。
@@ -109,7 +111,10 @@ Discord-Shiire Worker:
 
 ```text
 SHIIRE_BRIDGE_SECRET
+XACCOUNT_BOT_BASE_URL
 ```
+
+`XACCOUNT_BOT_BASE_URL` には、実際にデプロイされた Xaccount-Bot Worker の HTTPS origin を設定します。これは仕入れbot自販機のPayPay/Kyash決済委譲に必要です。
 
 `SHIIRE_BRIDGE_SECRET` は両方に同じ強いランダム値を設定してください。
 
