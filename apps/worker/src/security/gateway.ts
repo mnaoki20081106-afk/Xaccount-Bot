@@ -208,34 +208,39 @@ export class DiscordSecurityGateway {
   }
 
   async alarm(): Promise<void> {
-    try {
-      if (!this.socket) {
-        await this.connect();
-        return;
-      }
-      const stored = await this.loadState();
-      if (!stored.heartbeatInterval) {
-        await this.state.storage.setAlarm(Date.now() + 5000);
-        return;
-      }
-      if (
-        stored.lastHeartbeatSent !== null &&
-        (stored.lastHeartbeatAck === null ||
-          stored.lastHeartbeatAck < stored.lastHeartbeatSent)
-      ) {
-        await this.scheduleReconnect(false);
-        return;
-      }
-      this.sendHeartbeat(stored);
-      stored.lastHeartbeatSent = Date.now();
-      await this.saveState(stored);
-      await this.state.storage.setAlarm(
-        Date.now() + Math.max(1000, stored.heartbeatInterval)
-      );
-    } catch (error) {
-      console.error("security gateway alarm failed", error);
-      await this.state.storage.setAlarm(Date.now() + 15_000);
+    this.queue = this.queue
+      .then(() => this.handleAlarm())
+      .catch(async error => {
+        console.error("security gateway alarm failed", error);
+        await this.state.storage.setAlarm(Date.now() + 15_000);
+      });
+    await this.queue;
+  }
+
+  private async handleAlarm(): Promise<void> {
+    if (!this.socket) {
+      await this.connect();
+      return;
     }
+    const stored = await this.loadState();
+    if (!stored.heartbeatInterval) {
+      await this.state.storage.setAlarm(Date.now() + 5000);
+      return;
+    }
+    if (
+      stored.lastHeartbeatSent !== null &&
+      (stored.lastHeartbeatAck === null ||
+        stored.lastHeartbeatAck < stored.lastHeartbeatSent)
+    ) {
+      await this.scheduleReconnect(false);
+      return;
+    }
+    this.sendHeartbeat(stored);
+    stored.lastHeartbeatSent = Date.now();
+    await this.saveState(stored);
+    await this.state.storage.setAlarm(
+      Date.now() + Math.max(1000, stored.heartbeatInterval)
+    );
   }
 
   private async loadState(): Promise<StoredGatewayState> {
