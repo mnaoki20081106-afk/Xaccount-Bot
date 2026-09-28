@@ -155,6 +155,15 @@ export async function handleShiireDashboardProxy(
         message:"Discord-Shiire Workerの実URLをSHIIRE_API_BASE_URLへ設定してください。推測URLでは接続しません。"
       },503);
     }
+    if(
+      message==="SHIIRE_API_BASE_URL_INVALID"||
+      message==="SHIIRE_API_BASE_URL_MUST_BE_HTTPS_ORIGIN"
+    ){
+      return json(env,{
+        error:message,
+        message:"SHIIRE_API_BASE_URLには https://host のWorker originだけを設定してください。パス・クエリ・認証情報は付けません。"
+      },503);
+    }
     if(message==="SHIIRE_BRIDGE_SECRET_NOT_CONFIGURED"){
       return json(env,{
         error:"SHIIRE_BRIDGE_SECRET_NOT_CONFIGURED",
