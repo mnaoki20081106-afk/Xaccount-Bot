@@ -600,9 +600,19 @@ export async function listDeliverySent(env:Env,limit=20){
 export async function finishDelivery(env:Env,order:VmOrder){
   const now=Date.now();
   await env.DB.batch([
-    env.DB.prepare("UPDATE vending_stock SET state='sold',sold_at=?,reserved_until=NULL WHERE order_id=? AND state='reserved'").bind(now,order.id),
-    env.DB.prepare("UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=? AND status IN ('delivering','delivery_sent')").bind(now,now,order.id),
-    env.DB.prepare("UPDATE vending_products SET sales_count=sales_count+?,updated_at=? WHERE id=?").bind(order.quantity,now,order.product_id)
+    env.DB.prepare(
+      "UPDATE vending_stock SET state='sold',sold_at=?,reserved_until=NULL WHERE order_id=? AND state='reserved'"
+    ).bind(now,order.id),
+    env.DB.prepare(
+      "UPDATE vending_products SET sales_count=sales_count+?,updated_at=? "+
+      "WHERE id=? AND EXISTS ("+
+      "SELECT 1 FROM vending_orders WHERE id=? AND status IN ('delivering','delivery_sent')"+
+      ")"
+    ).bind(order.quantity,now,order.product_id,order.id),
+    env.DB.prepare(
+      "UPDATE vending_orders SET status='delivered',delivered_at=?,updated_at=? "+
+      "WHERE id=? AND status IN ('delivering','delivery_sent')"
+    ).bind(now,now,order.id)
   ]);
 }
 
