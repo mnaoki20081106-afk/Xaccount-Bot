@@ -67,6 +67,7 @@ import {
 } from "./vending";
 import {
   getMemberActivitySettings,
+  memberActivitySweep,
   primeMemberActivity,
   saveMemberActivitySettings,
   sendMemberActivityTest
@@ -3269,6 +3270,7 @@ export default {
       paymentSweep(env),
       vendingSweep(env),
       ensureDiscordGateway(env),
+      memberActivitySweep(env),
       env.SECURITY_GATEWAY?runIntegratedSecurityScheduled(env):Promise.resolve(),
       botAccessGuardSweep(env),
       backupRestoreSweep(env)
