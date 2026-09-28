@@ -109,38 +109,43 @@ export class DiscordGateway {
   }
 
   async alarm(): Promise<void> {
-    try {
-      if (!this.socket) {
-        await this.connect();
-        return;
-      }
+    this.messageQueue = this.messageQueue
+      .then(() => this.handleAlarm())
+      .catch(async error => {
+        console.error("discord gateway alarm failed", error);
+        await this.state.storage.setAlarm(Date.now() + 15_000);
+      });
+    await this.messageQueue;
+  }
 
-      const stored = await this.loadState();
-      if (!stored.heartbeatInterval) {
-        await this.state.storage.setAlarm(Date.now() + 5_000);
-        return;
-      }
-
-      if (
-        stored.lastHeartbeatSent !== null &&
-        (stored.lastHeartbeatAck === null ||
-          stored.lastHeartbeatAck < stored.lastHeartbeatSent)
-      ) {
-        console.warn("discord gateway heartbeat ACK missing; reconnecting");
-        await this.scheduleReconnect(false);
-        return;
-      }
-
-      this.sendHeartbeat(stored);
-      stored.lastHeartbeatSent = Date.now();
-      await this.saveState(stored);
-      await this.state.storage.setAlarm(
-        Date.now() + Math.max(1_000, stored.heartbeatInterval)
-      );
-    } catch (error) {
-      console.error("discord gateway alarm failed", error);
-      await this.state.storage.setAlarm(Date.now() + 15_000);
+  private async handleAlarm(): Promise<void> {
+    if (!this.socket) {
+      await this.connect();
+      return;
     }
+
+    const stored = await this.loadState();
+    if (!stored.heartbeatInterval) {
+      await this.state.storage.setAlarm(Date.now() + 5_000);
+      return;
+    }
+
+    if (
+      stored.lastHeartbeatSent !== null &&
+      (stored.lastHeartbeatAck === null ||
+        stored.lastHeartbeatAck < stored.lastHeartbeatSent)
+    ) {
+      console.warn("discord gateway heartbeat ACK missing; reconnecting");
+      await this.scheduleReconnect(false);
+      return;
+    }
+
+    this.sendHeartbeat(stored);
+    stored.lastHeartbeatSent = Date.now();
+    await this.saveState(stored);
+    await this.state.storage.setAlarm(
+      Date.now() + Math.max(1_000, stored.heartbeatInterval)
+    );
   }
 
   private async start(): Promise<void> {
