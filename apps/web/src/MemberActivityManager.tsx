@@ -93,6 +93,37 @@ export default function MemberActivityManager({
     // and depending on it would retry the same failed request in a render loop.
   }, [guildId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshStatus = async () => {
+      try {
+        const data = await api<MemberActivitySettings>(
+          `/api/guilds/${guildId}/member-activity`,
+          {},
+          15_000
+        );
+        if (cancelled) return;
+        setSettings(current => ({
+          ...current,
+          initialized: data.initialized,
+          lastScanAt: data.lastScanAt,
+          memberCount: data.memberCount,
+          lastError: data.lastError
+        }));
+      } catch {
+        // Initial load and explicit actions surface errors. Background status
+        // refresh stays quiet so a temporary network error does not spam UI.
+      }
+    };
+    const timer = window.setInterval(() => {
+      void refreshStatus();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [guildId]);
+
   function patch(next: Partial<MemberActivitySettings>) {
     setSettings(current => ({ ...current, ...next }));
   }
