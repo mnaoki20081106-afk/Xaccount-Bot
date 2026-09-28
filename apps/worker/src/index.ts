@@ -73,10 +73,9 @@ import {
   sendMemberActivityTest
 } from "./member-activity";
 import {
-  discordGatewayStatus,
-  ensureDiscordGateway
-} from "./discord-gateway";
-import { ensureDiscordSecurityGateway } from "./security/gateway";
+  ensureDiscordSecurityGateway,
+  gatewayStatus as unifiedGatewayStatus
+} from "./security/gateway";
 import { runIntegratedSecurityScheduled } from "./security/service";
 export { DiscordGateway } from "./discord-gateway";
 export { DiscordSecurityGateway } from "./security/gateway";
@@ -1927,9 +1926,9 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         }
       }
       try{
-        await ensureDiscordGateway(env);
+        await ensureDiscordSecurityGateway(env);
       }catch(error){
-        console.error("discord gateway start failed",error);
+        console.error("unified discord gateway start failed",error);
         if(saved.enabled){
           throw new HttpError(
             502,
@@ -3137,13 +3136,6 @@ export default {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
     try{
       const url=new URL(request.url);
-      if(env.DISCORD_GATEWAY){
-        ctx.waitUntil(
-          ensureDiscordGateway(env).catch(error=>
-            console.error("member activity gateway start failed",error)
-          )
-        );
-      }
       if(env.SECURITY_GATEWAY){
         ctx.waitUntil(ensureDiscordSecurityGateway(env).catch(error=>console.error("integrated security gateway start failed",error)));
       }
@@ -3194,22 +3186,36 @@ export default {
           discordApiError=error instanceof Error?error.message:String(error);
         }
 
-        const memberGateway=await discordGatewayStatus(env).catch(error=>({
-          connected:false,
-          lastHeartbeatAck:null,
-          lastEventAt:null,
-          reconnectAttempts:0,
-          lastCloseCode:null,
-          lastCloseReason:error instanceof Error?error.message:String(error),
-          lastReconcileAt:null
-        }));
+        const discordGateway=env.SECURITY_GATEWAY
+          ?await unifiedGatewayStatus(env).catch(error=>({
+              connected:false,
+              sessionId:null,
+              lastHeartbeatAck:null,
+              lastEventAt:null,
+              reconnectAttempts:0,
+              botUserId:null,
+              lastCloseCode:null,
+              lastCloseReason:error instanceof Error?error.message:String(error),
+              lastMemberReconcileAt:null
+            }))
+          :{
+              connected:false,
+              sessionId:null,
+              lastHeartbeatAck:null,
+              lastEventAt:null,
+              reconnectAttempts:0,
+              botUserId:null,
+              lastCloseCode:null,
+              lastCloseReason:"SECURITY_GATEWAY binding missing",
+              lastMemberReconcileAt:null
+            };
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"member-activity-isolated-v2",
-          memberActivityRecovery:"dedicated-gateway-plus-do-reconcile",
+          version:"single-gateway-free-tier-v3",
+          memberActivityRecovery:"unified-gateway-plus-isolated-cron-reconcile",
           runtime:"cloudflare-workers",
-          memberGateway,
+          discordGateway,
           discord:{
             applicationId:Boolean(env.DISCORD_APPLICATION_ID),
             publicKey:Boolean(env.DISCORD_PUBLIC_KEY),
@@ -3309,16 +3315,33 @@ export default {
 
   async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext):Promise<void>{
     await ensureSchema(env);
-    ctx.waitUntil(Promise.all([
-      cleanExpired(env),
-      auditWatch(env),
-      paymentSweep(env),
-      vendingSweep(env),
-      ensureDiscordGateway(env),
-      memberActivitySweep(env),
-      env.SECURITY_GATEWAY?runIntegratedSecurityScheduled(env):Promise.resolve(),
-      botAccessGuardSweep(env),
-      backupRestoreSweep(env)
-    ]).then(()=>undefined));
+
+    const keepRunning = (label:string, work:Promise<unknown>) =>
+      ctx.waitUntil(
+        work.catch(error=>console.error(label,error)).then(()=>undefined)
+      );
+
+    keepRunning("cleanExpired scheduled task failed",cleanExpired(env));
+    keepRunning("auditWatch scheduled task failed",auditWatch(env));
+    keepRunning("paymentSweep scheduled task failed",paymentSweep(env));
+    keepRunning("vendingSweep scheduled task failed",vendingSweep(env));
+
+    // Member reconciliation must remain independent of Durable Objects.
+    // If the Free-tier DO duration quota is exhausted, join/leave detection
+    // still recovers through Discord REST polling on the minute cron.
+    keepRunning(
+      "memberActivitySweep scheduled task failed",
+      memberActivitySweep(env)
+    );
+
+    if(env.SECURITY_GATEWAY){
+      keepRunning(
+        "integrated security scheduled task failed",
+        runIntegratedSecurityScheduled(env)
+      );
+    }
+
+    keepRunning("botAccessGuardSweep scheduled task failed",botAccessGuardSweep(env));
+    keepRunning("backupRestoreSweep scheduled task failed",backupRestoreSweep(env));
   }
 } satisfies ExportedHandler<Env>;
