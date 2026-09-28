@@ -148,3 +148,27 @@ SHIIRE_BRIDGE_SECRET
 - Discord-ShiireからXaccount-BotへXアカウント認証情報は送信しない
 
 既存の **自販機** 機能は変更せず、そのまま利用できます。
+
+
+### 仕入れ在庫クラス
+
+仕入れbot自販機では、HStoraの商品IDが変わっても同じ種類として販売できる在庫クラスを選択できます。
+
+```text
+TOP_SEARCH
+  - X/Twitter商品
+  - TOP Search / TOP+Latest の明記必須
+  - 初期上限 80円 / 1垢
+
+NO_SHADOWBAN
+  - X/Twitter商品
+  - TOP Search / TOP+Latest の記載なし
+  - No Shadowban / No Shadow Ban の明記必須
+  - 上限 0.50〜0.60 USD / 1垢
+```
+
+両方の文言がある商品は `TOP_SEARCH` として扱い、`NO_SHADOWBAN` へ二重計上しません。
+
+仕入れbotタブの「自動仕入れ条件」から、各クラスの価格上限・発注点・目標在庫・初回試験購入数・1回最大仕入れ数を変更できます。Dry Run解除と自動仕入れON/OFFはこの画面からは変更できません。
+
+販売商品は個別HStora商品IDではなく在庫クラスへ紐付けることを推奨します。これにより、最安の仕入先が商品Aから商品Bへ変わっても、同じDiscord自販機商品へ自動的に在庫が追加されます。
