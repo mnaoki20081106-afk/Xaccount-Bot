@@ -1,0 +1,37 @@
+name: X Utility Integration CI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/worker/src/xutility-bridge.ts"
+      - "apps/worker/src/index.ts"
+      - "apps/worker/src/types.ts"
+      - "apps/web/src/XUtilityManager.tsx"
+      - "apps/web/src/App.tsx"
+      - "bot-factory.json"
+      - ".github/workflows/xutility-ci.yml"
+  pull_request:
+    paths:
+      - "apps/worker/src/xutility-bridge.ts"
+      - "apps/worker/src/index.ts"
+      - "apps/worker/src/types.ts"
+      - "apps/web/src/XUtilityManager.tsx"
+      - "apps/web/src/App.tsx"
+      - "bot-factory.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build --workspace @dsm/worker
+      - run: npm run build --workspace @dsm/web
