@@ -193,3 +193,30 @@ Discord-ShiireがPayPay手動操作待ち中にBinance LTC総残高の増加を�
 直接LTC購入は残高増加だけでは自動確定しません。「このLTC購入を確認して再開」を押すと、Discord-ShiireがBinance残高を再取得して増加を再確認した上で、PayPay支出を確定し処理を再開します。
 
 JPY即時入金は、期待純増額を満たすJPY残高増加を確認できるため自動再開します。
+
+
+## X-Utility
+
+管理画面の **X Utility** タブから、別BOTである X-Utility の次の2パネルだけを設置できます。
+
+- シャドウバンチェック
+- 2FAコード生成
+
+X-Utilityは先に Discord-Bot-Factory から起動し、Discordサーバーへ追加してください。
+
+Xaccount-Bot側:
+
+```text
+XUTILITY_API_BASE_URL=https://<実際のX-Utility Worker URL>
+XUTILITY_BRIDGE_SECRET=<X-Utility側と同じ32文字以上の値>
+```
+
+X-Utility側:
+
+```text
+XUTILITY_BRIDGE_SECRET=<Xaccount-Bot側と同じ値>
+```
+
+パネル投稿自体はXaccount-BotではなくX-Utility BOTが行います。Xaccount-BotはHMAC-SHA256署名付き内部APIで設置先だけを指示します。
+
+2FAのBase32シークレットはXaccount-Botへ送信されず、X-Utilityでも保存されません。Discordモーダルで受け取ったそのリクエスト内だけでTOTPを生成し、本人限定のEphemeralメッセージで返します。
