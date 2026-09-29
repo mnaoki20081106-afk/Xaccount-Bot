@@ -86,6 +86,7 @@ import {
   handleShiireDashboardProxy,
   handleShiireServiceBridge
 } from "./shiire-bridge";
+import { postXUtilityPanel } from "./xutility-bridge";
 import {
   accountCreatedAt,
   corsHeaders,
@@ -2889,6 +2890,62 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     return json(env,{ok:true,channelId});
   }
 
+  const xUtilityPanel=url.pathname.match(
+    /^\/api\/guilds\/(\d+)\/xutility\/(shadowban|2fa)\/panel$/
+  );
+  if(xUtilityPanel&&request.method==="POST"){
+    const guildId=xUtilityPanel[1]!;
+    const kind=xUtilityPanel[2] as "shadowban"|"2fa";
+    await requireGuild(request,env,guildId);
+    const {channelId}=await bodyObject<{channelId?:string}>(request);
+    if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
+    await requireMessageChannel(env,guildId,channelId);
+
+    try{
+      const result=await postXUtilityPanel(env,guildId,kind,channelId);
+      return json(env,{ok:true,channelId,kind,messageId:result.messageId??null});
+    }catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      if(message.startsWith("XUTILITY_API_BASE_URL_NOT_CONFIGURED")){
+        throw new HttpError(
+          503,
+          "X-Utility Worker URLが未設定です。Bot-FactoryのXaccount-Bot設定でXUTILITY_API_BASE_URLを設定してください"
+        );
+      }
+      if(
+        message.startsWith("XUTILITY_API_BASE_URL_INVALID")||
+        message.startsWith("XUTILITY_API_BASE_URL_MUST_BE_HTTPS_ORIGIN")
+      ){
+        throw new HttpError(
+          503,
+          "XUTILITY_API_BASE_URLにはBot-Factoryで起動したX-UtilityのHTTPS originだけを設定してください"
+        );
+      }
+      if(message.startsWith("XUTILITY_BRIDGE_SECRET_NOT_CONFIGURED")){
+        throw new HttpError(
+          503,
+          "Xaccount-BotとX-Utilityの両方に同じXUTILITY_BRIDGE_SECRETを設定してください"
+        );
+      }
+      if(message.includes("(HTTP 403)")){
+        throw new HttpError(
+          403,
+          "X-Utility BOTがこのチャンネルへ投稿できません。X-Utilityの閲覧・送信・埋め込み権限を確認してください"
+        );
+      }
+      if(message.includes("(HTTP 404)")){
+        throw new HttpError(
+          404,
+          "X-Utility BOTから設置先チャンネルを確認できません。X-Utilityがこのサーバーに参加しているか確認してください"
+        );
+      }
+      throw new HttpError(
+        502,
+        "X-Utilityへのパネル設置依頼に失敗しました: "+message.slice(0,180)
+      );
+    }
+  }
+
   const productsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/products$/);
   if(productsMatch){
     const guildId=productsMatch[1]!;
@@ -3258,7 +3315,8 @@ export default {
         (/^\/api\/guilds\/\d+\/channels\/\d+\/permissions\/\d+$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/channels\/permissions\/bulk$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
-        (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")
+        (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")||
+        (/^\/api\/guilds\/\d+\/xutility\/(shadowban|2fa)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
         return await handleApi(request,env,url);
       }
