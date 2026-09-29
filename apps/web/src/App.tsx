@@ -4,6 +4,7 @@ import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import ShiireOperationsCenter from "./ShiireOperationsCenter";
+import XUtilityManager from "./XUtilityManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
@@ -156,7 +157,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "utility" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -804,6 +805,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-utility"
+                role="tab"
+                aria-controls="admin-panel-utility"
+                aria-selected={activeView === "utility"}
+                className={activeView === "utility" ? "active" : ""}
+                onClick={() => setActiveView("utility")}
+              >
+                X Utility
+              </button>
+              <button
+                type="button"
                 id="admin-tab-backup"
                 role="tab"
                 aria-controls="admin-panel-backup"
@@ -1324,6 +1336,24 @@ export default function App() {
                 </section>
               </>
             )}
+
+            <section
+              id="admin-panel-utility"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-utility"
+              hidden={activeView !== "utility"}
+            >
+              {activeView === "utility" && selectedId && meta && (
+                <XUtilityManager
+                  key={"XUtilityManager:"+selectedId}
+                  guildId={selectedId}
+                  channels={meta.channels}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
+            </section>
 
             <section
               id="admin-panel-security"
