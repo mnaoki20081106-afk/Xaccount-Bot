@@ -131,9 +131,8 @@
         "label": "X-Utility Worker URL",
         "type": "url",
         "required": false,
-        "pattern": "^https://[^/?#\\\\s]+/?$",
-        "placeholder": "https://<実際のX-Utility Worker URL>",
-        "help": "X Utilityタブを使う場合のみ設定します。Bot-FactoryでX-Utilityを起動した後に発行されたWorkerのHTTPS originだけを入力してください（パス・クエリ不要）。"
+        "placeholder": "https://x-utility.example.workers.dev/",
+        "help": "X Utilityタブを使う場合のみ設定します。Bot-FactoryでX-Utilityを起動した後に発行されたWorkerのHTTPS URLを入力してください。パスやクエリは不要です。"
       }
     ],
     "discord": {
