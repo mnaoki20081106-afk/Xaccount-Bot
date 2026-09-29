@@ -116,6 +116,24 @@
         "pattern": "^https://[^\\s/]+(?:/)?$",
         "placeholder": "https://<実際のDiscord-Shiire Worker URL>",
         "help": "仕入れbotタブを使う場合のみ設定します。Discord-Shiireをデプロイした後に発行された実際のWorker HTTPS originを入力してください。推測URLは使用しません。"
+      },
+      {
+        "key": "XUTILITY_BRIDGE_SECRET",
+        "label": "X-Utility連携 Secret",
+        "type": "secret",
+        "required": false,
+        "pattern": "^.{32,}$",
+        "placeholder": "X-Utility側と同じ32文字以上の値",
+        "help": "X Utilityタブを使う場合のみ設定します。X-UtilityのBot-Factory設定と同じ値を入力してください。"
+      },
+      {
+        "key": "XUTILITY_API_BASE_URL",
+        "label": "X-Utility Worker URL",
+        "type": "text",
+        "required": false,
+        "pattern": "^https://[^\\\\s/]+(?:/)?$",
+        "placeholder": "https://<実際のX-Utility Worker URL>",
+        "help": "X Utilityタブを使う場合のみ設定します。Bot-FactoryでX-Utilityを起動した後に発行された実際のWorker HTTPS originを入力してください。"
       }
     ],
     "discord": {
