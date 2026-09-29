@@ -67,7 +67,6 @@ import {
 } from "./vending";
 import {
   getMemberActivitySettings,
-  memberActivitySweep,
   primeMemberActivity,
   saveMemberActivitySettings,
   sendMemberActivityTest
@@ -3211,8 +3210,8 @@ export default {
 
         return json(env,{
           ok:d1Reachable&&d1SchemaReady&&dashboardSessionStorage&&discordApiReachable,
-          version:"single-gateway-free-tier-v3",
-          memberActivityRecovery:"unified-gateway-plus-isolated-cron-reconcile",
+          version:"event-driven-member-activity-v4",
+          memberActivityRecovery:"gateway-events-plus-automatic-fresh-session-diff",
           runtime:"cloudflare-workers",
           discordGateway,
           discord:{
@@ -3324,14 +3323,6 @@ export default {
     keepRunning("auditWatch scheduled task failed",auditWatch(env));
     keepRunning("paymentSweep scheduled task failed",paymentSweep(env));
     keepRunning("vendingSweep scheduled task failed",vendingSweep(env));
-
-    // Member reconciliation must remain independent of Durable Objects.
-    // If the Free-tier DO duration quota is exhausted, join/leave detection
-    // still recovers through Discord REST polling on the minute cron.
-    keepRunning(
-      "memberActivitySweep scheduled task failed",
-      memberActivitySweep(env)
-    );
 
     if(env.SECURITY_GATEWAY){
       keepRunning(
