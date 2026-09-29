@@ -225,13 +225,27 @@ async function getSnapshot(
   return rows.results;
 }
 
-async function persistSnapshot(
+function snapshotChanged(
+  member: DiscordGuildMember,
+  previous: MemberSnapshotRow
+): boolean {
+  return (
+    member.user.username !== previous.username ||
+    (member.user.global_name ?? null) !== previous.global_name ||
+    (member.user.avatar ?? null) !== previous.avatar ||
+    (member.user.bot ? 1 : 0) !== previous.is_bot
+  );
+}
+
+async function persistSnapshotDiff(
   env: MemberActivityEnv,
   guildId: string,
-  members: DiscordGuildMember[],
+  joined: DiscordGuildMember[],
+  changed: DiscordGuildMember[],
+  left: MemberSnapshotRow[],
   scanAt: number
 ): Promise<void> {
-  const statements = members.map(member =>
+  const upserts = [...joined, ...changed].map(member =>
     env.DB.prepare(`
       INSERT INTO member_activity_members(
         guild_id,user_id,username,global_name,avatar,is_bot,first_seen_at,last_seen_at
@@ -254,13 +268,16 @@ async function persistSnapshot(
     )
   );
 
+  const deletes = left.map(member =>
+    env.DB.prepare(
+      "DELETE FROM member_activity_members WHERE guild_id=? AND user_id=?"
+    ).bind(guildId, member.user_id)
+  );
+
+  const statements = [...upserts, ...deletes];
   for (let index = 0; index < statements.length; index += 75) {
     await env.DB.batch(statements.slice(index, index + 75));
   }
-
-  await env.DB.prepare(
-    "DELETE FROM member_activity_members WHERE guild_id=? AND last_seen_at<?"
-  ).bind(guildId, scanAt).run();
 }
 
 function displayName(user: DiscordUser): string {
@@ -369,7 +386,7 @@ async function sendOverflowSummary(
   });
 }
 
-async function syncGuild(
+async function reconcileGuildSnapshot(
   env: MemberActivityEnv,
   row: MemberActivitySettingsRow
 ): Promise<MemberActivitySettings> {
@@ -377,10 +394,9 @@ async function syncGuild(
 
   const scanAt = Date.now();
   try {
-    const [members, previous, guild] = await Promise.all([
+    const [members, previous] = await Promise.all([
       listGuildMembers(env, row.guild_id),
-      getSnapshot(env, row.guild_id),
-      botJson<{ name: string }>(env, `/guilds/${row.guild_id}`)
+      getSnapshot(env, row.guild_id)
     ]);
 
     const currentById = new Map(members.map(member => [member.user.id, member]));
@@ -388,15 +404,37 @@ async function syncGuild(
 
     const joined = members.filter(member => !previousById.has(member.user.id));
     const left = previous.filter(member => !currentById.has(member.user_id));
+    const changed = members.filter(member => {
+      const existing = previousById.get(member.user.id);
+      return existing ? snapshotChanged(member, existing) : false;
+    });
 
-    await persistSnapshot(env, row.guild_id, members, scanAt);
+    // Recovery/initialization is diff-only. Existing members are not rewritten
+    // every time a fresh Gateway session needs to verify its baseline.
+    await persistSnapshotDiff(
+      env,
+      row.guild_id,
+      joined,
+      changed,
+      left,
+      scanAt
+    );
+
     await env.DB.prepare(`
       UPDATE member_activity_settings
       SET initialized=1,last_scan_at=?,last_member_count=?,last_error=NULL,updated_at=?
       WHERE guild_id=?
     `).bind(scanAt, members.length, scanAt, row.guild_id).run();
 
-    if (row.initialized === 1) {
+    if (
+      row.initialized === 1 &&
+      ((row.join_enabled === 1 && joined.length > 0) ||
+       (row.leave_enabled === 1 && left.length > 0))
+    ) {
+      const guild = await botJson<{ name: string }>(
+        env,
+        `/guilds/${row.guild_id}`
+      );
       let sent = 0;
       let overflowJoin = 0;
       let overflowLeave = 0;
@@ -471,7 +509,7 @@ export async function primeMemberActivity(
   guildId: string
 ): Promise<MemberActivitySettings> {
   const row = await getSettingsRow(env, guildId);
-  return syncGuild(env, row);
+  return reconcileGuildSnapshot(env, row);
 }
 
 export async function sendMemberActivityTest(
@@ -566,7 +604,7 @@ export async function handleMemberActivityGatewayEvent(
   // If an old configuration has not been primed yet, establish the baseline
   // instead of treating every existing member as a new event.
   if (row.initialized !== 1) {
-    await syncGuild(env, row);
+    await reconcileGuildSnapshot(env, row);
     return;
   }
 
@@ -673,7 +711,9 @@ export async function handleMemberActivityGatewayEvent(
   ]);
 }
 
-export async function memberActivitySweep(env: MemberActivityEnv): Promise<void> {
+export async function recoverMemberActivityAfterFreshSession(
+  env: MemberActivityEnv
+): Promise<void> {
   await ensureMemberActivitySchema(env);
   const rows = await env.DB.prepare(`
     SELECT * FROM member_activity_settings
@@ -684,9 +724,13 @@ export async function memberActivitySweep(env: MemberActivityEnv): Promise<void>
 
   for (const row of rows.results) {
     try {
-      await syncGuild(env, row);
+      await reconcileGuildSnapshot(env, row);
     } catch (error) {
-      console.warn("member activity sweep failed", row.guild_id, error);
+      console.warn(
+        "member activity fresh-session recovery failed",
+        row.guild_id,
+        error
+      );
     }
   }
 }
