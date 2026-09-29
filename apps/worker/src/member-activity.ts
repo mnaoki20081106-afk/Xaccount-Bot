@@ -719,7 +719,6 @@ export async function recoverMemberActivityAfterFreshSession(
     SELECT * FROM member_activity_settings
     WHERE enabled=1 AND channel_id IS NOT NULL
     ORDER BY updated_at ASC
-    LIMIT 25
   `).all<MemberActivitySettingsRow>();
 
   for (const row of rows.results) {
