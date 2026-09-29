@@ -129,11 +129,11 @@
       {
         "key": "XUTILITY_API_BASE_URL",
         "label": "X-Utility Worker URL",
-        "type": "text",
+        "type": "url",
         "required": false,
-        "pattern": "^https://[^\\s/]+(?:/)?$",
+        "pattern": "^https://[^/?#\\\\s]+/?$",
         "placeholder": "https://<実際のX-Utility Worker URL>",
-        "help": "X Utilityタブを使う場合のみ設定します。Bot-FactoryでX-Utilityを起動した後に発行された実際のWorker HTTPS originを入力してください。"
+        "help": "X Utilityタブを使う場合のみ設定します。Bot-FactoryでX-Utilityを起動した後に発行されたWorkerのHTTPS originだけを入力してください（パス・クエリ不要）。"
       }
     ],
     "discord": {
