@@ -8,7 +8,7 @@ import type {
 import { SecurityEngine } from "./engine";
 import {
   handleMemberActivityGatewayEvent,
-  memberActivitySweep,
+  recoverMemberActivityAfterFreshSession,
   type GatewayMemberActivityEvent
 } from "../member-activity";
 
@@ -79,7 +79,6 @@ const GATEWAY_INTENTS =
   GUILD_MESSAGES |
   MESSAGE_CONTENT;
 const RECONNECT_CLOSE_CODE = 3001;
-const MEMBER_RECONCILE_INTERVAL_MS = 60_000;
 
 function emptyState(): StoredGatewayState {
   return {
@@ -246,24 +245,7 @@ export class DiscordSecurityGateway {
     const now = Date.now();
     this.sendHeartbeat(stored);
     stored.lastHeartbeatSent = now;
-
-    const memberReconcileDue =
-      stored.lastMemberReconcileAt === null ||
-      now - stored.lastMemberReconcileAt >= MEMBER_RECONCILE_INTERVAL_MS;
-    if (memberReconcileDue) {
-      stored.lastMemberReconcileAt = now;
-    }
-
     await this.saveState(stored);
-
-    if (memberReconcileDue) {
-      this.state.waitUntil(
-        memberActivitySweep(this.env).catch(error => {
-          console.error("unified gateway member reconcile failed", error);
-        })
-      );
-    }
-
     await this.state.storage.setAlarm(
       now + Math.max(1000, stored.heartbeatInterval)
     );
@@ -532,9 +514,15 @@ export class DiscordSecurityGateway {
         .map(guild => String(guild.id ?? ""))
         .filter(Boolean);
       await this.saveState(stored);
+
+      // READY means Discord could not resume the previous session. Recover the
+      // gap automatically once, then return to pure event-driven operation.
       this.state.waitUntil(
-        memberActivitySweep(this.env).catch(error => {
-          console.error("unified gateway READY member reconcile failed", error);
+        recoverMemberActivityAfterFreshSession(this.env).catch(error => {
+          console.error(
+            "member activity automatic fresh-session recovery failed",
+            error
+          );
         })
       );
       for (const guildId of stored.guildIds) {
