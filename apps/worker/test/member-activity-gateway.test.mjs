@@ -38,25 +38,49 @@ test("member activity shares the security Gateway instead of opening a second so
   );
 });
 
-test("unified Gateway performs member reconciliation independently", () => {
+test("normal member tracking is purely event-driven", () => {
+  assert.doesNotMatch(securityGatewaySource, /MEMBER_RECONCILE_INTERVAL_MS/);
+  assert.doesNotMatch(securityGatewaySource, /memberActivitySweep/);
+
+  const scheduled = indexSource.slice(indexSource.indexOf("async scheduled"));
+  assert.doesNotMatch(scheduled, /memberActivitySweep/);
+  assert.doesNotMatch(scheduled, /recoverMemberActivityAfterFreshSession/);
+
   assert.match(
     securityGatewaySource,
-    /MEMBER_RECONCILE_INTERVAL_MS\s*=\s*60_000/
+    /handleMemberActivityGatewayEvent\(this\.env, "join", event\)/
   );
-  assert.match(securityGatewaySource, /lastMemberReconcileAt/);
-  assert.match(securityGatewaySource, /unified gateway member reconcile failed/);
-  assert.match(securityGatewaySource, /this\.state\.waitUntil/);
+  assert.match(
+    securityGatewaySource,
+    /handleMemberActivityGatewayEvent\(this\.env, "leave", event\)/
+  );
 });
 
-test("minute cron member fallback is isolated from Durable Object failures", () => {
-  const scheduled = indexSource.slice(indexSource.indexOf("async scheduled"));
-  assert.match(
-    scheduled,
-    /"memberActivitySweep scheduled task failed"[\s\S]*memberActivitySweep\(env\)/
+test("fresh non-resumable sessions recover automatically once", () => {
+  const readyBlock = securityGatewaySource.slice(
+    securityGatewaySource.indexOf('payload.t === "READY"'),
+    securityGatewaySource.indexOf('payload.t === "RESUMED"')
   );
-  assert.match(scheduled, /keepRunning/);
-  assert.doesNotMatch(scheduled, /Promise\.all\(\[/);
-  assert.doesNotMatch(scheduled, /ensureDiscordGateway\(env\)/);
+  assert.match(readyBlock, /recoverMemberActivityAfterFreshSession/);
+  assert.match(readyBlock, /this\.state\.waitUntil/);
+
+  const resumedBlock = securityGatewaySource.slice(
+    securityGatewaySource.indexOf('payload.t === "RESUMED"'),
+    securityGatewaySource.indexOf('payload.t === "GUILD_CREATE"')
+  );
+  assert.doesNotMatch(resumedBlock, /recoverMemberActivityAfterFreshSession/);
+});
+
+test("fresh-session recovery writes only snapshot differences", () => {
+  assert.match(memberSource, /function snapshotChanged/);
+  assert.match(memberSource, /async function persistSnapshotDiff/);
+  assert.match(memberSource, /const joined = members\.filter/);
+  assert.match(memberSource, /const left = previous\.filter/);
+  assert.match(memberSource, /const changed = members\.filter/);
+  assert.doesNotMatch(
+    memberSource,
+    /DELETE FROM member_activity_members WHERE guild_id=\? AND last_seen_at</
+  );
 });
 
 test("normal Worker traffic self-starts only the unified security Gateway", () => {
@@ -65,11 +89,11 @@ test("normal Worker traffic self-starts only the unified security Gateway", () =
   assert.doesNotMatch(fetchHandler, /ensureDiscordGateway\(env\)/);
 });
 
-test("health identifies the Free-tier single-Gateway architecture", () => {
+test("health identifies automatic event-driven recovery", () => {
   assert.match(indexSource, /unifiedGatewayStatus\(env\)/);
-  assert.match(indexSource, /single-gateway-free-tier-v3/);
+  assert.match(indexSource, /event-driven-member-activity-v4/);
   assert.match(
     indexSource,
-    /unified-gateway-plus-isolated-cron-reconcile/
+    /gateway-events-plus-automatic-fresh-session-diff/
   );
 });
