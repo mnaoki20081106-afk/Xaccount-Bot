@@ -64,18 +64,6 @@ type Machine={
   coupons?:Array<{code:string;discount:number;created_at:number}>;
   stockNotification?:Notification;
 };
-type ProcurementSettings={
-  max_unit_price_jpy:number;
-  max_no_shadowban_unit_price_usd:number;
-  reorder_point:number;
-  target_stock:number;
-  no_shadowban_reorder_point:number;
-  no_shadowban_target_stock:number;
-  trial_purchase_count:number;
-  max_batch_purchase:number;
-  dry_run:boolean;
-  auto_procurement_enabled:boolean;
-};
 type Order={
   id:string;
   product_id:string;
@@ -140,7 +128,6 @@ export default function ShiireVendingManager({
   const [machines,setMachines]=useState<Machine[]>([]);
   const [sources,setSources]=useState<SourceProduct[]>([]);
   const [orders,setOrders]=useState<Order[]>([]);
-  const [procurement,setProcurement]=useState<ProcurementSettings|null>(null);
   const [selectedId,setSelectedId]=useState("");
   const [busy,setBusy]=useState(false);
   const [newMachineName,setNewMachineName]=useState("Xアカウント自販機");
@@ -197,18 +184,16 @@ export default function ShiireVendingManager({
   async function load(){
     setBusy(true);
     try{
-      const [nextStatus,nextMachines,nextSources,nextOrders,nextProcurement]=await Promise.all([
+      const [nextStatus,nextMachines,nextSources,nextOrders]=await Promise.all([
         api<Status>(`/api/guilds/${guildId}/shiire/status`,{},15_000),
         api<Machine[]>(`/api/guilds/${guildId}/shiire/vending`,{},15_000),
         api<{products:SourceProduct[]}>(`/api/guilds/${guildId}/shiire/source-products`,{},15_000),
-        api<{orders:Order[]}>(`/api/guilds/${guildId}/shiire/orders`,{},15_000),
-        api<ProcurementSettings>(`/api/guilds/${guildId}/shiire/procurement-settings`,{},15_000)
+        api<{orders:Order[]}>(`/api/guilds/${guildId}/shiire/orders`,{},15_000)
       ]);
       setStatus(nextStatus);
       setMachines(nextMachines);
       setSources(nextSources.products??[]);
       setOrders(nextOrders.orders??[]);
-      setProcurement(nextProcurement);
       const nextId=
         nextMachines.some(machine=>machine.id===selectedId)
           ?selectedId
@@ -242,36 +227,6 @@ export default function ShiireVendingManager({
     try{
       await api(path,init,20_000);
       onNotice(success);
-      await load();
-    }catch(reason){
-      onError(reason);
-    }finally{
-      setBusy(false);
-    }
-  }
-
-  async function saveProcurementSettings(){
-    if(!procurement) return;
-    setBusy(true);
-    try{
-      await api(
-        `/api/guilds/${guildId}/shiire/procurement-settings`,
-        {
-          method:"PATCH",
-          body:JSON.stringify({
-            max_unit_price_jpy:Number(procurement.max_unit_price_jpy),
-            max_no_shadowban_unit_price_usd:Number(procurement.max_no_shadowban_unit_price_usd),
-            reorder_point:Number(procurement.reorder_point),
-            target_stock:Number(procurement.target_stock),
-            no_shadowban_reorder_point:Number(procurement.no_shadowban_reorder_point),
-            no_shadowban_target_stock:Number(procurement.no_shadowban_target_stock),
-            trial_purchase_count:Number(procurement.trial_purchase_count),
-            max_batch_purchase:Number(procurement.max_batch_purchase)
-          })
-        },
-        20_000
-      );
-      onNotice("仕入れ条件を保存しました");
       await load();
     }catch(reason){
       onError(reason);
@@ -529,135 +484,12 @@ export default function ShiireVendingManager({
         )}
       </section>
 
-      <section className="card">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">PROCUREMENT POLICY</span>
-            <h2>自動仕入れ条件</h2>
-            <p>
-              TOP_SEARCHとNO_SHADOWBANは別在庫として補充します。
-              両方不足している場合はTOP_SEARCHを先に補充します。
-            </p>
-          </div>
-          <button
-            className="primary"
-            onClick={()=>void saveProcurementSettings()}
-            disabled={busy||!procurement}
-          >
-            仕入れ条件を保存
-          </button>
-        </div>
-
-        {procurement&&(
-          <>
-            <div className="form-grid two">
-              <label className="field">
-                <span>TOP_SEARCH 上限単価（円）</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.max_unit_price_jpy}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_unit_price_jpy:Number(e.target.value)
-                  })}
-                />
-                <small>検索トップ明記があるX垢だけ。初期値80円。</small>
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 上限単価（USD）</span>
-                <input
-                  type="number"
-                  min="0.5"
-                  max="0.6"
-                  step="0.01"
-                  value={procurement.max_no_shadowban_unit_price_usd}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_no_shadowban_unit_price_usd:Number(e.target.value)
-                  })}
-                />
-                <small>TOP表記なし + No Shadowban明記のみ。0.50〜0.60ドル。</small>
-              </label>
-              <label className="field">
-                <span>TOP_SEARCH 発注点</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.reorder_point}
-                  onChange={e=>setProcurement({...procurement,reorder_point:Number(e.target.value)})}
-                />
-              </label>
-              <label className="field">
-                <span>TOP_SEARCH 目標在庫</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.target_stock}
-                  onChange={e=>setProcurement({...procurement,target_stock:Number(e.target.value)})}
-                />
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 発注点</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.no_shadowban_reorder_point}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    no_shadowban_reorder_point:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 目標在庫</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.no_shadowban_target_stock}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    no_shadowban_target_stock:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>初回試験購入数</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.trial_purchase_count}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    trial_purchase_count:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>1回最大仕入れ数</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.max_batch_purchase}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_batch_purchase:Number(e.target.value)
-                  })}
-                />
-              </label>
-            </div>
-            <div className="serverless-note">
-              <strong>
-                {procurement.dry_run?"Dry Run ON":"Dry Run OFF"} /
-                自動仕入れ {procurement.auto_procurement_enabled?"ON":"OFF"}
-              </strong>
-              <span>
-                この画面ではDry Run解除や自動仕入れON/OFFは変更しません。
-                資金を動かす設定はDiscord-Shiire側の安全設定から明示的に操作してください。
-              </span>
-            </div>
-          </>
-        )}
+      <section className="serverless-note">
+        <strong>仕入れ条件は「仕入れ」タブへ統合しました</strong>
+        <span>
+          価格上限・品質ガード・試験購入・大量購入ガード・18:00恒常在庫・仕入れ割合は、
+          仕入れbot運用センターの各専用タブから一元管理します。
+        </span>
       </section>
 
       <section className="two-col">

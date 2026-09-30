@@ -3,9 +3,9 @@ import { api } from "./api";
 import ShiireVendingManager from "./ShiireVendingManager";
 import "./shiire-operations.css";
 
-type Channel={id:string;name:string;type?:string};
+type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
-type Section="overview"|"funding"|"procurement"|"inventory"|"vending"|"logs";
+type Section="overview"|"funding"|"procurement"|"restock"|"invite"|"inventory"|"vending"|"logs";
 type Settled<T>={ok:true;data:T}|{ok:false;error:string};
 
 type Overview={
@@ -80,12 +80,82 @@ type FundingControls={
   min_purchase_jpy:number;
   target_ltc_balance:number;
   max_ltc_balance:number;
+  wallet_target_ltc:number;
+  wallet_max_ltc:number;
+  max_paypay_balance_age_ms:number;
+  max_fx_age_ms:number;
+  max_fx_jump_percent:number;
+  max_ltc_price_jump_percent:number;
+};
+type ProcurementControls={
+  max_unit_price_jpy:number;
+  max_no_shadowban_unit_price_usd:number;
+  reorder_point:number;
+  target_stock:number;
+  no_shadowban_reorder_point:number;
+  no_shadowban_target_stock:number;
+  trial_purchase_count:number;
+  max_batch_purchase:number;
+  min_seller_rating:number;
+  min_product_reviews:number;
+  min_sales_count:number;
+  max_dispute_rate:number;
+  minimum_stock:number;
+  seller_quality_mode:"strict_api"|"manual_product_approval"|"trial_only";
+  approved_hstora_product_ids:number[];
+  max_price_jump_percent:number;
+  require_bulk_confirmation:boolean;
+  bulk_confirmation_threshold:number;
+};
+type ProcurementBudgetDetail={
+  percentages:{INVITE_CAMPAIGN:number;NO_SHADOWBAN:number;TOP_SEARCH:number};
+  budget:{
+    initialized:boolean;
+    available:{INVITE_CAMPAIGN:number;NO_SHADOWBAN:number;TOP_SEARCH:number};
+    totalAvailableUsd:number;
+    updatedAt:number;
+  };
+};
+type DailyRestockDetail={
+  schedule:{timezone:string;time:string;cronSource:string};
+  config:{
+    enabled:boolean;
+    top_search_target_stock:number;
+    no_shadowban_target_stock:number;
+    notification_channel_id:string;
+    notification_message:string;
+    panel_channel_id:string;
+    panel_message_id:string;
+  };
+  state:any|null;
+  stock:{
+    TOP_SEARCH:{current:number;target:number;deficit:number};
+    NO_SHADOWBAN:{current:number;target:number;deficit:number};
+  };
+};
+type InviteCampaignDetail={
+  settings:{
+    enabled:boolean;
+    guild_id:string;
+    invites_per_reward:number;
+    target_stock:number;
+  };
+  stock:{available:number;target:number;deficit:number};
+  runtime:{gateway_ready_at:number|null;last_event_at:number|null;last_error:string|null;updated_at:number|null};
+  attribution:{total:number;valid:number;ambiguous:number;unresolved:number};
+  progress:Array<any>;
+  rewards:Array<any>;
+  unresolvedRewards:number;
+  currentGuildId:string;
+  currentGuildSelected:boolean;
 };
 
 const sections:Array<{id:Section;label:string;hint:string}>=[
   {id:"overview",label:"概要",hint:"今の状態"},
   {id:"funding",label:"資金・LTC",hint:"残高と送金"},
-  {id:"procurement",label:"仕入れ",hint:"商品と注文"},
+  {id:"procurement",label:"仕入れ",hint:"条件と注文"},
+  {id:"restock",label:"18:00入荷",hint:"恒常在庫と通知"},
+  {id:"invite",label:"招待",hint:"キャンペーン"},
   {id:"inventory",label:"在庫",hint:"カテゴリ別"},
   {id:"vending",label:"自販機・設定",hint:"設置と通知"},
   {id:"logs",label:"ログ・障害",hint:"監査とBreaker"}
@@ -151,6 +221,10 @@ export default function ShiireOperationsCenter({
   const [busy,setBusy]=useState(false);
   const [detailBusy,setDetailBusy]=useState(false);
   const [fundingControls,setFundingControls]=useState<FundingControls|null>(null);
+  const [procurementControls,setProcurementControls]=useState<ProcurementControls|null>(null);
+  const [procurementBudget,setProcurementBudget]=useState<ProcurementBudgetDetail|null>(null);
+  const [dailyRestock,setDailyRestock]=useState<DailyRestockDetail|null>(null);
+  const [inviteCampaign,setInviteCampaign]=useState<InviteCampaignDetail|null>(null);
   const [payPayObservation,setPayPayObservation]=useState(0);
   const [usdJpyObservation,setUsdJpyObservation]=useState(0);
   const [controlBusy,setControlBusy]=useState(false);
@@ -196,12 +270,20 @@ export default function ShiireOperationsCenter({
   async function loadOverview(showBusy=true){
     if(showBusy) setBusy(true);
     try{
-      const data=await api<Overview>(
-        `/api/guilds/${guildId}/shiire/operations/overview`,
-        {},
-        25_000
-      );
+      const [data,nextRestock]=await Promise.all([
+        api<Overview>(
+          `/api/guilds/${guildId}/shiire/operations/overview`,
+          {},
+          25_000
+        ),
+        api<DailyRestockDetail>(
+          `/api/guilds/${guildId}/shiire/daily-restock`,
+          {},
+          20_000
+        )
+      ]);
       setOverview(data);
+      setDailyRestock(nextRestock);
       setFundingControls({
         reserve_jpy:Number(data.settings?.reserve_jpy??0),
         max_purchase_jpy:Number(data.settings?.max_purchase_jpy??0),
@@ -210,7 +292,35 @@ export default function ShiireOperationsCenter({
         monthly_purchase_limit_jpy:Number(data.settings?.monthly_purchase_limit_jpy??0),
         min_purchase_jpy:Number(data.settings?.min_purchase_jpy??0),
         target_ltc_balance:Number(data.settings?.target_ltc_balance??0),
-        max_ltc_balance:Number(data.settings?.max_ltc_balance??0)
+        max_ltc_balance:Number(data.settings?.max_ltc_balance??0),
+        wallet_target_ltc:Number(data.settings?.wallet_target_ltc??0),
+        wallet_max_ltc:Number(data.settings?.wallet_max_ltc??0),
+        max_paypay_balance_age_ms:Number(data.settings?.max_paypay_balance_age_ms??0),
+        max_fx_age_ms:Number(data.settings?.max_fx_age_ms??0),
+        max_fx_jump_percent:Number(data.settings?.max_fx_jump_percent??0),
+        max_ltc_price_jump_percent:Number(data.settings?.max_ltc_price_jump_percent??0)
+      });
+      setProcurementControls({
+        max_unit_price_jpy:Number(data.settings?.max_unit_price_jpy??80),
+        max_no_shadowban_unit_price_usd:Number(data.settings?.max_no_shadowban_unit_price_usd??0.6),
+        reorder_point:Number(data.settings?.reorder_point??10),
+        target_stock:Number(data.settings?.target_stock??50),
+        no_shadowban_reorder_point:Number(data.settings?.no_shadowban_reorder_point??10),
+        no_shadowban_target_stock:Number(data.settings?.no_shadowban_target_stock??50),
+        trial_purchase_count:Number(data.settings?.trial_purchase_count??10),
+        max_batch_purchase:Number(data.settings?.max_batch_purchase??20),
+        min_seller_rating:Number(data.settings?.min_seller_rating??0),
+        min_product_reviews:Number(data.settings?.min_product_reviews??0),
+        min_sales_count:Number(data.settings?.min_sales_count??0),
+        max_dispute_rate:Number(data.settings?.max_dispute_rate??0),
+        minimum_stock:Number(data.settings?.minimum_stock??1),
+        seller_quality_mode:(data.settings?.seller_quality_mode??"trial_only") as ProcurementControls["seller_quality_mode"],
+        approved_hstora_product_ids:Array.isArray(data.settings?.approved_hstora_product_ids)
+          ?data.settings.approved_hstora_product_ids.map(Number).filter(Number.isSafeInteger)
+          :[],
+        max_price_jump_percent:Number(data.settings?.max_price_jump_percent??25),
+        require_bulk_confirmation:Boolean(data.settings?.require_bulk_confirmation??true),
+        bulk_confirmation_threshold:Number(data.settings?.bulk_confirmation_threshold??20)
       });
       setPayPayObservation(Number(data.settings?.observed_paypay_balance_jpy??0));
       setUsdJpyObservation(Number(data.settings?.usd_jpy_rate??0));
@@ -221,23 +331,58 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  function applyProcurementControls(data:any){
+    setProcurementControls({
+      max_unit_price_jpy:Number(data?.max_unit_price_jpy??80),
+      max_no_shadowban_unit_price_usd:Number(data?.max_no_shadowban_unit_price_usd??0.6),
+      reorder_point:Number(data?.reorder_point??10),
+      target_stock:Number(data?.target_stock??50),
+      no_shadowban_reorder_point:Number(data?.no_shadowban_reorder_point??10),
+      no_shadowban_target_stock:Number(data?.no_shadowban_target_stock??50),
+      trial_purchase_count:Number(data?.trial_purchase_count??10),
+      max_batch_purchase:Number(data?.max_batch_purchase??20),
+      min_seller_rating:Number(data?.min_seller_rating??0),
+      min_product_reviews:Number(data?.min_product_reviews??0),
+      min_sales_count:Number(data?.min_sales_count??0),
+      max_dispute_rate:Number(data?.max_dispute_rate??0),
+      minimum_stock:Number(data?.minimum_stock??1),
+      seller_quality_mode:(data?.seller_quality_mode??"trial_only") as ProcurementControls["seller_quality_mode"],
+      approved_hstora_product_ids:Array.isArray(data?.approved_hstora_product_ids)
+        ?data.approved_hstora_product_ids.map(Number).filter(Number.isSafeInteger)
+        :[],
+      max_price_jump_percent:Number(data?.max_price_jump_percent??25),
+      require_bulk_confirmation:Boolean(data?.require_bulk_confirmation??true),
+      bulk_confirmation_threshold:Number(data?.bulk_confirmation_threshold??20)
+    });
+  }
+
   async function loadDetail(target:Section){
     if(target==="overview"||target==="vending") return;
     setDetailBusy(true);
     try{
       if(target==="funding"){
+        const budgetPromise=api<ProcurementBudgetDetail>(
+          `/api/guilds/${guildId}/shiire/procurement-budget`,
+          {},
+          20_000
+        );
         if(overview?.safety.fundingMode==="manual_hstora"){
           setBinance(null);
+          setProcurementBudget(await budgetPromise);
         }else{
-          const data=await api<BinanceDetail>(
-            `/api/guilds/${guildId}/shiire/operations/binance`,
-            {},
-            25_000
-          );
+          const [data,budget]=await Promise.all([
+            api<BinanceDetail>(
+              `/api/guilds/${guildId}/shiire/operations/binance`,
+              {},
+              25_000
+            ),
+            budgetPromise
+          ]);
           setBinance(data);
+          setProcurementBudget(budget);
         }
       }else if(target==="procurement"){
-        const [nextOrders,nextHstora]=await Promise.all([
+        const [nextOrders,nextHstora,nextSettings]=await Promise.all([
           api<OrderDetail>(
             `/api/guilds/${guildId}/shiire/operations/orders`,
             {},
@@ -247,16 +392,43 @@ export default function ShiireOperationsCenter({
             `/api/guilds/${guildId}/shiire/operations/hstora`,
             {},
             25_000
+          ),
+          api<any>(
+            `/api/guilds/${guildId}/shiire/procurement-settings`,
+            {},
+            20_000
           )
         ]);
         setOrders(nextOrders);
         setHstora(nextHstora);
-      }else if(target==="inventory"){
-        setInventory(await api<InventoryDetail>(
-          `/api/guilds/${guildId}/shiire/operations/inventory`,
+        applyProcurementControls(nextSettings);
+      }else if(target==="restock"){
+        setDailyRestock(await api<DailyRestockDetail>(
+          `/api/guilds/${guildId}/shiire/daily-restock`,
           {},
           20_000
         ));
+      }else if(target==="invite"){
+        setInviteCampaign(await api<InviteCampaignDetail>(
+          `/api/guilds/${guildId}/shiire/invite-campaign`,
+          {},
+          20_000
+        ));
+      }else if(target==="inventory"){
+        const [nextInventory,nextRestock]=await Promise.all([
+          api<InventoryDetail>(
+            `/api/guilds/${guildId}/shiire/operations/inventory`,
+            {},
+            20_000
+          ),
+          api<DailyRestockDetail>(
+            `/api/guilds/${guildId}/shiire/daily-restock`,
+            {},
+            20_000
+          )
+        ]);
+        setInventory(nextInventory);
+        setDailyRestock(nextRestock);
       }else if(target==="logs"){
         setLogs(await api<LogDetail>(
           `/api/guilds/${guildId}/shiire/operations/logs`,
@@ -279,6 +451,10 @@ export default function ShiireOperationsCenter({
     setOrders(null);
     setLogs(null);
     setFundingControls(null);
+    setProcurementControls(null);
+    setProcurementBudget(null);
+    setDailyRestock(null);
+    setInviteCampaign(null);
     setPayPayObservation(0);
     setUsdJpyObservation(0);
     setSection("overview");
@@ -419,6 +595,255 @@ export default function ShiireOperationsCenter({
       );
       onNotice("PayPay手動操作待ちを取り消しました");
       await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveProcurementBudget(){
+    if(!procurementBudget) return;
+    const inviteCampaignPercent=Number(procurementBudget.percentages.INVITE_CAMPAIGN);
+    const noShadowbanPercent=Number(procurementBudget.percentages.NO_SHADOWBAN);
+    const topSearchPercent=Number(procurementBudget.percentages.TOP_SEARCH);
+    const values=[inviteCampaignPercent,noShadowbanPercent,topSearchPercent];
+    if(values.some(value=>!Number.isInteger(value)||value<0||value>100)){
+      onError(new Error("仕入れ割合は0〜100の整数で入力してください"));
+      return;
+    }
+    if(values.reduce((sum,value)=>sum+value,0)!==100){
+      onError(new Error("招待用・No shadow ban・Top Searchの合計を100%にしてください"));
+      return;
+    }
+    setControlBusy(true);
+    try{
+      const next=await api<ProcurementBudgetDetail>(
+        `/api/guilds/${guildId}/shiire/procurement-budget`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            inviteCampaignPercent,
+            noShadowbanPercent,
+            topSearchPercent
+          })
+        },
+        25_000
+      );
+      setProcurementBudget(next);
+      onNotice("仕入れ資金の配分を保存し、現在のHStora残高へ適用しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function rebalanceProcurementBudget(){
+    if(!confirm("現在のHStora残高を、保存済みの仕入れ割合で再配分しますか？")) return;
+    setControlBusy(true);
+    try{
+      const next=await api<ProcurementBudgetDetail>(
+        `/api/guilds/${guildId}/shiire/procurement-budget/rebalance`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setProcurementBudget(next);
+      onNotice("現在のHStora残高で仕入れ予算を再配分しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveProcurementControls(){
+    if(!procurementControls) return;
+    if(procurementControls.target_stock<procurementControls.reorder_point){
+      onError(new Error("Top Searchの恒常目標は発注点以上にしてください"));
+      return;
+    }
+    if(procurementControls.no_shadowban_target_stock<procurementControls.no_shadowban_reorder_point){
+      onError(new Error("No shadow banの恒常目標は発注点以上にしてください"));
+      return;
+    }
+    setControlBusy(true);
+    try{
+      const result=await api<{settings:ProcurementControls}>(
+        `/api/guilds/${guildId}/shiire/procurement-settings`,
+        {method:"PATCH",body:JSON.stringify(procurementControls)},
+        20_000
+      );
+      applyProcurementControls(result.settings);
+      onNotice("仕入れ条件を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runProcurementNow(){
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("仕入れ判定を実行しました: "+String(result?.action??"完了"));
+      await loadOverview(false);
+      if(section==="procurement") await loadDetail("procurement");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runLtcNow(){
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/funding/auto-purchase/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("LTC購入判定を実行しました: "+String(result?.action??"完了"));
+      await loadOverview(false);
+      if(section==="funding") await loadDetail("funding");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveDailyRestock(){
+    if(!dailyRestock) return;
+    const config=dailyRestock.config;
+    setControlBusy(true);
+    try{
+      const next=await api<DailyRestockDetail>(
+        `/api/guilds/${guildId}/shiire/daily-restock/settings`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            enabled:config.enabled,
+            topSearchTargetStock:Number(config.top_search_target_stock),
+            noShadowbanTargetStock:Number(config.no_shadowban_target_stock),
+            notificationChannelId:String(config.notification_channel_id??""),
+            notificationMessage:String(config.notification_message??"")
+          })
+        },
+        20_000
+      );
+      setDailyRestock(next);
+      onNotice("18:00入荷・在庫通知設定を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function installDailyRestockPanelNow(){
+    setControlBusy(true);
+    try{
+      const next=await api<DailyRestockDetail>(
+        `/api/guilds/${guildId}/shiire/daily-restock/panel`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      setDailyRestock(next);
+      onNotice("在庫入荷通知パネルを設置 / 更新しました");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runDailyRestockNow(){
+    if(!confirm("18:00を待たず、現在在庫と恒常在庫の差分を今すぐ仕入れますか？")) return;
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/daily-restock/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("差分入荷を実行しました: "+String(result?.action??"完了"));
+      await Promise.all([loadOverview(false),loadDetail("restock")]);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveInviteCampaign(){
+    if(!inviteCampaign) return;
+    if(
+      !inviteCampaign.currentGuildSelected&&
+      inviteCampaign.settings.guild_id&&
+      !confirm("招待キャンペーンの対象を現在選択中のサーバーへ切り替えますか？")
+    ) return;
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/settings`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            enabled:inviteCampaign.settings.enabled,
+            invitesPerReward:Number(inviteCampaign.settings.invites_per_reward),
+            targetStock:Number(inviteCampaign.settings.target_stock)
+          })
+        },
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("招待キャンペーン設定を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function seedInviteCampaign(){
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/seed`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("Discord招待状態を再同期しました");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function retryInviteReward(id:string){
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/rewards/${encodeURIComponent(id)}/retry`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("招待報酬の配布を再試行しました");
     }catch(reason){
       onError(reason);
     }finally{
@@ -607,7 +1032,7 @@ export default function ShiireOperationsCenter({
               <strong>{overview?.safety.fundingModeLabel??"—"}</strong>
               <small>
                 {manualFunding
-                  ?"HStora残高反映後、仕入れを自動再開"
+                  ?"入金は1分検知 / 通常在庫は18:00"
                   :binanceServerUnlocked
                     ?"Binanceサーバーロック解除済み"
                     :"Binanceサーバーロック中"}
@@ -645,12 +1070,12 @@ export default function ShiireOperationsCenter({
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 在庫</span>
               <strong>{topReady}</strong>
-              <small>予約中 {topReserved} / 目標 {num(topPolicy.target,0)}</small>
+              <small>予約中 {topReserved} / 恒常 {num(dailyRestock?.config.top_search_target_stock??topPolicy.target,0)}</small>
             </article>
             <article className="card shiire-kpi accent">
               <span>NO_SHADOWBAN 在庫</span>
               <strong>{shadowReady}</strong>
-              <small>予約中 {shadowReserved} / 目標 {num(shadowPolicy.target,0)}</small>
+              <small>予約中 {shadowReserved} / 恒常 {num(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target,0)}</small>
             </article>
             <article className="card shiire-kpi">
               <span>本日の仕入れ</span>
@@ -678,7 +1103,7 @@ export default function ShiireOperationsCenter({
                   ready={topReady}
                   reserved={topReserved}
                   reorder={Number(topPolicy.reorder??0)}
-                  target={Number(topPolicy.target??0)}
+                  target={Number(dailyRestock?.config.top_search_target_stock??topPolicy.target??0)}
                   limit={topPolicy.max==null?"—":yen(topPolicy.max)}
                 />
                 <StockLine
@@ -686,7 +1111,7 @@ export default function ShiireOperationsCenter({
                   ready={shadowReady}
                   reserved={shadowReserved}
                   reorder={Number(shadowPolicy.reorder??0)}
-                  target={Number(shadowPolicy.target??0)}
+                  target={Number(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target??0)}
                   limit={shadowPolicy.max==null?"—":usd(shadowPolicy.max)}
                 />
               </div>
@@ -785,7 +1210,8 @@ export default function ShiireOperationsCenter({
                 <span className="eyebrow">LTC FUNDING MODE</span>
                 <h2>LTC補充方法</h2>
                 <p>
-                  今はHStora Main WalletへLTCを手動補充し、入金反映後から仕入れ・納品を自動化できます。
+                  HStora Main Walletへの入金反映は1分ごとに検知して仕入れ予算へ配分します。
+                  No shadow ban / Top Searchの通常在庫は毎日18:00に差分入荷し、招待キャンペーン在庫は随時補充します。
                   Binance自動購入はサーバー側ロック解除後だけ選択できます。
                 </p>
               </div>
@@ -810,7 +1236,7 @@ export default function ShiireOperationsCenter({
               <strong>{overview?.safety.fundingModeLabel??"読込中"}</strong>
               <span>
                 {manualFunding
-                  ?"HStora WalletでLTCを補充してください。残高反映後は1分Cronで自動仕入れへ戻ります。"
+                  ?"HStora WalletでLTCを補充してください。残高増加は1分Cronで検知・予算配分し、通常在庫は18:00に差分入荷します。"
                   :binanceServerUnlocked
                     ?"Binance自動購入のサーバー側ロックは解除済みです。"
                     :"BINANCE_AUTO_FUNDING_ENABLEDがOFFのため実購入はできません。"}
@@ -827,11 +1253,83 @@ export default function ShiireOperationsCenter({
               </article>
               <article className="card shiire-kpi">
                 <span>補充後</span>
-                <strong>{overview?.safety.autoProcurementEnabled?"自動再開":"仕入れOFF"}</strong>
-                <small>残高反映後の仕入れ・納品はBOTが処理</small>
+                <strong>{overview?.safety.autoProcurementEnabled?"18:00自動入荷":"仕入れOFF"}</strong>
+                <small>入金反映→予算配分は1分ごと / 通常在庫は18:00</small>
               </article>
             </section>
           )}
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">PROCUREMENT BUDGET</span>
+                <h2>仕入れ資金の配分</h2>
+                <p>
+                  HStora残高を、招待用 / No shadow ban / Top Searchへ分けます。
+                  3項目の合計は100%。0%のカテゴリはその予算から自動仕入れしません。
+                </p>
+              </div>
+              <span className="shiire-muted">
+                合計 {usd(procurementBudget?.budget?.totalAvailableUsd)}
+              </span>
+            </div>
+            {procurementBudget?<>
+              <div className="shiire-kpi-grid">
+                <article className="card shiire-kpi">
+                  <span>招待用 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.INVITE_CAMPAIGN)}</strong>
+                  <small>{procurementBudget.percentages.INVITE_CAMPAIGN}%</small>
+                </article>
+                <article className="card shiire-kpi">
+                  <span>No shadow ban 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.NO_SHADOWBAN)}</strong>
+                  <small>{procurementBudget.percentages.NO_SHADOWBAN}%</small>
+                </article>
+                <article className="card shiire-kpi">
+                  <span>Top Search 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.TOP_SEARCH)}</strong>
+                  <small>{procurementBudget.percentages.TOP_SEARCH}%</small>
+                </article>
+              </div>
+              <div className="form-grid three">
+                <FundingInput
+                  label="招待用 %"
+                  value={procurementBudget.percentages.INVITE_CAMPAIGN}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,INVITE_CAMPAIGN:value}
+                  })}
+                />
+                <FundingInput
+                  label="No shadow ban %"
+                  value={procurementBudget.percentages.NO_SHADOWBAN}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,NO_SHADOWBAN:value}
+                  })}
+                />
+                <FundingInput
+                  label="Top Search %"
+                  value={procurementBudget.percentages.TOP_SEARCH}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,TOP_SEARCH:value}
+                  })}
+                />
+              </div>
+              <div className="shiire-control-buttons">
+                <button className="primary" disabled={controlBusy} onClick={()=>void saveProcurementBudget()}>
+                  割合を保存して現在残高へ適用
+                </button>
+                <button className="secondary" disabled={controlBusy} onClick={()=>void rebalanceProcurementBudget()}>
+                  保存済み割合で再配分
+                </button>
+              </div>
+            </>:<div className="shiire-empty">仕入れ予算を読み込んでいます。</div>}
+          </section>
 
           {!manualFunding&&detailBusy&&!binance&&<div className="progress"><span /></div>}
           {!manualFunding&&(
@@ -929,8 +1427,17 @@ export default function ShiireOperationsCenter({
                 disabled={controlBusy||!fundingControls}
                 onClick={()=>void saveFundingControls()}
               >
-                資金上限を保存
+                資金・安全設定を保存
               </button>
+              {!manualFunding&&(
+                <button
+                  className="secondary"
+                  disabled={controlBusy}
+                  onClick={()=>void runLtcNow()}
+                >
+                  今すぐLTC購入判定
+                </button>
+              )}
             </div>
             {fundingControls&&(
               <div className="form-grid two">
@@ -981,6 +1488,42 @@ export default function ShiireOperationsCenter({
                   value={fundingControls.max_ltc_balance}
                   step={0.00000001}
                   onChange={value=>setFundingControls({...fundingControls,max_ltc_balance:value})}
+                />
+                <FundingInput
+                  label="専用Wallet 目標LTC"
+                  value={fundingControls.wallet_target_ltc}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,wallet_target_ltc:value})}
+                />
+                <FundingInput
+                  label="専用Wallet 最大LTC"
+                  value={fundingControls.wallet_max_ltc}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,wallet_max_ltc:value})}
+                />
+                <FundingInput
+                  label="PayPay観測の有効時間 (ms)"
+                  value={fundingControls.max_paypay_balance_age_ms}
+                  step={60000}
+                  onChange={value=>setFundingControls({...fundingControls,max_paypay_balance_age_ms:value})}
+                />
+                <FundingInput
+                  label="USD/JPY観測の有効時間 (ms)"
+                  value={fundingControls.max_fx_age_ms}
+                  step={60000}
+                  onChange={value=>setFundingControls({...fundingControls,max_fx_age_ms:value})}
+                />
+                <FundingInput
+                  label="USD/JPY急変停止 %"
+                  value={fundingControls.max_fx_jump_percent}
+                  step={0.1}
+                  onChange={value=>setFundingControls({...fundingControls,max_fx_jump_percent:value})}
+                />
+                <FundingInput
+                  label="LTC価格急変停止 %"
+                  value={fundingControls.max_ltc_price_jump_percent}
+                  step={0.1}
+                  onChange={value=>setFundingControls({...fundingControls,max_ltc_price_jump_percent:value})}
                 />
               </div>
               )}
@@ -1150,6 +1693,173 @@ export default function ShiireOperationsCenter({
       {section==="procurement"&&(
         <>
           {detailBusy&&!orders&&<div className="progress"><span /></div>}
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">PROCUREMENT SETTINGS</span>
+                <h2>仕入れ条件</h2>
+                <p>
+                  HStora商品の価格上限・試験購入・品質ガード・大量購入ガードをここから変更できます。
+                  18:00の恒常在庫数と在庫通知は「18:00入荷」タブで設定します。
+                </p>
+              </div>
+              <div className="shiire-control-buttons">
+                <button
+                  className="primary"
+                  disabled={controlBusy||!procurementControls}
+                  onClick={()=>void saveProcurementControls()}
+                >
+                  仕入れ条件を保存
+                </button>
+                <button
+                  className="secondary"
+                  disabled={controlBusy}
+                  onClick={()=>void runProcurementNow()}
+                >
+                  今すぐ仕入れ判定
+                </button>
+              </div>
+            </div>
+            {procurementControls?<>
+              <div className="form-grid two">
+                <FundingInput
+                  label="Top Search 最大単価 (円)"
+                  value={procurementControls.max_unit_price_jpy}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_unit_price_jpy:value})}
+                />
+                <FundingInput
+                  label="No shadow ban 最大単価 (USD)"
+                  value={procurementControls.max_no_shadowban_unit_price_usd}
+                  step={0.01}
+                  onChange={value=>setProcurementControls({...procurementControls,max_no_shadowban_unit_price_usd:value})}
+                />
+                <FundingInput
+                  label="Top Search 発注点"
+                  value={procurementControls.reorder_point}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,reorder_point:value})}
+                />
+                <FundingInput
+                  label="Top Search target_stock"
+                  value={procurementControls.target_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,target_stock:value})}
+                />
+                <FundingInput
+                  label="No shadow ban 発注点"
+                  value={procurementControls.no_shadowban_reorder_point}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,no_shadowban_reorder_point:value})}
+                />
+                <FundingInput
+                  label="No shadow ban target_stock"
+                  value={procurementControls.no_shadowban_target_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,no_shadowban_target_stock:value})}
+                />
+                <FundingInput
+                  label="新規商品の初回試験購入数"
+                  value={procurementControls.trial_purchase_count}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,trial_purchase_count:value})}
+                />
+                <FundingInput
+                  label="1回最大仕入れ数"
+                  value={procurementControls.max_batch_purchase}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_batch_purchase:value})}
+                />
+                <FundingInput
+                  label="最低Seller rating"
+                  value={procurementControls.min_seller_rating}
+                  step={0.1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_seller_rating:value})}
+                />
+                <FundingInput
+                  label="最低レビュー数"
+                  value={procurementControls.min_product_reviews}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_product_reviews:value})}
+                />
+                <FundingInput
+                  label="最低販売数"
+                  value={procurementControls.min_sales_count}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_sales_count:value})}
+                />
+                <FundingInput
+                  label="最大dispute率"
+                  value={procurementControls.max_dispute_rate}
+                  step={0.01}
+                  onChange={value=>setProcurementControls({...procurementControls,max_dispute_rate:value})}
+                />
+                <FundingInput
+                  label="HStora最低在庫"
+                  value={procurementControls.minimum_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,minimum_stock:value})}
+                />
+                <FundingInput
+                  label="商品価格急変停止 %"
+                  value={procurementControls.max_price_jump_percent}
+                  step={0.1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_price_jump_percent:value})}
+                />
+                <FundingInput
+                  label="大量購入確認の閾値"
+                  value={procurementControls.bulk_confirmation_threshold}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,bulk_confirmation_threshold:value})}
+                />
+                <label className="field">
+                  <span>Seller品質モード</span>
+                  <select
+                    value={procurementControls.seller_quality_mode}
+                    onChange={event=>setProcurementControls({
+                      ...procurementControls,
+                      seller_quality_mode:event.target.value as ProcurementControls["seller_quality_mode"]
+                    })}
+                  >
+                    <option value="trial_only">trial_only（試験購入）</option>
+                    <option value="manual_product_approval">manual_product_approval（承認IDのみ）</option>
+                    <option value="strict_api">strict_api（API品質指標必須）</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>承認済みHStora商品ID（カンマ区切り）</span>
+                  <input
+                    value={procurementControls.approved_hstora_product_ids.join(",")}
+                    onChange={event=>setProcurementControls({
+                      ...procurementControls,
+                      approved_hstora_product_ids:[...new Set(
+                        event.target.value
+                          .split(/[\s,]+/)
+                          .filter(Boolean)
+                          .map(Number)
+                          .filter(value=>Number.isSafeInteger(value)&&value>0)
+                      )]
+                    })}
+                  />
+                </label>
+              </div>
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={procurementControls.require_bulk_confirmation}
+                  onChange={event=>setProcurementControls({
+                    ...procurementControls,
+                    require_bulk_confirmation:event.target.checked
+                  })}
+                />
+                <span>
+                  <strong>大量購入の明示承認を必須にする</strong>
+                  <small>閾値以上のLIVE仕入れを自動で止め、承認操作がある時だけ許可します。</small>
+                </span>
+              </label>
+            </>:<div className="shiire-empty">仕入れ条件を読み込んでいます。</div>}
+          </section>
+
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 上限</span>
@@ -1251,6 +1961,293 @@ export default function ShiireOperationsCenter({
         </>
       )}
 
+      {section==="restock"&&(
+        <>
+          {detailBusy&&!dailyRestock&&<div className="progress"><span /></div>}
+          {dailyRestock?<>
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi accent">
+                <span>NO_SHADOWBAN</span>
+                <strong>{num(dailyRestock.stock.NO_SHADOWBAN.current,0)} / {num(dailyRestock.stock.NO_SHADOWBAN.target,0)}</strong>
+                <small>不足 {num(dailyRestock.stock.NO_SHADOWBAN.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi accent">
+                <span>TOP_SEARCH</span>
+                <strong>{num(dailyRestock.stock.TOP_SEARCH.current,0)} / {num(dailyRestock.stock.TOP_SEARCH.target,0)}</strong>
+                <small>不足 {num(dailyRestock.stock.TOP_SEARCH.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>定時入荷</span>
+                <strong>{dailyRestock.config.enabled?"ON":"OFF"}</strong>
+                <small>{dailyRestock.schedule.time} {dailyRestock.schedule.timezone}</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>通知パネル</span>
+                <strong>{dailyRestock.config.panel_message_id?"設置済み":"未設置"}</strong>
+                <small>{dailyRestock.config.panel_channel_id||"—"}</small>
+              </article>
+            </section>
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">DAILY RESTOCK</span>
+                  <h2>毎日18:00 在庫入荷</h2>
+                  <p>
+                    18:00時点の販売用在庫と恒常在庫の差分だけを仕入れます。
+                    在庫追加が実際に1個以上あった日だけDiscordへ通知し、通知には販売可能な実在庫数だけを表示します。
+                  </p>
+                </div>
+                <div className="shiire-control-buttons">
+                  <button className="primary" disabled={controlBusy} onClick={()=>void saveDailyRestock()}>
+                    設定を保存
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void installDailyRestockPanelNow()}>
+                    通知パネルを設置 / 更新
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void runDailyRestockNow()}>
+                    今すぐ差分入荷
+                  </button>
+                </div>
+              </div>
+
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={dailyRestock.config.enabled}
+                  onChange={event=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,enabled:event.target.checked}
+                  })}
+                />
+                <span>
+                  <strong>毎日18:00の自動入荷を有効にする</strong>
+                  <small>入金検知・資金配分は1分ごと、通常在庫の仕入れは18:00に実行します。</small>
+                </span>
+              </label>
+
+              <div className="form-grid two">
+                <FundingInput
+                  label="No shadow ban 恒常在庫"
+                  value={dailyRestock.config.no_shadowban_target_stock}
+                  step={1}
+                  onChange={value=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,no_shadowban_target_stock:value}
+                  })}
+                />
+                <FundingInput
+                  label="Top Search 恒常在庫"
+                  value={dailyRestock.config.top_search_target_stock}
+                  step={1}
+                  onChange={value=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,top_search_target_stock:value}
+                  })}
+                />
+                <label className="field">
+                  <span>在庫入荷通知チャンネル</span>
+                  <select
+                    value={dailyRestock.config.notification_channel_id}
+                    onChange={event=>setDailyRestock({
+                      ...dailyRestock,
+                      config:{...dailyRestock.config,notification_channel_id:event.target.value}
+                    })}
+                  >
+                    <option value="">未設定</option>
+                    {channels
+                      .filter(channel=>
+                        (channel.type==="text"||channel.type==="announcement")&&
+                        channel.botCanPost!==false
+                      )
+                      .map(channel=>(
+                        <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="field">
+                <span>通知文言</span>
+                <textarea
+                  value={dailyRestock.config.notification_message}
+                  onChange={event=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,notification_message:event.target.value}
+                  })}
+                />
+                <small>
+                  この文言の下に「No shadow ban 〇個」「Top Search □個」の実販売可能在庫を表示します。
+                  恒常在庫・予算不足などの内部事情は外向け通知へ出しません。
+                </small>
+              </label>
+            </section>
+
+            <section className="card">
+              <span className="eyebrow">LAST DAILY JOB</span>
+              <h2>前回 / 実行中の入荷状態</h2>
+              {dailyRestock.state?(
+                <div className="shiire-detail-grid">
+                  <Detail label="日付" value={String(dailyRestock.state.date_key??"—")} />
+                  <Detail label="状態" value={String(dailyRestock.state.status??"—")} />
+                  <Detail label="最終処理" value={String(dailyRestock.state.last_action??"—")} />
+                  <Detail label="No shadow ban 入荷数" value={num(dailyRestock.state.added_no_shadowban??0,0)} />
+                  <Detail label="Top Search 入荷数" value={num(dailyRestock.state.added_top_search??0,0)} />
+                  <Detail
+                    label="通知"
+                    value={
+                      dailyRestock.state.notification_skipped_reason==="NO_STOCK_ADDED"
+                        ?"追加なし・通知なし"
+                        :dailyRestock.state.notification_skipped_reason==="NO_NOTIFICATION_CHANNEL"
+                          ?"通知先なし"
+                          :dailyRestock.state.notified_at
+                            ?"送信済み"
+                            :"未送信"
+                    }
+                  />
+                </div>
+              ):<div className="shiire-empty">まだ18:00入荷の実行履歴はありません。</div>}
+            </section>
+          </>:<div className="shiire-empty">18:00入荷設定を読み込んでいます。</div>}
+        </>
+      )}
+
+      {section==="invite"&&(
+        <>
+          {detailBusy&&!inviteCampaign&&<div className="progress"><span /></div>}
+          {inviteCampaign?<>
+            {!inviteCampaign.currentGuildSelected&&inviteCampaign.settings.guild_id&&(
+              <section className="card shiire-callout warn">
+                <strong>現在の招待キャンペーンは別サーバーに設定されています</strong>
+                <span>
+                  この画面で保存すると、招待キャンペーンの対象を現在選択中のサーバーへ切り替えます。
+                </span>
+              </section>
+            )}
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi accent">
+                <span>キャンペーン在庫</span>
+                <strong>{num(inviteCampaign.stock.available,0)} / {num(inviteCampaign.stock.target,0)}</strong>
+                <small>不足 {num(inviteCampaign.stock.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>招待条件</span>
+                <strong>{num(inviteCampaign.settings.invites_per_reward,0)}人 / 1垢</strong>
+                <small>Discord標準招待URL</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>未解決報酬</span>
+                <strong>{num(inviteCampaign.unresolvedRewards,0)}</strong>
+                <small>待機 / 再試行対象を含む</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>Gateway</span>
+                <strong>{inviteCampaign.runtime.gateway_ready_at?"接続済み":"未接続"}</strong>
+                <small>{when(inviteCampaign.runtime.gateway_ready_at)}</small>
+              </article>
+            </section>
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">INVITE CAMPAIGN</span>
+                  <h2>招待キャンペーン設定</h2>
+                  <p>
+                    ユーザーはDiscord標準の招待URLを使います。設定人数ごとにキャンペーン専用在庫から1垢をDM配布します。
+                  </p>
+                </div>
+                <div className="shiire-control-buttons">
+                  <button className="primary" disabled={controlBusy} onClick={()=>void saveInviteCampaign()}>
+                    設定を保存
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void seedInviteCampaign()}>
+                    招待状態を再同期
+                  </button>
+                </div>
+              </div>
+
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={inviteCampaign.settings.enabled}
+                  onChange={event=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,enabled:event.target.checked}
+                  })}
+                />
+                <span>
+                  <strong>招待キャンペーンを有効にする</strong>
+                  <small>現在選択中のDiscordサーバーを対象にします。</small>
+                </span>
+              </label>
+
+              <div className="form-grid two">
+                <FundingInput
+                  label="何人招待ごとに1垢"
+                  value={inviteCampaign.settings.invites_per_reward}
+                  step={1}
+                  onChange={value=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,invites_per_reward:value}
+                  })}
+                />
+                <FundingInput
+                  label="招待キャンペーン恒常在庫"
+                  value={inviteCampaign.settings.target_stock}
+                  step={1}
+                  onChange={value=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,target_stock:value}
+                  })}
+                />
+              </div>
+            </section>
+
+            <section className="two-col">
+              <article className="card">
+                <span className="eyebrow">INVITE PROGRESS</span>
+                <h2>招待実績</h2>
+                {(inviteCampaign.progress??[]).length===0
+                  ?<div className="shiire-empty">まだ招待実績はありません。</div>
+                  :(inviteCampaign.progress??[]).slice(0,40).map((row:any)=>(
+                    <div className="shiire-event" key={row.inviter_user_id}>
+                      <strong>{row.inviter_user_id}</strong>
+                      <span>
+                        有効 {num(row.valid_invites,0)}人 / 対象外 {num(row.excluded_invites,0)}人 /
+                        報酬 {num(row.rewards_earned,0)}
+                      </span>
+                    </div>
+                  ))
+                }
+              </article>
+              <article className="card">
+                <span className="eyebrow">REWARDS</span>
+                <h2>報酬履歴</h2>
+                {(inviteCampaign.rewards??[]).length===0
+                  ?<div className="shiire-empty">まだ報酬履歴はありません。</div>
+                  :(inviteCampaign.rewards??[]).slice(0,40).map((row:any)=>{
+                    const retryable=["WAITING_STOCK","DM_FAILED","ERROR"].includes(String(row.status));
+                    return <div className="shiire-event" key={row.id}>
+                      <strong>{row.inviter_user_id} / #{num(row.ordinal,0)}</strong>
+                      <span>{String(row.status??"—")}{row.error?" / "+String(row.error):""}</span>
+                      {retryable&&(
+                        <button
+                          className="secondary"
+                          disabled={controlBusy}
+                          onClick={()=>void retryInviteReward(String(row.id))}
+                        >
+                          配布を再試行
+                        </button>
+                      )}
+                    </div>;
+                  })
+                }
+              </article>
+            </section>
+          </>:<div className="shiire-empty">招待キャンペーン情報を読み込んでいます。</div>}
+        </>
+      )}
+
       {section==="inventory"&&(
         <>
           {detailBusy&&!inventory&&<div className="progress"><span /></div>}
@@ -1258,12 +2255,12 @@ export default function ShiireOperationsCenter({
             <InventoryClassCard
               title="TOP_SEARCH"
               values={inventory?.byClass?.TOP_SEARCH??overview?.inventoryByClass?.TOP_SEARCH??{}}
-              target={Number(topPolicy.target??0)}
+              target={Number(dailyRestock?.config.top_search_target_stock??topPolicy.target??0)}
             />
             <InventoryClassCard
               title="NO_SHADOWBAN"
               values={inventory?.byClass?.NO_SHADOWBAN??overview?.inventoryByClass?.NO_SHADOWBAN??{}}
-              target={Number(shadowPolicy.target??0)}
+              target={Number(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target??0)}
             />
           </section>
           <section className="card">
