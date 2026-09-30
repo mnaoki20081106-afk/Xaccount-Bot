@@ -11,11 +11,11 @@ const bundle=await build({stdin:{contents:`
 import {ensureVendingSchema,cleanVendingExpired,attachPaymentLink,savePayPay} from './src/vending-db';
 import {handleShiireServiceBridge} from './src/shiire-bridge';
 import {handleSupplyBridge} from './src/supply-bridge';
-import {acceptPayPayLink,receiveKyashLink} from './src/vending-payments';
+import {acceptPayPayLink,receiveKyashLink,saveKyashAccount} from './src/vending-payments';
 import {vendingSweep} from './src/vending';
 export default {async fetch(req,env){
  const u=new URL(req.url);
- if(u.pathname==='/init'){await ensureVendingSchema(env);await savePayPay(env,'shared-dashboard','test','test','test',env.SESSION_ENCRYPTION_KEY);return Response.json({ok:true});}
+ if(u.pathname==='/init'){await ensureVendingSchema(env);await savePayPay(env,'shared-dashboard','test','test','test',env.SESSION_ENCRYPTION_KEY);await saveKyashAccount(env,'shared-dashboard',{email:'test',password:'test',clientUuid:'test',installationUuid:'test',accessToken:'test'});return Response.json({ok:true});}
  if(u.pathname==='/expire'){await cleanVendingExpired(env);return Response.json({ok:true});}
  if(u.pathname==='/sweep'){await vendingSweep(env);return Response.json({ok:true});}
  if(u.pathname==='/paypay') return Response.json(await acceptPayPayLink('test',{phone:'test',password:'test',uuid:'test'},100));
@@ -32,7 +32,7 @@ async function fixture(options={}){
   if(req.url.includes('getP2PLinkInfo'))return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',message:{data:{amount:options.amount??50}}}});
   if(req.url.includes('/oauth/token'))return Response.json({access_token:'test'});
   if(req.url.includes('acceptP2P'))return Response.json({header:{resultCode:'S0000'}});
-  if(req.url.includes('kyash.me/payments/'))return new Response('<span class="amountText text_send">50</span><a data-href-app="kyash://claim/test">');
+  if(req.url.includes('kyash.me/payments/'))return new Response('<span class="amountText text_send">'+(options.amount??50)+'</span><a data-href-app="kyash://claim/test">');
   return Response.json({code:200});
  }});instances.push(mf);
  assert.equal((await mf.dispatchFetch('https://test.example/init')).status,200);
@@ -104,4 +104,13 @@ test('pending Kyash receipt survives temporarily unavailable link',async()=>{
  await db.prepare("UPDATE shiire_payment_receipts SET status='PENDING' WHERE idempotency_key=?").bind(input.idempotencyKey).run();
  const result=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
  assert.equal(result.ok,false);assert.equal(result.status,'pending');
+});
+
+test('successful Kyash receipt retry keeps the same normalized completion status',async()=>{
+ const {mf,calls}=await fixture({amount:100});
+ const input={method:'kyash',link:'test-link-success',amount:100,idempotencyKey:'kyash-success-123'};
+ const first=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
+ const again=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
+ assert.equal(first.status,'completed');assert.equal(again.status,'completed');assert.equal(again.ok,true);
+ assert.equal(calls.filter(u=>u.includes('/receive')).length,1);
 });

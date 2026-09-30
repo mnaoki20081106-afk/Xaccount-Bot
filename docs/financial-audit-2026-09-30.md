@@ -16,3 +16,9 @@ Full workspace build and Worker bundle dry-run passed. All 61 Worker tests passe
 Orders whose acceptance response was lost require recipient-side confirmation before fulfillment. This change deliberately does not infer payment from a public consumed-link status. No new administrative reconciliation UI is included. Historical stock/receipt inconsistencies are not automatically repaired. External PayPay/Kyash endpoints were mocked; their current production behavior is unverified.
 
 Transaction reference: https://developers.cloudflare.com/d1/worker-api/d1-database/#batch
+
+## Follow-up review
+
+Reproduced a Kyash receipt retry returning provider status `COMPLETED` instead of bridge status `completed`. This blocked Discord-Shiire's completion validation after response loss. Replayed successful receipts now preserve the bridge response contract without another receive request. Missing payment-account configuration also leaves a retryable rejected receipt instead of an ambiguous in-flight receipt.
+
+Validation: Worker typecheck, bundle dry-run and all 62 Worker tests passed (9 financial regression cases). No live payments or deployment were performed.

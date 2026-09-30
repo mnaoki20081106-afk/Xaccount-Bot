@@ -415,7 +415,7 @@ export async function handleShiireServiceBridge(
       if(receipt?.status==="COMPLETED"){
         let response:any={};
         try{response=JSON.parse(receipt.response_json??"{}");}catch{}
-        return json(env,{ok:true,status:"completed",duplicate:true,...response});
+        return json(env,{...response,ok:true,status:"completed",duplicate:true});
       }
       const wasPending=receipt?.status==="PENDING";
       // A previous request may have accepted money before losing its response.
@@ -435,7 +435,10 @@ export async function handleShiireServiceBridge(
 
       if(method==="paypay"){
         const account=await getPayPay(env,OWNER_ID,env.SESSION_ENCRYPTION_KEY);
-        if(!account) return json(env,{error:"PAYPAY_NOT_CONFIGURED"},409);
+        if(!account){
+          await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"PAYPAY_NOT_CONFIGURED"});
+          return json(env,{error:"PAYPAY_NOT_CONFIGURED"},409);
+        }
         const info=await checkPayPayLink(link);
         const linkAmount=Number(info?.payload?.message?.data?.amount??0);
         const currentStatus=String(info?.payload?.orderStatus??"");
@@ -480,7 +483,10 @@ export async function handleShiireServiceBridge(
       }
 
       const account=await getKyashAccount(env,OWNER_ID);
-      if(!account) return json(env,{error:"KYASH_NOT_CONFIGURED"},409);
+      if(!account){
+        await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"KYASH_NOT_CONFIGURED"});
+        return json(env,{error:"KYASH_NOT_CONFIGURED"},409);
+      }
       const kyashInfo=await checkKyashLink(link);
       if(!kyashInfo){
         await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
