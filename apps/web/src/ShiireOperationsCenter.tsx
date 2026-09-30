@@ -270,20 +270,24 @@ export default function ShiireOperationsCenter({
   async function loadOverview(showBusy=true){
     if(showBusy) setBusy(true);
     try{
-      const [data,nextRestock]=await Promise.all([
-        api<Overview>(
-          `/api/guilds/${guildId}/shiire/operations/overview`,
-          {},
-          25_000
-        ),
-        api<DailyRestockDetail>(
+      const data=await api<Overview>(
+        `/api/guilds/${guildId}/shiire/operations/overview`,
+        {},
+        25_000
+      );
+      setOverview(data);
+      try{
+        setDailyRestock(await api<DailyRestockDetail>(
           `/api/guilds/${guildId}/shiire/daily-restock`,
           {},
           20_000
-        )
-      ]);
-      setOverview(data);
-      setDailyRestock(nextRestock);
+        ));
+      }catch{
+        // Keep the existing operations center usable during a staggered
+        // XAccount-Bot / Discord-Shiire deployment. The dedicated 18:00 tab
+        // will still surface the bridge error if the backend is outdated.
+        setDailyRestock(null);
+      }
       setFundingControls({
         reserve_jpy:Number(data.settings?.reserve_jpy??0),
         max_purchase_jpy:Number(data.settings?.max_purchase_jpy??0),
