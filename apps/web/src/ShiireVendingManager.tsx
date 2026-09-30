@@ -111,6 +111,23 @@ function postableChannels(channels:Channel[]){
   );
 }
 
+const CLASS_SALES_PRESETS={
+  "class:NO_SHADOWBAN":{
+    name:"Search Top + No shadow ban",
+    description:"検索上位に載るシャドバンされてない垢です。",
+    price:350
+  },
+  "class:TOP_SEARCH":{
+    name:"【old】Search Top + No shadow ban",
+    description:"検索上位にのるシャドバンされていないOld垢です。より運用向きです！",
+    price:500
+  }
+} as const;
+
+function classSalesPreset(id:string){
+  return CLASS_SALES_PRESETS[id as keyof typeof CLASS_SALES_PRESETS]??null;
+}
+
 export default function ShiireVendingManager({
   guildId,
   channels,
@@ -202,8 +219,12 @@ export default function ShiireVendingManager({
       const machine=nextMachines.find(row=>row.id===nextId)??null;
       applySelected(machine);
       if(!sourceId){
+        const preset=CLASS_SALES_PRESETS["class:TOP_SEARCH"];
         setSourceId("class:TOP_SEARCH");
-        setProductName("検索トップXアカウント");
+        setProductName(preset.name);
+        setProductDescription(preset.description);
+        setPricePayPay(preset.price);
+        setPriceKyash(preset.price);
       }
     }catch(reason){
       onError(reason);
@@ -647,12 +668,12 @@ export default function ShiireVendingManager({
                     onChange={e=>{
                       const id=e.target.value;
                       setSourceId(id);
-                      if(id==="class:TOP_SEARCH"){
-                        setProductName("検索トップXアカウント");
-                        return;
-                      }
-                      if(id==="class:NO_SHADOWBAN"){
-                        setProductName("No Shadowban Xアカウント");
+                      const preset=classSalesPreset(id);
+                      if(preset){
+                        setProductName(preset.name);
+                        setProductDescription(preset.description);
+                        setPricePayPay(preset.price);
+                        setPriceKyash(preset.price);
                         return;
                       }
                       const source=sources.find(row=>row.supplier_product_id===id);
@@ -661,11 +682,11 @@ export default function ShiireVendingManager({
                   >
                     <option value="">選択してください</option>
                     <optgroup label="自動仕入れ在庫クラス">
-                      <option value="class:TOP_SEARCH">
-                        TOP_SEARCH — 検索トップ在庫をまとめて販売
-                      </option>
                       <option value="class:NO_SHADOWBAN">
-                        NO_SHADOWBAN — TOP表記なし・No Shadowban在庫
+                        NO_SHADOWBAN — Search Top + No shadow ban / 350円
+                      </option>
+                      <option value="class:TOP_SEARCH">
+                        TOP_SEARCH — 【old】Search Top + No shadow ban / 500円
                       </option>
                     </optgroup>
                     <optgroup label="個別HStora商品（上級設定）">
