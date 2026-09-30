@@ -61,7 +61,7 @@ export default function XUtilityManager({
   async function deploy(kind: "shadowban" | "2fa") {
     const isShadowban = kind === "shadowban";
     const channelId = isShadowban ? shadowbanChannelId : totpChannelId;
-    const label = isShadowban ? "シャドウバンチェックパネル" : "2FAパネル";
+    const label = isShadowban ? "X 垢状態チェックパネル" : "2FAパネル";
     const setFeedback = isShadowban
       ? setShadowbanFeedback
       : setTotpFeedback;
@@ -146,9 +146,9 @@ export default function XUtilityManager({
         <div className="section-head">
           <div>
             <span className="eyebrow">X UTILITY</span>
-            <h2>シャドウバンチェック</h2>
+            <h2>X 垢状態チェック</h2>
             <p className="muted">
-              IRith形式の6項目を確認するX-Utilityパネルを設置します。
+              シャドウバン・凍結を確認するX-Utilityパネルを設置します。
             </p>
           </div>
         </div>
@@ -167,10 +167,16 @@ export default function XUtilityManager({
           >
             {busy === "shadowban"
               ? "設置中..."
-              : "シャドウバンチェックパネルを設置"}
+              : "X 垢状態チェックパネルを設置"}
           </button>
         </div>
         {feedback(shadowbanFeedback)}
+
+        <div className="panel-feedback info" role="note">
+          管理者向け: Search Ban / Search Suggestion Ban が「現在確認できません」になる場合は、
+          X-Utility側のX検索用ログイン情報が無効・期限切れになっていないか確認してください。
+          利用者側には内部エラーやログイン情報の更新案内は表示されません。
+        </div>
       </article>
 
       <article className="card">
