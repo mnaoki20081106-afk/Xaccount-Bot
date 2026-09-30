@@ -5,7 +5,7 @@ import "./shiire-operations.css";
 
 type Channel={id:string;name:string;type?:string};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
-type Section="overview"|"funding"|"procurement"|"inventory"|"vending"|"logs";
+type Section="overview"|"funding"|"procurement"|"restock"|"invite"|"inventory"|"vending"|"logs";
 type Settled<T>={ok:true;data:T}|{ok:false;error:string};
 
 type Overview={
@@ -80,12 +80,82 @@ type FundingControls={
   min_purchase_jpy:number;
   target_ltc_balance:number;
   max_ltc_balance:number;
+  wallet_target_ltc:number;
+  wallet_max_ltc:number;
+  max_paypay_balance_age_ms:number;
+  max_fx_age_ms:number;
+  max_fx_jump_percent:number;
+  max_ltc_price_jump_percent:number;
+};
+type ProcurementControls={
+  max_unit_price_jpy:number;
+  max_no_shadowban_unit_price_usd:number;
+  reorder_point:number;
+  target_stock:number;
+  no_shadowban_reorder_point:number;
+  no_shadowban_target_stock:number;
+  trial_purchase_count:number;
+  max_batch_purchase:number;
+  min_seller_rating:number;
+  min_product_reviews:number;
+  min_sales_count:number;
+  max_dispute_rate:number;
+  minimum_stock:number;
+  seller_quality_mode:"strict_api"|"manual_product_approval"|"trial_only";
+  approved_hstora_product_ids:number[];
+  max_price_jump_percent:number;
+  require_bulk_confirmation:boolean;
+  bulk_confirmation_threshold:number;
+};
+type ProcurementBudgetDetail={
+  percentages:{INVITE_CAMPAIGN:number;NO_SHADOWBAN:number;TOP_SEARCH:number};
+  budget:{
+    initialized:boolean;
+    available:{INVITE_CAMPAIGN:number;NO_SHADOWBAN:number;TOP_SEARCH:number};
+    totalAvailableUsd:number;
+    updatedAt:number;
+  };
+};
+type DailyRestockDetail={
+  schedule:{timezone:string;time:string;cronSource:string};
+  config:{
+    enabled:boolean;
+    top_search_target_stock:number;
+    no_shadowban_target_stock:number;
+    notification_channel_id:string;
+    notification_message:string;
+    panel_channel_id:string;
+    panel_message_id:string;
+  };
+  state:any|null;
+  stock:{
+    TOP_SEARCH:{current:number;target:number;deficit:number};
+    NO_SHADOWBAN:{current:number;target:number;deficit:number};
+  };
+};
+type InviteCampaignDetail={
+  settings:{
+    enabled:boolean;
+    guild_id:string;
+    invites_per_reward:number;
+    target_stock:number;
+  };
+  stock:{available:number;target:number;deficit:number};
+  runtime:{gateway_ready_at:number|null;last_event_at:number|null;last_error:string|null;updated_at:number|null};
+  attribution:{total:number;valid:number;ambiguous:number;unresolved:number};
+  progress:Array<any>;
+  rewards:Array<any>;
+  unresolvedRewards:number;
+  currentGuildId:string;
+  currentGuildSelected:boolean;
 };
 
 const sections:Array<{id:Section;label:string;hint:string}>=[
   {id:"overview",label:"概要",hint:"今の状態"},
   {id:"funding",label:"資金・LTC",hint:"残高と送金"},
-  {id:"procurement",label:"仕入れ",hint:"商品と注文"},
+  {id:"procurement",label:"仕入れ",hint:"条件と注文"},
+  {id:"restock",label:"18:00入荷",hint:"恒常在庫と通知"},
+  {id:"invite",label:"招待",hint:"キャンペーン"},
   {id:"inventory",label:"在庫",hint:"カテゴリ別"},
   {id:"vending",label:"自販機・設定",hint:"設置と通知"},
   {id:"logs",label:"ログ・障害",hint:"監査とBreaker"}
@@ -151,6 +221,10 @@ export default function ShiireOperationsCenter({
   const [busy,setBusy]=useState(false);
   const [detailBusy,setDetailBusy]=useState(false);
   const [fundingControls,setFundingControls]=useState<FundingControls|null>(null);
+  const [procurementControls,setProcurementControls]=useState<ProcurementControls|null>(null);
+  const [procurementBudget,setProcurementBudget]=useState<ProcurementBudgetDetail|null>(null);
+  const [dailyRestock,setDailyRestock]=useState<DailyRestockDetail|null>(null);
+  const [inviteCampaign,setInviteCampaign]=useState<InviteCampaignDetail|null>(null);
   const [payPayObservation,setPayPayObservation]=useState(0);
   const [usdJpyObservation,setUsdJpyObservation]=useState(0);
   const [controlBusy,setControlBusy]=useState(false);
@@ -210,7 +284,35 @@ export default function ShiireOperationsCenter({
         monthly_purchase_limit_jpy:Number(data.settings?.monthly_purchase_limit_jpy??0),
         min_purchase_jpy:Number(data.settings?.min_purchase_jpy??0),
         target_ltc_balance:Number(data.settings?.target_ltc_balance??0),
-        max_ltc_balance:Number(data.settings?.max_ltc_balance??0)
+        max_ltc_balance:Number(data.settings?.max_ltc_balance??0),
+        wallet_target_ltc:Number(data.settings?.wallet_target_ltc??0),
+        wallet_max_ltc:Number(data.settings?.wallet_max_ltc??0),
+        max_paypay_balance_age_ms:Number(data.settings?.max_paypay_balance_age_ms??0),
+        max_fx_age_ms:Number(data.settings?.max_fx_age_ms??0),
+        max_fx_jump_percent:Number(data.settings?.max_fx_jump_percent??0),
+        max_ltc_price_jump_percent:Number(data.settings?.max_ltc_price_jump_percent??0)
+      });
+      setProcurementControls({
+        max_unit_price_jpy:Number(data.settings?.max_unit_price_jpy??80),
+        max_no_shadowban_unit_price_usd:Number(data.settings?.max_no_shadowban_unit_price_usd??0.6),
+        reorder_point:Number(data.settings?.reorder_point??10),
+        target_stock:Number(data.settings?.target_stock??50),
+        no_shadowban_reorder_point:Number(data.settings?.no_shadowban_reorder_point??10),
+        no_shadowban_target_stock:Number(data.settings?.no_shadowban_target_stock??50),
+        trial_purchase_count:Number(data.settings?.trial_purchase_count??10),
+        max_batch_purchase:Number(data.settings?.max_batch_purchase??20),
+        min_seller_rating:Number(data.settings?.min_seller_rating??0),
+        min_product_reviews:Number(data.settings?.min_product_reviews??0),
+        min_sales_count:Number(data.settings?.min_sales_count??0),
+        max_dispute_rate:Number(data.settings?.max_dispute_rate??0),
+        minimum_stock:Number(data.settings?.minimum_stock??1),
+        seller_quality_mode:(data.settings?.seller_quality_mode??"trial_only") as ProcurementControls["seller_quality_mode"],
+        approved_hstora_product_ids:Array.isArray(data.settings?.approved_hstora_product_ids)
+          ?data.settings.approved_hstora_product_ids.map(Number).filter(Number.isSafeInteger)
+          :[],
+        max_price_jump_percent:Number(data.settings?.max_price_jump_percent??25),
+        require_bulk_confirmation:Boolean(data.settings?.require_bulk_confirmation??true),
+        bulk_confirmation_threshold:Number(data.settings?.bulk_confirmation_threshold??20)
       });
       setPayPayObservation(Number(data.settings?.observed_paypay_balance_jpy??0));
       setUsdJpyObservation(Number(data.settings?.usd_jpy_rate??0));
@@ -279,6 +381,10 @@ export default function ShiireOperationsCenter({
     setOrders(null);
     setLogs(null);
     setFundingControls(null);
+    setProcurementControls(null);
+    setProcurementBudget(null);
+    setDailyRestock(null);
+    setInviteCampaign(null);
     setPayPayObservation(0);
     setUsdJpyObservation(0);
     setSection("overview");
