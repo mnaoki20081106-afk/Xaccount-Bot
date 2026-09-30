@@ -3,7 +3,7 @@ import { api } from "./api";
 import ShiireVendingManager from "./ShiireVendingManager";
 import "./shiire-operations.css";
 
-type Channel={id:string;name:string;type?:string};
+type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
 type Section="overview"|"funding"|"procurement"|"restock"|"invite"|"inventory"|"vending"|"logs";
 type Settled<T>={ok:true;data:T}|{ok:false;error:string};
@@ -788,6 +788,11 @@ export default function ShiireOperationsCenter({
 
   async function saveInviteCampaign(){
     if(!inviteCampaign) return;
+    if(
+      !inviteCampaign.currentGuildSelected&&
+      inviteCampaign.settings.guild_id&&
+      !confirm("招待キャンペーンの対象を現在選択中のサーバーへ切り替えますか？")
+    ) return;
     setControlBusy(true);
     try{
       const next=await api<InviteCampaignDetail>(
@@ -2050,9 +2055,14 @@ export default function ShiireOperationsCenter({
                     })}
                   >
                     <option value="">未設定</option>
-                    {channels.map(channel=>(
-                      <option key={channel.id} value={channel.id}>#{channel.name}</option>
-                    ))}
+                    {channels
+                      .filter(channel=>
+                        (channel.type==="text"||channel.type==="announcement")&&
+                        channel.botCanPost!==false
+                      )
+                      .map(channel=>(
+                        <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                      ))}
                   </select>
                 </label>
               </div>
