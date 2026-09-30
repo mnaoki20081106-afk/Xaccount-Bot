@@ -270,12 +270,20 @@ export default function ShiireOperationsCenter({
   async function loadOverview(showBusy=true){
     if(showBusy) setBusy(true);
     try{
-      const data=await api<Overview>(
-        `/api/guilds/${guildId}/shiire/operations/overview`,
-        {},
-        25_000
-      );
+      const [data,nextRestock]=await Promise.all([
+        api<Overview>(
+          `/api/guilds/${guildId}/shiire/operations/overview`,
+          {},
+          25_000
+        ),
+        api<DailyRestockDetail>(
+          `/api/guilds/${guildId}/shiire/daily-restock`,
+          {},
+          20_000
+        )
+      ]);
       setOverview(data);
+      setDailyRestock(nextRestock);
       setFundingControls({
         reserve_jpy:Number(data.settings?.reserve_jpy??0),
         max_purchase_jpy:Number(data.settings?.max_purchase_jpy??0),
@@ -1057,12 +1065,12 @@ export default function ShiireOperationsCenter({
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 在庫</span>
               <strong>{topReady}</strong>
-              <small>予約中 {topReserved} / 目標 {num(topPolicy.target,0)}</small>
+              <small>予約中 {topReserved} / 恒常 {num(dailyRestock?.config.top_search_target_stock??topPolicy.target,0)}</small>
             </article>
             <article className="card shiire-kpi accent">
               <span>NO_SHADOWBAN 在庫</span>
               <strong>{shadowReady}</strong>
-              <small>予約中 {shadowReserved} / 目標 {num(shadowPolicy.target,0)}</small>
+              <small>予約中 {shadowReserved} / 恒常 {num(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target,0)}</small>
             </article>
             <article className="card shiire-kpi">
               <span>本日の仕入れ</span>
@@ -2237,12 +2245,12 @@ export default function ShiireOperationsCenter({
             <InventoryClassCard
               title="TOP_SEARCH"
               values={inventory?.byClass?.TOP_SEARCH??overview?.inventoryByClass?.TOP_SEARCH??{}}
-              target={Number(topPolicy.target??0)}
+              target={Number(dailyRestock?.config.top_search_target_stock??topPolicy.target??0)}
             />
             <InventoryClassCard
               title="NO_SHADOWBAN"
               values={inventory?.byClass?.NO_SHADOWBAN??overview?.inventoryByClass?.NO_SHADOWBAN??{}}
-              target={Number(shadowPolicy.target??0)}
+              target={Number(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target??0)}
             />
           </section>
           <section className="card">
