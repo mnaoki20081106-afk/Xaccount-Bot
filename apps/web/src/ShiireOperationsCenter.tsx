@@ -323,23 +323,58 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  function applyProcurementControls(data:any){
+    setProcurementControls({
+      max_unit_price_jpy:Number(data?.max_unit_price_jpy??80),
+      max_no_shadowban_unit_price_usd:Number(data?.max_no_shadowban_unit_price_usd??0.6),
+      reorder_point:Number(data?.reorder_point??10),
+      target_stock:Number(data?.target_stock??50),
+      no_shadowban_reorder_point:Number(data?.no_shadowban_reorder_point??10),
+      no_shadowban_target_stock:Number(data?.no_shadowban_target_stock??50),
+      trial_purchase_count:Number(data?.trial_purchase_count??10),
+      max_batch_purchase:Number(data?.max_batch_purchase??20),
+      min_seller_rating:Number(data?.min_seller_rating??0),
+      min_product_reviews:Number(data?.min_product_reviews??0),
+      min_sales_count:Number(data?.min_sales_count??0),
+      max_dispute_rate:Number(data?.max_dispute_rate??0),
+      minimum_stock:Number(data?.minimum_stock??1),
+      seller_quality_mode:(data?.seller_quality_mode??"trial_only") as ProcurementControls["seller_quality_mode"],
+      approved_hstora_product_ids:Array.isArray(data?.approved_hstora_product_ids)
+        ?data.approved_hstora_product_ids.map(Number).filter(Number.isSafeInteger)
+        :[],
+      max_price_jump_percent:Number(data?.max_price_jump_percent??25),
+      require_bulk_confirmation:Boolean(data?.require_bulk_confirmation??true),
+      bulk_confirmation_threshold:Number(data?.bulk_confirmation_threshold??20)
+    });
+  }
+
   async function loadDetail(target:Section){
     if(target==="overview"||target==="vending") return;
     setDetailBusy(true);
     try{
       if(target==="funding"){
+        const budgetPromise=api<ProcurementBudgetDetail>(
+          `/api/guilds/${guildId}/shiire/procurement-budget`,
+          {},
+          20_000
+        );
         if(overview?.safety.fundingMode==="manual_hstora"){
           setBinance(null);
+          setProcurementBudget(await budgetPromise);
         }else{
-          const data=await api<BinanceDetail>(
-            `/api/guilds/${guildId}/shiire/operations/binance`,
-            {},
-            25_000
-          );
+          const [data,budget]=await Promise.all([
+            api<BinanceDetail>(
+              `/api/guilds/${guildId}/shiire/operations/binance`,
+              {},
+              25_000
+            ),
+            budgetPromise
+          ]);
           setBinance(data);
+          setProcurementBudget(budget);
         }
       }else if(target==="procurement"){
-        const [nextOrders,nextHstora]=await Promise.all([
+        const [nextOrders,nextHstora,nextSettings]=await Promise.all([
           api<OrderDetail>(
             `/api/guilds/${guildId}/shiire/operations/orders`,
             {},
@@ -349,16 +384,43 @@ export default function ShiireOperationsCenter({
             `/api/guilds/${guildId}/shiire/operations/hstora`,
             {},
             25_000
+          ),
+          api<any>(
+            `/api/guilds/${guildId}/shiire/procurement-settings`,
+            {},
+            20_000
           )
         ]);
         setOrders(nextOrders);
         setHstora(nextHstora);
-      }else if(target==="inventory"){
-        setInventory(await api<InventoryDetail>(
-          `/api/guilds/${guildId}/shiire/operations/inventory`,
+        applyProcurementControls(nextSettings);
+      }else if(target==="restock"){
+        setDailyRestock(await api<DailyRestockDetail>(
+          `/api/guilds/${guildId}/shiire/daily-restock`,
           {},
           20_000
         ));
+      }else if(target==="invite"){
+        setInviteCampaign(await api<InviteCampaignDetail>(
+          `/api/guilds/${guildId}/shiire/invite-campaign`,
+          {},
+          20_000
+        ));
+      }else if(target==="inventory"){
+        const [nextInventory,nextRestock]=await Promise.all([
+          api<InventoryDetail>(
+            `/api/guilds/${guildId}/shiire/operations/inventory`,
+            {},
+            20_000
+          ),
+          api<DailyRestockDetail>(
+            `/api/guilds/${guildId}/shiire/daily-restock`,
+            {},
+            20_000
+          )
+        ]);
+        setInventory(nextInventory);
+        setDailyRestock(nextRestock);
       }else if(target==="logs"){
         setLogs(await api<LogDetail>(
           `/api/guilds/${guildId}/shiire/operations/logs`,
