@@ -45,3 +45,14 @@ test("main dashboard wording reflects minute funding detection and 18:00 ordinar
   assert.match(source,/通常在庫は18:00/);
   assert.match(source,/在庫追加が実際に1個以上あった日だけDiscordへ通知/);
 });
+
+
+const vendingSource=readFileSync(
+  new URL("../src/ShiireVendingManager.tsx",import.meta.url),
+  "utf8"
+);
+
+test("legacy vending screen no longer owns a second procurement settings form",()=>{
+  assert.doesNotMatch(vendingSource,/async function saveProcurementSettings/);
+  assert.match(vendingSource,/仕入れ条件は「仕入れ」タブへ統合しました/);
+});
