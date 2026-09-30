@@ -1680,6 +1680,173 @@ export default function ShiireOperationsCenter({
       {section==="procurement"&&(
         <>
           {detailBusy&&!orders&&<div className="progress"><span /></div>}
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">PROCUREMENT SETTINGS</span>
+                <h2>仕入れ条件</h2>
+                <p>
+                  HStora商品の価格上限・試験購入・品質ガード・大量購入ガードをここから変更できます。
+                  18:00の恒常在庫数と在庫通知は「18:00入荷」タブで設定します。
+                </p>
+              </div>
+              <div className="shiire-control-buttons">
+                <button
+                  className="primary"
+                  disabled={controlBusy||!procurementControls}
+                  onClick={()=>void saveProcurementControls()}
+                >
+                  仕入れ条件を保存
+                </button>
+                <button
+                  className="secondary"
+                  disabled={controlBusy}
+                  onClick={()=>void runProcurementNow()}
+                >
+                  今すぐ仕入れ判定
+                </button>
+              </div>
+            </div>
+            {procurementControls?<>
+              <div className="form-grid two">
+                <FundingInput
+                  label="Top Search 最大単価 (円)"
+                  value={procurementControls.max_unit_price_jpy}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_unit_price_jpy:value})}
+                />
+                <FundingInput
+                  label="No shadow ban 最大単価 (USD)"
+                  value={procurementControls.max_no_shadowban_unit_price_usd}
+                  step={0.01}
+                  onChange={value=>setProcurementControls({...procurementControls,max_no_shadowban_unit_price_usd:value})}
+                />
+                <FundingInput
+                  label="Top Search 発注点"
+                  value={procurementControls.reorder_point}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,reorder_point:value})}
+                />
+                <FundingInput
+                  label="Top Search target_stock"
+                  value={procurementControls.target_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,target_stock:value})}
+                />
+                <FundingInput
+                  label="No shadow ban 発注点"
+                  value={procurementControls.no_shadowban_reorder_point}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,no_shadowban_reorder_point:value})}
+                />
+                <FundingInput
+                  label="No shadow ban target_stock"
+                  value={procurementControls.no_shadowban_target_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,no_shadowban_target_stock:value})}
+                />
+                <FundingInput
+                  label="新規商品の初回試験購入数"
+                  value={procurementControls.trial_purchase_count}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,trial_purchase_count:value})}
+                />
+                <FundingInput
+                  label="1回最大仕入れ数"
+                  value={procurementControls.max_batch_purchase}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_batch_purchase:value})}
+                />
+                <FundingInput
+                  label="最低Seller rating"
+                  value={procurementControls.min_seller_rating}
+                  step={0.1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_seller_rating:value})}
+                />
+                <FundingInput
+                  label="最低レビュー数"
+                  value={procurementControls.min_product_reviews}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_product_reviews:value})}
+                />
+                <FundingInput
+                  label="最低販売数"
+                  value={procurementControls.min_sales_count}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,min_sales_count:value})}
+                />
+                <FundingInput
+                  label="最大dispute率"
+                  value={procurementControls.max_dispute_rate}
+                  step={0.01}
+                  onChange={value=>setProcurementControls({...procurementControls,max_dispute_rate:value})}
+                />
+                <FundingInput
+                  label="HStora最低在庫"
+                  value={procurementControls.minimum_stock}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,minimum_stock:value})}
+                />
+                <FundingInput
+                  label="商品価格急変停止 %"
+                  value={procurementControls.max_price_jump_percent}
+                  step={0.1}
+                  onChange={value=>setProcurementControls({...procurementControls,max_price_jump_percent:value})}
+                />
+                <FundingInput
+                  label="大量購入確認の閾値"
+                  value={procurementControls.bulk_confirmation_threshold}
+                  step={1}
+                  onChange={value=>setProcurementControls({...procurementControls,bulk_confirmation_threshold:value})}
+                />
+                <label className="field">
+                  <span>Seller品質モード</span>
+                  <select
+                    value={procurementControls.seller_quality_mode}
+                    onChange={event=>setProcurementControls({
+                      ...procurementControls,
+                      seller_quality_mode:event.target.value as ProcurementControls["seller_quality_mode"]
+                    })}
+                  >
+                    <option value="trial_only">trial_only（試験購入）</option>
+                    <option value="manual_product_approval">manual_product_approval（承認IDのみ）</option>
+                    <option value="strict_api">strict_api（API品質指標必須）</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>承認済みHStora商品ID（カンマ区切り）</span>
+                  <input
+                    value={procurementControls.approved_hstora_product_ids.join(",")}
+                    onChange={event=>setProcurementControls({
+                      ...procurementControls,
+                      approved_hstora_product_ids:[...new Set(
+                        event.target.value
+                          .split(/[\s,]+/)
+                          .filter(Boolean)
+                          .map(Number)
+                          .filter(value=>Number.isSafeInteger(value)&&value>0)
+                      )]
+                    })}
+                  />
+                </label>
+              </div>
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={procurementControls.require_bulk_confirmation}
+                  onChange={event=>setProcurementControls({
+                    ...procurementControls,
+                    require_bulk_confirmation:event.target.checked
+                  })}
+                />
+                <span>
+                  <strong>大量購入の明示承認を必須にする</strong>
+                  <small>閾値以上のLIVE仕入れを自動で止め、承認操作がある時だけ許可します。</small>
+                </span>
+              </label>
+            </>:<div className="shiire-empty">仕入れ条件を読み込んでいます。</div>}
+          </section>
+
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 上限</span>
