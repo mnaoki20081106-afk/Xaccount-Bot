@@ -1090,7 +1090,7 @@ export default function ShiireOperationsCenter({
                   ready={topReady}
                   reserved={topReserved}
                   reorder={Number(topPolicy.reorder??0)}
-                  target={Number(topPolicy.target??0)}
+                  target={Number(dailyRestock?.config.top_search_target_stock??topPolicy.target??0)}
                   limit={topPolicy.max==null?"—":yen(topPolicy.max)}
                 />
                 <StockLine
@@ -1098,7 +1098,7 @@ export default function ShiireOperationsCenter({
                   ready={shadowReady}
                   reserved={shadowReserved}
                   reorder={Number(shadowPolicy.reorder??0)}
-                  target={Number(shadowPolicy.target??0)}
+                  target={Number(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target??0)}
                   limit={shadowPolicy.max==null?"—":usd(shadowPolicy.max)}
                 />
               </div>
@@ -1945,6 +1945,288 @@ export default function ShiireOperationsCenter({
             <h2>仕入れ注文履歴</h2>
             <OrderList rows={orders?.orders??overview?.recentOrders??[]} />
           </section>
+        </>
+      )}
+
+      {section==="restock"&&(
+        <>
+          {detailBusy&&!dailyRestock&&<div className="progress"><span /></div>}
+          {dailyRestock?<>
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi accent">
+                <span>NO_SHADOWBAN</span>
+                <strong>{num(dailyRestock.stock.NO_SHADOWBAN.current,0)} / {num(dailyRestock.stock.NO_SHADOWBAN.target,0)}</strong>
+                <small>不足 {num(dailyRestock.stock.NO_SHADOWBAN.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi accent">
+                <span>TOP_SEARCH</span>
+                <strong>{num(dailyRestock.stock.TOP_SEARCH.current,0)} / {num(dailyRestock.stock.TOP_SEARCH.target,0)}</strong>
+                <small>不足 {num(dailyRestock.stock.TOP_SEARCH.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>定時入荷</span>
+                <strong>{dailyRestock.config.enabled?"ON":"OFF"}</strong>
+                <small>{dailyRestock.schedule.time} {dailyRestock.schedule.timezone}</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>通知パネル</span>
+                <strong>{dailyRestock.config.panel_message_id?"設置済み":"未設置"}</strong>
+                <small>{dailyRestock.config.panel_channel_id||"—"}</small>
+              </article>
+            </section>
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">DAILY RESTOCK</span>
+                  <h2>毎日18:00 在庫入荷</h2>
+                  <p>
+                    18:00時点の販売用在庫と恒常在庫の差分だけを仕入れます。
+                    在庫追加が実際に1個以上あった日だけDiscordへ通知し、通知には販売可能な実在庫数だけを表示します。
+                  </p>
+                </div>
+                <div className="shiire-control-buttons">
+                  <button className="primary" disabled={controlBusy} onClick={()=>void saveDailyRestock()}>
+                    設定を保存
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void installDailyRestockPanelNow()}>
+                    通知パネルを設置 / 更新
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void runDailyRestockNow()}>
+                    今すぐ差分入荷
+                  </button>
+                </div>
+              </div>
+
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={dailyRestock.config.enabled}
+                  onChange={event=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,enabled:event.target.checked}
+                  })}
+                />
+                <span>
+                  <strong>毎日18:00の自動入荷を有効にする</strong>
+                  <small>入金検知・資金配分は1分ごと、通常在庫の仕入れは18:00に実行します。</small>
+                </span>
+              </label>
+
+              <div className="form-grid two">
+                <FundingInput
+                  label="No shadow ban 恒常在庫"
+                  value={dailyRestock.config.no_shadowban_target_stock}
+                  step={1}
+                  onChange={value=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,no_shadowban_target_stock:value}
+                  })}
+                />
+                <FundingInput
+                  label="Top Search 恒常在庫"
+                  value={dailyRestock.config.top_search_target_stock}
+                  step={1}
+                  onChange={value=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,top_search_target_stock:value}
+                  })}
+                />
+                <label className="field">
+                  <span>在庫入荷通知チャンネル</span>
+                  <select
+                    value={dailyRestock.config.notification_channel_id}
+                    onChange={event=>setDailyRestock({
+                      ...dailyRestock,
+                      config:{...dailyRestock.config,notification_channel_id:event.target.value}
+                    })}
+                  >
+                    <option value="">未設定</option>
+                    {channels.map(channel=>(
+                      <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="field">
+                <span>通知文言</span>
+                <textarea
+                  value={dailyRestock.config.notification_message}
+                  onChange={event=>setDailyRestock({
+                    ...dailyRestock,
+                    config:{...dailyRestock.config,notification_message:event.target.value}
+                  })}
+                />
+                <small>
+                  この文言の下に「No shadow ban 〇個」「Top Search □個」の実販売可能在庫を表示します。
+                  恒常在庫・予算不足などの内部事情は外向け通知へ出しません。
+                </small>
+              </label>
+            </section>
+
+            <section className="card">
+              <span className="eyebrow">LAST DAILY JOB</span>
+              <h2>前回 / 実行中の入荷状態</h2>
+              {dailyRestock.state?(
+                <div className="shiire-detail-grid">
+                  <Detail label="日付" value={String(dailyRestock.state.date_key??"—")} />
+                  <Detail label="状態" value={String(dailyRestock.state.status??"—")} />
+                  <Detail label="最終処理" value={String(dailyRestock.state.last_action??"—")} />
+                  <Detail label="No shadow ban 入荷数" value={num(dailyRestock.state.added_no_shadowban??0,0)} />
+                  <Detail label="Top Search 入荷数" value={num(dailyRestock.state.added_top_search??0,0)} />
+                  <Detail
+                    label="通知"
+                    value={
+                      dailyRestock.state.notification_skipped_reason==="NO_STOCK_ADDED"
+                        ?"追加なし・通知なし"
+                        :dailyRestock.state.notification_skipped_reason==="NO_NOTIFICATION_CHANNEL"
+                          ?"通知先なし"
+                          :dailyRestock.state.notified_at
+                            ?"送信済み"
+                            :"未送信"
+                    }
+                  />
+                </div>
+              ):<div className="shiire-empty">まだ18:00入荷の実行履歴はありません。</div>}
+            </section>
+          </>:<div className="shiire-empty">18:00入荷設定を読み込んでいます。</div>}
+        </>
+      )}
+
+      {section==="invite"&&(
+        <>
+          {detailBusy&&!inviteCampaign&&<div className="progress"><span /></div>}
+          {inviteCampaign?<>
+            {!inviteCampaign.currentGuildSelected&&inviteCampaign.settings.guild_id&&(
+              <section className="card shiire-callout warn">
+                <strong>現在の招待キャンペーンは別サーバーに設定されています</strong>
+                <span>
+                  この画面で保存すると、招待キャンペーンの対象を現在選択中のサーバーへ切り替えます。
+                </span>
+              </section>
+            )}
+            <section className="shiire-kpi-grid">
+              <article className="card shiire-kpi accent">
+                <span>キャンペーン在庫</span>
+                <strong>{num(inviteCampaign.stock.available,0)} / {num(inviteCampaign.stock.target,0)}</strong>
+                <small>不足 {num(inviteCampaign.stock.deficit,0)}個</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>招待条件</span>
+                <strong>{num(inviteCampaign.settings.invites_per_reward,0)}人 / 1垢</strong>
+                <small>Discord標準招待URL</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>未解決報酬</span>
+                <strong>{num(inviteCampaign.unresolvedRewards,0)}</strong>
+                <small>待機 / 再試行対象を含む</small>
+              </article>
+              <article className="card shiire-kpi">
+                <span>Gateway</span>
+                <strong>{inviteCampaign.runtime.gateway_ready_at?"接続済み":"未接続"}</strong>
+                <small>{when(inviteCampaign.runtime.gateway_ready_at)}</small>
+              </article>
+            </section>
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">INVITE CAMPAIGN</span>
+                  <h2>招待キャンペーン設定</h2>
+                  <p>
+                    ユーザーはDiscord標準の招待URLを使います。設定人数ごとにキャンペーン専用在庫から1垢をDM配布します。
+                  </p>
+                </div>
+                <div className="shiire-control-buttons">
+                  <button className="primary" disabled={controlBusy} onClick={()=>void saveInviteCampaign()}>
+                    設定を保存
+                  </button>
+                  <button className="secondary" disabled={controlBusy} onClick={()=>void seedInviteCampaign()}>
+                    招待状態を再同期
+                  </button>
+                </div>
+              </div>
+
+              <label className="shiire-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={inviteCampaign.settings.enabled}
+                  onChange={event=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,enabled:event.target.checked}
+                  })}
+                />
+                <span>
+                  <strong>招待キャンペーンを有効にする</strong>
+                  <small>現在選択中のDiscordサーバーを対象にします。</small>
+                </span>
+              </label>
+
+              <div className="form-grid two">
+                <FundingInput
+                  label="何人招待ごとに1垢"
+                  value={inviteCampaign.settings.invites_per_reward}
+                  step={1}
+                  onChange={value=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,invites_per_reward:value}
+                  })}
+                />
+                <FundingInput
+                  label="招待キャンペーン恒常在庫"
+                  value={inviteCampaign.settings.target_stock}
+                  step={1}
+                  onChange={value=>setInviteCampaign({
+                    ...inviteCampaign,
+                    settings:{...inviteCampaign.settings,target_stock:value}
+                  })}
+                />
+              </div>
+            </section>
+
+            <section className="two-col">
+              <article className="card">
+                <span className="eyebrow">INVITE PROGRESS</span>
+                <h2>招待実績</h2>
+                {(inviteCampaign.progress??[]).length===0
+                  ?<div className="shiire-empty">まだ招待実績はありません。</div>
+                  :(inviteCampaign.progress??[]).slice(0,40).map((row:any)=>(
+                    <div className="shiire-event" key={row.inviter_user_id}>
+                      <strong>{row.inviter_user_id}</strong>
+                      <span>
+                        有効 {num(row.valid_invites,0)}人 / 対象外 {num(row.excluded_invites,0)}人 /
+                        報酬 {num(row.rewards_earned,0)}
+                      </span>
+                    </div>
+                  ))
+                }
+              </article>
+              <article className="card">
+                <span className="eyebrow">REWARDS</span>
+                <h2>報酬履歴</h2>
+                {(inviteCampaign.rewards??[]).length===0
+                  ?<div className="shiire-empty">まだ報酬履歴はありません。</div>
+                  :(inviteCampaign.rewards??[]).slice(0,40).map((row:any)=>{
+                    const retryable=["WAITING_STOCK","DM_FAILED","ERROR"].includes(String(row.status));
+                    return <div className="shiire-event" key={row.id}>
+                      <strong>{row.inviter_user_id} / #{num(row.ordinal,0)}</strong>
+                      <span>{String(row.status??"—")}{row.error?" / "+String(row.error):""}</span>
+                      {retryable&&(
+                        <button
+                          className="secondary"
+                          disabled={controlBusy}
+                          onClick={()=>void retryInviteReward(String(row.id))}
+                        >
+                          配布を再試行
+                        </button>
+                      )}
+                    </div>;
+                  })
+                }
+              </article>
+            </section>
+          </>:<div className="shiire-empty">招待キャンペーン情報を読み込んでいます。</div>}
         </>
       )}
 
