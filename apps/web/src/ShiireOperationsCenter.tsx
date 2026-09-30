@@ -1019,7 +1019,7 @@ export default function ShiireOperationsCenter({
               <strong>{overview?.safety.fundingModeLabel??"—"}</strong>
               <small>
                 {manualFunding
-                  ?"HStora残高反映後、仕入れを自動再開"
+                  ?"入金は1分検知 / 通常在庫は18:00"
                   :binanceServerUnlocked
                     ?"Binanceサーバーロック解除済み"
                     :"Binanceサーバーロック中"}
@@ -1197,7 +1197,8 @@ export default function ShiireOperationsCenter({
                 <span className="eyebrow">LTC FUNDING MODE</span>
                 <h2>LTC補充方法</h2>
                 <p>
-                  今はHStora Main WalletへLTCを手動補充し、入金反映後から仕入れ・納品を自動化できます。
+                  HStora Main Walletへの入金反映は1分ごとに検知して仕入れ予算へ配分します。
+                  No shadow ban / Top Searchの通常在庫は毎日18:00に差分入荷し、招待キャンペーン在庫は随時補充します。
                   Binance自動購入はサーバー側ロック解除後だけ選択できます。
                 </p>
               </div>
@@ -1222,7 +1223,7 @@ export default function ShiireOperationsCenter({
               <strong>{overview?.safety.fundingModeLabel??"読込中"}</strong>
               <span>
                 {manualFunding
-                  ?"HStora WalletでLTCを補充してください。残高反映後は1分Cronで自動仕入れへ戻ります。"
+                  ?"HStora WalletでLTCを補充してください。残高増加は1分Cronで検知・予算配分し、通常在庫は18:00に差分入荷します。"
                   :binanceServerUnlocked
                     ?"Binance自動購入のサーバー側ロックは解除済みです。"
                     :"BINANCE_AUTO_FUNDING_ENABLEDがOFFのため実購入はできません。"}
@@ -1239,11 +1240,83 @@ export default function ShiireOperationsCenter({
               </article>
               <article className="card shiire-kpi">
                 <span>補充後</span>
-                <strong>{overview?.safety.autoProcurementEnabled?"自動再開":"仕入れOFF"}</strong>
-                <small>残高反映後の仕入れ・納品はBOTが処理</small>
+                <strong>{overview?.safety.autoProcurementEnabled?"18:00自動入荷":"仕入れOFF"}</strong>
+                <small>入金反映→予算配分は1分ごと / 通常在庫は18:00</small>
               </article>
             </section>
           )}
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">PROCUREMENT BUDGET</span>
+                <h2>仕入れ資金の配分</h2>
+                <p>
+                  HStora残高を、招待用 / No shadow ban / Top Searchへ分けます。
+                  3項目の合計は100%。0%のカテゴリはその予算から自動仕入れしません。
+                </p>
+              </div>
+              <span className="shiire-muted">
+                合計 {usd(procurementBudget?.budget?.totalAvailableUsd)}
+              </span>
+            </div>
+            {procurementBudget?<>
+              <div className="shiire-kpi-grid">
+                <article className="card shiire-kpi">
+                  <span>招待用 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.INVITE_CAMPAIGN)}</strong>
+                  <small>{procurementBudget.percentages.INVITE_CAMPAIGN}%</small>
+                </article>
+                <article className="card shiire-kpi">
+                  <span>No shadow ban 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.NO_SHADOWBAN)}</strong>
+                  <small>{procurementBudget.percentages.NO_SHADOWBAN}%</small>
+                </article>
+                <article className="card shiire-kpi">
+                  <span>Top Search 予算残</span>
+                  <strong>{usd(procurementBudget.budget.available.TOP_SEARCH)}</strong>
+                  <small>{procurementBudget.percentages.TOP_SEARCH}%</small>
+                </article>
+              </div>
+              <div className="form-grid three">
+                <FundingInput
+                  label="招待用 %"
+                  value={procurementBudget.percentages.INVITE_CAMPAIGN}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,INVITE_CAMPAIGN:value}
+                  })}
+                />
+                <FundingInput
+                  label="No shadow ban %"
+                  value={procurementBudget.percentages.NO_SHADOWBAN}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,NO_SHADOWBAN:value}
+                  })}
+                />
+                <FundingInput
+                  label="Top Search %"
+                  value={procurementBudget.percentages.TOP_SEARCH}
+                  step={1}
+                  onChange={value=>setProcurementBudget({
+                    ...procurementBudget,
+                    percentages:{...procurementBudget.percentages,TOP_SEARCH:value}
+                  })}
+                />
+              </div>
+              <div className="shiire-control-buttons">
+                <button className="primary" disabled={controlBusy} onClick={()=>void saveProcurementBudget()}>
+                  割合を保存して現在残高へ適用
+                </button>
+                <button className="secondary" disabled={controlBusy} onClick={()=>void rebalanceProcurementBudget()}>
+                  保存済み割合で再配分
+                </button>
+              </div>
+            </>:<div className="shiire-empty">仕入れ予算を読み込んでいます。</div>}
+          </section>
 
           {!manualFunding&&detailBusy&&!binance&&<div className="progress"><span /></div>}
           {!manualFunding&&(
@@ -1341,8 +1414,17 @@ export default function ShiireOperationsCenter({
                 disabled={controlBusy||!fundingControls}
                 onClick={()=>void saveFundingControls()}
               >
-                資金上限を保存
+                資金・安全設定を保存
               </button>
+              {!manualFunding&&(
+                <button
+                  className="secondary"
+                  disabled={controlBusy}
+                  onClick={()=>void runLtcNow()}
+                >
+                  今すぐLTC購入判定
+                </button>
+              )}
             </div>
             {fundingControls&&(
               <div className="form-grid two">
@@ -1393,6 +1475,42 @@ export default function ShiireOperationsCenter({
                   value={fundingControls.max_ltc_balance}
                   step={0.00000001}
                   onChange={value=>setFundingControls({...fundingControls,max_ltc_balance:value})}
+                />
+                <FundingInput
+                  label="専用Wallet 目標LTC"
+                  value={fundingControls.wallet_target_ltc}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,wallet_target_ltc:value})}
+                />
+                <FundingInput
+                  label="専用Wallet 最大LTC"
+                  value={fundingControls.wallet_max_ltc}
+                  step={0.00000001}
+                  onChange={value=>setFundingControls({...fundingControls,wallet_max_ltc:value})}
+                />
+                <FundingInput
+                  label="PayPay観測の有効時間 (ms)"
+                  value={fundingControls.max_paypay_balance_age_ms}
+                  step={60000}
+                  onChange={value=>setFundingControls({...fundingControls,max_paypay_balance_age_ms:value})}
+                />
+                <FundingInput
+                  label="USD/JPY観測の有効時間 (ms)"
+                  value={fundingControls.max_fx_age_ms}
+                  step={60000}
+                  onChange={value=>setFundingControls({...fundingControls,max_fx_age_ms:value})}
+                />
+                <FundingInput
+                  label="USD/JPY急変停止 %"
+                  value={fundingControls.max_fx_jump_percent}
+                  step={0.1}
+                  onChange={value=>setFundingControls({...fundingControls,max_fx_jump_percent:value})}
+                />
+                <FundingInput
+                  label="LTC価格急変停止 %"
+                  value={fundingControls.max_ltc_price_jump_percent}
+                  step={0.1}
+                  onChange={value=>setFundingControls({...fundingControls,max_ltc_price_jump_percent:value})}
                 />
               </div>
               )}
