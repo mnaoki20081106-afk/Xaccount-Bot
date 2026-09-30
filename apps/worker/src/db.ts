@@ -101,6 +101,13 @@ CREATE TABLE IF NOT EXISTS audit_cursors (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS xutility_search_session (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  session_enc TEXT NOT NULL,
+  csrf_enc TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS bot_guild_cache (
   guild_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
