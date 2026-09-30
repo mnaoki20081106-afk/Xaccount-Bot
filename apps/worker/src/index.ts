@@ -86,7 +86,12 @@ import {
   handleShiireDashboardProxy,
   handleShiireServiceBridge
 } from "./shiire-bridge";
-import { postXUtilityPanel } from "./xutility-bridge";
+import {
+  clearXUtilitySearchCredential,
+  getXUtilitySearchCredentialStatus,
+  postXUtilityPanel,
+  saveXUtilitySearchCredential
+} from "./xutility-bridge";
 import {
   accountCreatedAt,
   corsHeaders,
@@ -2888,6 +2893,65 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       throw error;
     }
     return json(env,{ok:true,channelId});
+  }
+
+  const xUtilitySearchCredential=url.pathname.match(
+    /^\/api\/guilds\/(\d+)\/xutility\/search-credential$/
+  );
+  if(xUtilitySearchCredential){
+    const guildId=xUtilitySearchCredential[1]!;
+    await requireGuild(request,env,guildId);
+
+    try{
+      if(request.method==="GET"){
+        return json(env,await getXUtilitySearchCredentialStatus(env));
+      }
+
+      if(request.method==="PUT"){
+        const input=await bodyObject<{
+          session?:string;
+          csrf?:string;
+        }>(request);
+        const session=String(input.session??"").trim();
+        const csrf=String(input.csrf??"").trim();
+        if(!session||!csrf){
+          throw new HttpError(400,"auth_token と ct0 を両方入力してください");
+        }
+        if(session.length>2048||csrf.length>2048){
+          throw new HttpError(400,"入力値が長すぎます");
+        }
+        const saved=await saveXUtilitySearchCredential(env,{session,csrf});
+        return json(env,saved);
+      }
+
+      if(request.method==="DELETE"){
+        return json(env,await clearXUtilitySearchCredential(env));
+      }
+
+      throw new HttpError(405,"Method not allowed");
+    }catch(error){
+      if(error instanceof HttpError) throw error;
+      const message=error instanceof Error?error.message:String(error);
+      if(message.startsWith("XUTILITY_API_BASE_URL_NOT_CONFIGURED")){
+        throw new HttpError(
+          503,
+          "X-Utility Worker URLが未設定です"
+        );
+      }
+      if(message.startsWith("XUTILITY_BRIDGE_SECRET_NOT_CONFIGURED")){
+        throw new HttpError(
+          503,
+          "Xaccount-BotとX-Utilityの連携Secretを確認してください"
+        );
+      }
+      if(message.includes("INVALID_SEARCH_CREDENTIAL")){
+        throw new HttpError(400,"auth_token または ct0 の形式を確認してください");
+      }
+      throw new HttpError(
+        502,
+        "X-Utilityのログイン情報設定に失敗しました"
+      );
+    }
   }
 
   const xUtilityPanel=url.pathname.match(

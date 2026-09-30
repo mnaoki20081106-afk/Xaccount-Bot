@@ -137,3 +137,93 @@ export async function postXUtilityPanel(
       typeof payload?.messageId === "string" ? payload.messageId : undefined
   };
 }
+
+
+export async function getXUtilitySearchCredentialStatus(
+  env: Env
+): Promise<{ configured: boolean; updatedAt: number | null }> {
+  const response = await signedFetch(
+    env,
+    "/bridge/main/search-credential",
+    { method: "GET" }
+  );
+  const text = await response.text();
+  let payload: any = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    throw new Error(
+      String(payload?.error ?? "XUTILITY_BRIDGE_ERROR") +
+        " (HTTP " +
+        response.status +
+        ")"
+    );
+  }
+  return {
+    configured: Boolean(payload?.configured),
+    updatedAt:
+      typeof payload?.updatedAt === "number" ? payload.updatedAt : null
+  };
+}
+
+export async function saveXUtilitySearchCredential(
+  env: Env,
+  input: { session: string; csrf: string }
+): Promise<{ configured: true; updatedAt: number }> {
+  const response = await signedFetch(
+    env,
+    "/bridge/main/search-credential",
+    {
+      method: "PUT",
+      body: JSON.stringify(input)
+    }
+  );
+  const text = await response.text();
+  let payload: any = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    throw new Error(
+      String(payload?.error ?? "XUTILITY_BRIDGE_ERROR") +
+        " (HTTP " +
+        response.status +
+        ")"
+    );
+  }
+  return {
+    configured: true,
+    updatedAt: Number(payload?.updatedAt ?? Date.now())
+  };
+}
+
+export async function clearXUtilitySearchCredential(
+  env: Env
+): Promise<{ configured: false; updatedAt: null }> {
+  const response = await signedFetch(
+    env,
+    "/bridge/main/search-credential",
+    { method: "DELETE" }
+  );
+  const text = await response.text();
+  let payload: any = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    throw new Error(
+      String(payload?.error ?? "XUTILITY_BRIDGE_ERROR") +
+        " (HTTP " +
+        response.status +
+        ")"
+    );
+  }
+  return { configured: false, updatedAt: null };
+}
