@@ -594,6 +594,250 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  async function saveProcurementBudget(){
+    if(!procurementBudget) return;
+    const inviteCampaignPercent=Number(procurementBudget.percentages.INVITE_CAMPAIGN);
+    const noShadowbanPercent=Number(procurementBudget.percentages.NO_SHADOWBAN);
+    const topSearchPercent=Number(procurementBudget.percentages.TOP_SEARCH);
+    const values=[inviteCampaignPercent,noShadowbanPercent,topSearchPercent];
+    if(values.some(value=>!Number.isInteger(value)||value<0||value>100)){
+      onError(new Error("仕入れ割合は0〜100の整数で入力してください"));
+      return;
+    }
+    if(values.reduce((sum,value)=>sum+value,0)!==100){
+      onError(new Error("招待用・No shadow ban・Top Searchの合計を100%にしてください"));
+      return;
+    }
+    setControlBusy(true);
+    try{
+      const next=await api<ProcurementBudgetDetail>(
+        `/api/guilds/${guildId}/shiire/procurement-budget`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            inviteCampaignPercent,
+            noShadowbanPercent,
+            topSearchPercent
+          })
+        },
+        25_000
+      );
+      setProcurementBudget(next);
+      onNotice("仕入れ資金の配分を保存し、現在のHStora残高へ適用しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function rebalanceProcurementBudget(){
+    if(!confirm("現在のHStora残高を、保存済みの仕入れ割合で再配分しますか？")) return;
+    setControlBusy(true);
+    try{
+      const next=await api<ProcurementBudgetDetail>(
+        `/api/guilds/${guildId}/shiire/procurement-budget/rebalance`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setProcurementBudget(next);
+      onNotice("現在のHStora残高で仕入れ予算を再配分しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveProcurementControls(){
+    if(!procurementControls) return;
+    if(procurementControls.target_stock<procurementControls.reorder_point){
+      onError(new Error("Top Searchの恒常目標は発注点以上にしてください"));
+      return;
+    }
+    if(procurementControls.no_shadowban_target_stock<procurementControls.no_shadowban_reorder_point){
+      onError(new Error("No shadow banの恒常目標は発注点以上にしてください"));
+      return;
+    }
+    setControlBusy(true);
+    try{
+      const result=await api<{settings:ProcurementControls}>(
+        `/api/guilds/${guildId}/shiire/procurement-settings`,
+        {method:"PATCH",body:JSON.stringify(procurementControls)},
+        20_000
+      );
+      applyProcurementControls(result.settings);
+      onNotice("仕入れ条件を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runProcurementNow(){
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("仕入れ判定を実行しました: "+String(result?.action??"完了"));
+      await loadOverview(false);
+      if(section==="procurement") await loadDetail("procurement");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runLtcNow(){
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/funding/auto-purchase/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("LTC購入判定を実行しました: "+String(result?.action??"完了"));
+      await loadOverview(false);
+      if(section==="funding") await loadDetail("funding");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveDailyRestock(){
+    if(!dailyRestock) return;
+    const config=dailyRestock.config;
+    setControlBusy(true);
+    try{
+      const next=await api<DailyRestockDetail>(
+        `/api/guilds/${guildId}/shiire/daily-restock/settings`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            enabled:config.enabled,
+            topSearchTargetStock:Number(config.top_search_target_stock),
+            noShadowbanTargetStock:Number(config.no_shadowban_target_stock),
+            notificationChannelId:String(config.notification_channel_id??""),
+            notificationMessage:String(config.notification_message??"")
+          })
+        },
+        20_000
+      );
+      setDailyRestock(next);
+      onNotice("18:00入荷・在庫通知設定を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function installDailyRestockPanelNow(){
+    setControlBusy(true);
+    try{
+      const next=await api<DailyRestockDetail>(
+        `/api/guilds/${guildId}/shiire/daily-restock/panel`,
+        {method:"POST",body:"{}"},
+        20_000
+      );
+      setDailyRestock(next);
+      onNotice("在庫入荷通知パネルを設置 / 更新しました");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function runDailyRestockNow(){
+    if(!confirm("18:00を待たず、現在在庫と恒常在庫の差分を今すぐ仕入れますか？")) return;
+    setControlBusy(true);
+    try{
+      const result=await api<any>(
+        `/api/guilds/${guildId}/shiire/daily-restock/run`,
+        {method:"POST",body:"{}"},
+        30_000
+      );
+      onNotice("差分入荷を実行しました: "+String(result?.action??"完了"));
+      await Promise.all([loadOverview(false),loadDetail("restock")]);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function saveInviteCampaign(){
+    if(!inviteCampaign) return;
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/settings`,
+        {
+          method:"POST",
+          body:JSON.stringify({
+            enabled:inviteCampaign.settings.enabled,
+            invitesPerReward:Number(inviteCampaign.settings.invites_per_reward),
+            targetStock:Number(inviteCampaign.settings.target_stock)
+          })
+        },
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("招待キャンペーン設定を保存しました");
+      await loadOverview(false);
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function seedInviteCampaign(){
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/seed`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("Discord招待状態を再同期しました");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
+  async function retryInviteReward(id:string){
+    setControlBusy(true);
+    try{
+      const next=await api<InviteCampaignDetail>(
+        `/api/guilds/${guildId}/shiire/invite-campaign/rewards/${encodeURIComponent(id)}/retry`,
+        {method:"POST",body:"{}"},
+        25_000
+      );
+      setInviteCampaign(next);
+      onNotice("招待報酬の配布を再試行しました");
+    }catch(reason){
+      onError(reason);
+    }finally{
+      setControlBusy(false);
+    }
+  }
+
   async function updateAutomation(
     patch:{
       dry_run?:boolean;
