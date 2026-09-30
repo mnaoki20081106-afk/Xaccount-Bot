@@ -56,3 +56,13 @@ test("legacy vending screen no longer owns a second procurement settings form",(
   assert.doesNotMatch(vendingSource,/async function saveProcurementSettings/);
   assert.match(vendingSource,/仕入れ条件は「仕入れ」タブへ統合しました/);
 });
+
+
+test("vending editor presets the requested sales names descriptions and prices",()=>{
+  assert.match(vendingSource,/Search Top \+ No shadow ban/);
+  assert.match(vendingSource,/検索上位に載るシャドバンされてない垢です。/);
+  assert.match(vendingSource,/price:350/);
+  assert.match(vendingSource,/【old】Search Top \+ No shadow ban/);
+  assert.match(vendingSource,/検索上位にのるシャドバンされていないOld垢です。より運用向きです！/);
+  assert.match(vendingSource,/price:500/);
+});
