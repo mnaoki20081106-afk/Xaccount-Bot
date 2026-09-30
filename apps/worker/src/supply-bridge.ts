@@ -102,84 +102,6 @@ function bridgeError(env:Env,error:unknown):Response{
   return json(env,{error:code},status);
 }
 
-async function reserveNewFingerprints(
-  env:Env,
-  productId:string,
-  items:string[]
-):Promise<Array<{content:string;hash:string}>>{
-  const unique=[...new Set(items.map(item=>item.trim()).filter(Boolean))];
-  const rows=await Promise.all(unique.map(async content=>({
-    content,
-    hash:await sha256Hex(content)
-  })));
-
-  // Also reject content that already exists in vending_stock, including
-  // manually-added or previously sold rows, before reserving fingerprints.
-  const existingContents=new Set<string>();
-  for(let i=0;i<rows.length;i+=40){
-    const chunk=rows.slice(i,i+40);
-    if(chunk.length===0) continue;
-    const placeholders=chunk.map(()=>"?").join(",");
-    const found=(await env.DB.prepare(
-      "SELECT content FROM vending_stock WHERE product_id=? AND content IN ("+placeholders+")"
-    ).bind(productId,...chunk.map(row=>row.content)).all<{content:string}>()).results;
-    for(const row of found) existingContents.add(row.content);
-  }
-
-  const freshRows=rows.filter(row=>!existingContents.has(row.content));
-  const accepted:Array<{content:string;hash:string}>=[];
-  const now=Date.now();
-  for(let i=0;i<freshRows.length;i+=50){
-    const chunk=freshRows.slice(i,i+50);
-    const results=await env.DB.batch(chunk.map(row=>
-      env.DB.prepare(
-        "INSERT OR IGNORE INTO vending_supply_fingerprints(product_id,content_hash,created_at) VALUES (?,?,?)"
-      ).bind(productId,row.hash,now)
-    ));
-    results.forEach((result,index)=>{
-      if((result.meta.changes??0)>0) accepted.push(chunk[index]!);
-    });
-  }
-  return accepted;
-}
-
-async function rollbackFingerprints(
-  env:Env,
-  productId:string,
-  rows:Array<{hash:string}>
-){
-  for(let i=0;i<rows.length;i+=50){
-    await env.DB.batch(rows.slice(i,i+50).map(row=>
-      env.DB.prepare(
-        "DELETE FROM vending_supply_fingerprints WHERE product_id=? AND content_hash=?"
-      ).bind(productId,row.hash)
-    ));
-  }
-}
-
-async function insertStock(
-  env:Env,
-  productId:string,
-  rows:Array<{content:string;hash:string}>
-):Promise<number>{
-  if(rows.length===0) return 0;
-  const now=Date.now();
-  try{
-    for(let i=0;i<rows.length;i+=50){
-      const chunk=rows.slice(i,i+50);
-      await env.DB.batch(chunk.map(row=>
-        env.DB.prepare(
-          "INSERT INTO vending_stock(id,product_id,content,state,created_at) VALUES (?,?,?,'available',?)"
-        ).bind(randomId(),productId,row.content,now)
-      ));
-    }
-    return rows.length;
-  }catch(error){
-    await rollbackFingerprints(env,productId,rows).catch(()=>undefined);
-    throw error;
-  }
-}
-
 export async function handleSupplyBridge(
   request:Request,
   env:Env,
@@ -269,15 +191,16 @@ export async function handleSupplyBridge(
 
       const normalized=[...new Set(items)];
       const payloadHash=await sha256Hex(
-        productId+"\n"+normalized.join("\n")
+        JSON.stringify([productId,normalized])
       );
+      const legacyPayloadHash=await sha256Hex(productId+"\n"+normalized.join("\n"));
       const existing=await env.DB.prepare(
         "SELECT product_id,payload_hash,added_count FROM vending_supply_receipts WHERE idempotency_key=?"
       ).bind(idempotencyKey).first<{
         product_id:string;payload_hash:string;added_count:number;
       }>();
       if(existing){
-        if(existing.product_id!==productId||existing.payload_hash!==payloadHash){
+        if(existing.product_id!==productId||(existing.payload_hash!==payloadHash&&existing.payload_hash!==legacyPayloadHash)){
           return json(env,{error:"idempotency_conflict"},409);
         }
         return json(env,{
@@ -288,25 +211,41 @@ export async function handleSupplyBridge(
         });
       }
 
-      const accepted=await reserveNewFingerprints(env,productId,normalized);
-      const added=await insertStock(env,productId,accepted);
+      const rows=await Promise.all(normalized.map(async content=>({
+        id:randomId(),content,hash:await sha256Hex(content)
+      })));
+      const packed=JSON.stringify(rows);
+      const now=Date.now();
+      let added=0;
       try{
-        await env.DB.prepare(
-          "INSERT INTO vending_supply_receipts(idempotency_key,product_id,payload_hash,added_count,created_at) VALUES (?,?,?,?,?)"
-        ).bind(idempotencyKey,productId,payloadHash,added,Date.now()).run();
+        // A single D1 transaction owns the receipt, stock and fingerprints.
+        // A duplicate receipt aborts the entire batch before any stock is added.
+        const results=await env.DB.batch([
+          env.DB.prepare("INSERT INTO vending_supply_receipts(idempotency_key,product_id,payload_hash,added_count,created_at) VALUES (?,?,?,0,?)")
+            .bind(idempotencyKey,productId,payloadHash,now),
+          env.DB.prepare(`INSERT INTO vending_stock(id,product_id,content,state,created_at)
+            SELECT json_extract(j.value,'$.id'),?,json_extract(j.value,'$.content'),'available',?
+            FROM json_each(?) j
+            WHERE NOT EXISTS (SELECT 1 FROM vending_supply_fingerprints f WHERE f.product_id=? AND f.content_hash=json_extract(j.value,'$.hash'))
+              AND NOT EXISTS (SELECT 1 FROM vending_stock s WHERE s.product_id=? AND s.content=json_extract(j.value,'$.content'))`)
+            .bind(productId,now,packed,productId,productId),
+          env.DB.prepare("UPDATE vending_supply_receipts SET added_count=changes() WHERE idempotency_key=?")
+            .bind(idempotencyKey),
+          env.DB.prepare("INSERT OR IGNORE INTO vending_supply_fingerprints(product_id,content_hash,created_at) SELECT ?,json_extract(value,'$.hash'),? FROM json_each(?)")
+            .bind(productId,now,packed)
+        ]);
+        added=Number(results[1]?.meta.changes??0);
       }catch(error){
         const race=await env.DB.prepare(
           "SELECT product_id,payload_hash,added_count FROM vending_supply_receipts WHERE idempotency_key=?"
         ).bind(idempotencyKey).first<{
           product_id:string;payload_hash:string;added_count:number;
         }>();
-        if(race&&race.product_id===productId&&race.payload_hash===payloadHash){
-          return json(env,{
-            ok:true,
-            productId,
-            added:race.added_count,
-            duplicateRequest:true
-          });
+        if(race){
+          if(race.product_id!==productId||race.payload_hash!==payloadHash){
+            return json(env,{error:"idempotency_conflict"},409);
+          }
+          return json(env,{ok:true,productId,added:race.added_count,duplicateRequest:true});
         }
         throw error;
       }

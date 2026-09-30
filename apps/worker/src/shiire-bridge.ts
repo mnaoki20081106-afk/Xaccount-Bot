@@ -418,6 +418,20 @@ export async function handleShiireServiceBridge(
         return json(env,{ok:true,status:"completed",duplicate:true,...response});
       }
       const wasPending=receipt?.status==="PENDING";
+      // A previous request may have accepted money before losing its response.
+      // Do not turn an unavailable/consumed link into a rejected order.
+      let previousResult:any={};
+      try{previousResult=JSON.parse(receipt?.response_json??"{}");}catch{}
+      const retryLogin=wasPending&&previousResult.status==="LOGIN_REQUIRED";
+      if(wasPending&&!retryLogin){
+        return json(env,{ok:false,status:"pending",reason:"PAYMENT_RESULT_REQUIRES_RECONCILIATION"},202);
+      }
+      const claim=await env.DB.prepare(
+        "UPDATE shiire_payment_receipts SET status='PENDING',response_json='{\"stage\":\"ACCEPT_CLAIMED\"}',updated_at=? WHERE idempotency_key=? AND status=? AND response_json=?"
+      ).bind(Date.now(),idempotencyKey,receipt.status,receipt.response_json).run();
+      if((claim.meta.changes??0)!==1){
+        return json(env,{ok:false,status:"pending"},202);
+      }
 
       if(method==="paypay"){
         const account=await getPayPay(env,OWNER_ID,env.SESSION_ENCRYPTION_KEY);
@@ -441,17 +455,15 @@ export async function handleShiireServiceBridge(
               required:amount
             },409);
           }
-          await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:linkAmount});
-          await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
-            console.error("shiire paypay completed-link audit write failed",idempotencyKey,error)
-          );
-          return json(env,{ok:true,status:"completed",amount:linkAmount});
+          // The public link may have been accepted by a different recipient.
+          return json(env,{ok:false,status:"pending",amount:linkAmount,
+            reason:"PAYPAY_RECIPIENT_UNVERIFIED"},202);
         }
         await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
           stage:"PAYPAY_ACCEPT_SUBMITTED",
           amount:linkAmount
         });
-        const result=await acceptPayPayLink(link,account);
+        const result=await acceptPayPayLink(link,account,amount);
         if(result.ok){
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:result.amount});
           await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
@@ -491,7 +503,7 @@ export async function handleShiireServiceBridge(
         stage:"KYASH_RECEIVE_SUBMITTED",
         amount:kyashInfo.amount
       });
-      const result=await receiveKyashLink(link,account);
+      const result=await receiveKyashLink(link,account,amount);
       if(result.ok){
         await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",result);
         await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
@@ -499,7 +511,7 @@ export async function handleShiireServiceBridge(
         );
         return json(env,{ok:true,status:"completed",amount:result.amount});
       }
-      if(wasPending){
+      if(wasPending||result.pending){
         await finishPaymentReceipt(env,idempotencyKey,"PENDING",{
           ...result,
           reason:"AMBIGUOUS_PREVIOUS_KYASH_RECEIVE"

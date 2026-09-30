@@ -133,11 +133,12 @@ export async function ensureVendingSchema(env:Env){
 
 export async function cleanVendingExpired(env:Env){
   const now=Date.now();
-  const rows=(await env.DB.prepare("SELECT id FROM vending_orders WHERE status='awaiting_payment' AND reserved_until IS NOT NULL AND reserved_until<? LIMIT 50").bind(now).all<{id:string}>()).results;
-  for(const row of rows){
-    await releaseStock(env,row.id);
-    await env.DB.prepare("UPDATE vending_orders SET status='expired',updated_at=? WHERE id=? AND status='awaiting_payment'").bind(now,row.id).run();
-  }
+  // Expiration and stock release must commit together. Payment attachment wins
+  // if it changed the order to payment_pending before this transaction.
+  await env.DB.batch([
+    env.DB.prepare("UPDATE vending_orders SET status='expired',updated_at=? WHERE id IN (SELECT id FROM vending_orders WHERE status='awaiting_payment' AND reserved_until IS NOT NULL AND reserved_until<? LIMIT 50) AND status='awaiting_payment'").bind(now,now),
+    env.DB.prepare("UPDATE vending_stock SET state='available',order_id=NULL,reserved_until=NULL WHERE state='reserved' AND order_id IN (SELECT id FROM vending_orders WHERE status='expired')")
+  ]);
   // Do not automatically reset stale delivering orders to paid. A Discord DM
   // may already have been accepted while a following D1 write failed; an
   // automatic reset could resend sensitive delivery content.
