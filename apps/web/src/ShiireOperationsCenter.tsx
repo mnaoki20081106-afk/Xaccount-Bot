@@ -5,7 +5,7 @@ import "./shiire-operations.css";
 
 type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
-type Section="overview"|"funding"|"procurement"|"restock"|"invite"|"inventory"|"vending"|"logs";
+type Section="overview"|"budget"|"funding"|"procurement"|"restock"|"invite"|"inventory"|"vending"|"logs";
 type Settled<T>={ok:true;data:T}|{ok:false;error:string};
 
 type Overview={
@@ -150,14 +150,21 @@ type InviteCampaignDetail={
   currentGuildSelected:boolean;
 };
 
+const budgetCategories=[
+  {key:"NO_SHADOWBAN",label:"No shadow ban",tone:"shadow"},
+  {key:"TOP_SEARCH",label:"Top Search",tone:"top"},
+  {key:"INVITE_CAMPAIGN",label:"招待キャンペーン",tone:"invite"}
+] as const;
+
 const sections:Array<{id:Section;label:string;hint:string}>=[
   {id:"overview",label:"概要",hint:"今の状態"},
-  {id:"funding",label:"資金・LTC",hint:"残高と送金"},
+  {id:"budget",label:"残高・配分",hint:"3枠の仕入れ予算"},
+  {id:"funding",label:"運転設定",hint:"補充方法と自動運転"},
   {id:"procurement",label:"仕入れ",hint:"条件と注文"},
   {id:"restock",label:"18:00入荷",hint:"恒常在庫と通知"},
   {id:"invite",label:"招待",hint:"キャンペーン"},
   {id:"inventory",label:"在庫",hint:"カテゴリ別"},
-  {id:"vending",label:"自販機・設定",hint:"設置と通知"},
+  {id:"vending",label:"自販機",hint:"設置と通知"},
   {id:"logs",label:"ログ・障害",hint:"監査とBreaker"}
 ];
 
@@ -233,7 +240,6 @@ export default function ShiireOperationsCenter({
   const ltc=settledData(overview?.balances.binanceLtc);
   const jpy=settledData(overview?.balances.binanceJpy);
   const hstoraBalance=settledData(overview?.balances.hstora);
-  const market=settledData(overview?.market);
   const topReady=classReady(overview,"TOP_SEARCH");
   const topReserved=classReserved(overview,"TOP_SEARCH");
   const shadowReady=classReady(overview,"NO_SHADOWBAN");
@@ -364,26 +370,18 @@ export default function ShiireOperationsCenter({
     if(target==="overview"||target==="vending") return;
     setDetailBusy(true);
     try{
-      if(target==="funding"){
-        const budgetPromise=api<ProcurementBudgetDetail>(
-          `/api/guilds/${guildId}/shiire/procurement-budget`,
-          {},
-          20_000
-        );
+      if(target==="budget"){
+        setProcurementBudget(null);
+        setProcurementBudget(await api<ProcurementBudgetDetail>(
+          `/api/guilds/${guildId}/shiire/procurement-budget`, {}, 20_000
+        ));
+      }else if(target==="funding"){
         if(overview?.safety.fundingMode==="manual_hstora"){
           setBinance(null);
-          setProcurementBudget(await budgetPromise);
         }else{
-          const [data,budget]=await Promise.all([
-            api<BinanceDetail>(
-              `/api/guilds/${guildId}/shiire/operations/binance`,
-              {},
-              25_000
-            ),
-            budgetPromise
-          ]);
-          setBinance(data);
-          setProcurementBudget(budget);
+          setBinance(await api<BinanceDetail>(
+            `/api/guilds/${guildId}/shiire/operations/binance`, {}, 25_000
+          ));
         }
       }else if(target==="procurement"){
         const [nextOrders,nextHstora,nextSettings]=await Promise.all([
@@ -953,6 +951,9 @@ export default function ShiireOperationsCenter({
     }
   }
 
+  const budgetValues=procurementBudget?Object.values(procurementBudget.percentages):[];
+  const budgetTotal=budgetValues.reduce((sum,value)=>sum+value,0);
+  const budgetValid=budgetValues.length===3&&budgetTotal===100&&budgetValues.every(value=>Number.isInteger(value)&&value>=0&&value<=100);
   const manualFunding=overview?.safety.fundingMode==="manual_hstora";
   const binanceServerUnlocked=Boolean(
     overview?.safety.binanceAutoFundingServerEnabled
@@ -977,9 +978,8 @@ export default function ShiireOperationsCenter({
       <section className="card shiire-hero">
         <div className="shiire-hero-main">
           <div>
-            <span className="eyebrow">DISCORD-SHIIRE OPERATIONS</span>
             <div className="shiire-title-row">
-              <h2>仕入れbot 運用センター</h2>
+              <h2>仕入れ管理</h2>
               <span className={`shiire-health ${overallState.tone}`}>
                 <i />{overallState.label}
               </span>
@@ -992,10 +992,10 @@ export default function ShiireOperationsCenter({
               onClick={()=>void setEmergencyStop(!overview?.safety.emergencyStop)}
               disabled={busy||detailBusy||controlBusy||!overview}
             >
-              {overview?.safety.emergencyStop?"停止解除":"EMERGENCY STOP"}
+              {overview?.safety.emergencyStop?"停止解除":"緊急停止"}
             </button>
             <button className="secondary" onClick={()=>void refresh()} disabled={busy||detailBusy||controlBusy}>
-              {busy||detailBusy||controlBusy?"更新中…":"すべて更新"}
+              {busy||detailBusy||controlBusy?"更新中…":"更新"}
             </button>
           </div>
         </div>
@@ -1018,10 +1018,11 @@ export default function ShiireOperationsCenter({
             type="button"
             key={item.id}
             className={section===item.id?"active":""}
+            aria-current={section===item.id?"page":undefined}
             onClick={()=>setSection(item.id)}
           >
             <strong>{item.label}</strong>
-            <small>{item.hint}</small>
+
           </button>
         ))}
       </nav>
@@ -1032,178 +1033,88 @@ export default function ShiireOperationsCenter({
         <>
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi">
-              <span>LTC補充方法</span>
-              <strong>{overview?.safety.fundingModeLabel??"—"}</strong>
-              <small>
-                {manualFunding
-                  ?"入金は1分検知 / 通常在庫は18:00"
-                  :binanceServerUnlocked
-                    ?"Binanceサーバーロック解除済み"
-                    :"Binanceサーバーロック中"}
-              </small>
-            </article>
-            {!manualFunding&&(
-              <>
-                <article className="card shiire-kpi">
-                  <span>LTC購入上限</span>
-                  <strong>{yen(payPayAllowed)}</strong>
-                  <small>
-                    新規PayPay資金 {yen(funding?.paypayFunding?.spendableJpy)}
-                    {funding?.observedPayPay?.fresh?" / 観測有効":" / PayPay観測要更新"}
-                  </small>
-                </article>
-                <article className="card shiire-kpi">
-                  <span>BINANCE LTC</span>
-                  <strong>{num(Number(ltc?.free??0)+Number(ltc?.locked??0),8)} LTC</strong>
-                  <small>Free {num(ltc?.free,8)} / Locked {num(ltc?.locked,8)}</small>
-                </article>
-              </>
-            )}
-            <article className="card shiire-kpi">
-              <span>HSTORA 残高</span>
+              <span>仕入れに使える残高</span>
               <strong>{usd(hstoraBalance?.balance)}</strong>
-              <small>Pending {usd(hstoraBalance?.pending_balance)}</small>
-            </article>
-            {!manualFunding&&(
-              <article className="card shiire-kpi">
-                <span>LTC / JPY</span>
-                <strong>{yen(market?.priceJpy)}</strong>
-                <small>公式市場データ</small>
-              </article>
-            )}
-            <article className="card shiire-kpi accent">
-              <span>TOP_SEARCH 在庫</span>
-              <strong>{topReady}</strong>
-              <small>予約中 {topReserved} / 恒常 {num(dailyRestock?.config.top_search_target_stock??topPolicy.target,0)}</small>
+              <button className="secondary" onClick={()=>setSection("budget")}>配分を設定</button>
             </article>
             <article className="card shiire-kpi accent">
-              <span>NO_SHADOWBAN 在庫</span>
-              <strong>{shadowReady}</strong>
-              <small>予約中 {shadowReserved} / 恒常 {num(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target,0)}</small>
+              <span>No shadow ban 在庫</span><strong>{overview?shadowReady:"—"}</strong>
+              <small>予約中 {shadowReserved} / 目標 {num(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target,0)}</small>
             </article>
-            <article className="card shiire-kpi">
-              <span>本日の仕入れ</span>
-              <strong>{num(overview?.today.count,0)}件</strong>
-              <small>{overview?.today.approximateJpy==null?usd(overview?.today.amount):yen(overview?.today.approximateJpy)}</small>
+            <article className="card shiire-kpi accent">
+              <span>Top Search 在庫</span><strong>{overview?topReady:"—"}</strong>
+              <small>予約中 {topReserved} / 目標 {num(dailyRestock?.config.top_search_target_stock??topPolicy.target,0)}</small>
             </article>
-            <article className={`card shiire-kpi ${blockers?"danger-card":""}`}>
-              <span>障害・要確認</span>
-              <strong>{blockers}</strong>
-              <small>Breaker {overview?.circuitBreakers.length??0} / Error {overview?.recentErrors.length??0}</small>
+            <article className="card shiire-kpi accent">
+              <span>招待キャンペーン 在庫</span><strong>{overview?classReady(overview,"INVITE_CAMPAIGN"):"—"}</strong>
+              <small>招待特典用の在庫</small>
             </article>
           </section>
-
-          <section className="two-col shiire-overview-grid">
-            <article className="card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">STOCK HEALTH</span>
-                  <h2>在庫と補充ライン</h2>
-                </div>
-              </div>
-              <div className="shiire-stock-lines">
-                <StockLine
-                  label="検索トップ"
-                  ready={topReady}
-                  reserved={topReserved}
-                  reorder={Number(topPolicy.reorder??0)}
-                  target={Number(dailyRestock?.config.top_search_target_stock??topPolicy.target??0)}
-                  limit={topPolicy.max==null?"—":yen(topPolicy.max)}
-                />
-                <StockLine
-                  label="No Shadowban"
-                  ready={shadowReady}
-                  reserved={shadowReserved}
-                  reorder={Number(shadowPolicy.reorder??0)}
-                  target={Number(dailyRestock?.config.no_shadowban_target_stock??shadowPolicy.target??0)}
-                  limit={shadowPolicy.max==null?"—":usd(shadowPolicy.max)}
-                />
-              </div>
-            </article>
-
-            <article className="card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">SYSTEM HEALTH</span>
-                  <h2>連携状態</h2>
-                </div>
-              </div>
-              <div className="shiire-health-list">
-                <HealthRow label="HStora API" ok={Boolean(overview?.integrations.hstoraConfigured)} />
-                {!manualFunding&&(
-                  <>
-                    <HealthRow
-                      label="Binance 自動購入ロック"
-                      ok={binanceServerUnlocked}
-                      detail={binanceServerUnlocked?"解除済み":"サーバー側でロック中"}
-                    />
-                    <HealthRow label="Binance 取引API" ok={Boolean(overview?.integrations.binanceTradeConfigured)} />
-                    <HealthRow
-                      label="Binance 出金"
-                      ok={Boolean(withdrawal?.readyForLiveWithdrawal)}
-                      neutral={withdrawal?.configured===false}
-                      detail={
-                        withdrawal?.configured===false
-                          ?"未接続"
-                          :withdrawal?.readyForLiveWithdrawal
-                            ?"LIVE出金条件OK"
-                            :"出金キーは設定済みですが安全条件未達"
-                      }
-                    />
-                  </>
-                )}
-                <HealthRow
-                  label="暗号化キー"
-                  ok={Boolean(overview?.integrations.credentialsEncryptionConfigured)}
-                />
-                <HealthRow
-                  label="専用LTC Wallet"
-                  ok={false}
-                  neutral
-                  detail="未接続（秘密鍵をWorkerへ保存しない設計）"
-                />
-              </div>
-            </article>
+          {blockers>0&&<div className="shiire-callout warn" role="status">
+            <strong>確認が必要な項目が {blockers} 件あります</strong>
+            <span>{overview?.providerIssues?.[0]?.error??overview?.circuitBreakers?.[0]?.reason??overview?.recentErrors?.[0]?.message}</span>
+            <button className="secondary" onClick={()=>setSection("logs")}>障害を確認</button>
+          </div>}
+          <section className="card">
+            <div className="section-head"><h2>よく使う設定</h2><span className="shiire-muted">本日の仕入れ {num(overview?.today.count,0)}件 / {usd(overview?.today.amount)}</span></div>
+            <div className="shiire-quick-grid">
+              <button onClick={()=>setSection("budget")}><strong>残高の使い道</strong><span>No shadow ban・Top Search・招待の割合</span></button>
+              <button onClick={()=>setSection("restock")}><strong>18:00入荷</strong><span>恒常在庫と入荷通知</span></button>
+              <button onClick={()=>setSection("invite")}><strong>招待キャンペーン</strong><span>開催・招待人数・特典在庫</span></button>
+              <button onClick={()=>setSection("vending")}><strong>自販機</strong><span>価格変更・設置・納品</span></button>
+            </div>
           </section>
-
-          <section className="two-col">
-            <article className="card">
-              <span className="eyebrow">RECENT PROCUREMENT</span>
-              <h2>直近の仕入れ注文</h2>
-              <OrderList rows={overview?.recentOrders??[]} compact />
-            </article>
-            <article className="card">
-              <span className="eyebrow">ATTENTION</span>
-              <h2>最近の異常</h2>
-              {(overview?.circuitBreakers.length??0)===0&&
-                (overview?.recentErrors.length??0)===0&&
-                (overview?.providerIssues.length??0)===0
-                ?<div className="shiire-empty">現在、Provider障害・開いているBreaker・直近エラーはありません。</div>
-                :<>
-                  {(overview?.providerIssues??[]).slice(0,5).map((row)=>(
-                    <div className="shiire-event danger" key={"provider:"+row.provider}>
-                      <strong>{row.provider} API</strong>
-                      <span>{row.error}</span>
-                    </div>
-                  ))}
-                  {(overview?.circuitBreakers??[]).slice(0,5).map((row:any)=>(
-                    <div className="shiire-event danger" key={"breaker:"+row.key}>
-                      <strong>{row.key}</strong>
-                      <span>{row.reason||"Circuit Breaker OPEN"}</span>
-                    </div>
-                  ))}
-                  {(overview?.recentErrors??[]).slice(0,5).map((row:any)=>(
-                    <div className="shiire-event" key={row.id}>
-                      <strong>{row.kind}</strong>
-                      <span>{row.message}</span>
-                      <small>{when(row.created_at)}</small>
-                    </div>
-                  ))}
-                </>
-              }
-            </article>
-          </section>
+          <details className="card shiire-disclosure"><summary>直近の注文</summary>
+            <OrderList rows={overview?.recentOrders??[]} compact />
+          </details>
+          <details className="card shiire-disclosure"><summary>連携状態</summary>
+            <div className="shiire-health-list">
+              <HealthRow label="HStora API" ok={Boolean(overview?.integrations.hstoraConfigured)} />
+              <HealthRow label="暗号化キー" ok={Boolean(overview?.integrations.credentialsEncryptionConfigured)} />
+              {!manualFunding&&<HealthRow label="Binance 取引API" ok={Boolean(overview?.integrations.binanceTradeConfigured)} />}
+            </div>
+          </details>
         </>
+      )}
+
+      {section==="budget"&&(
+        <section className="card shiire-budget">
+          <div className="section-head">
+            <div><h2>仕入れ資金の配分</h2><p>LTC入金後のHStora残高を、3枠の仕入れに使います。残高はUSD表示です。</p></div>
+            <div className="shiire-budget-balance"><span>HStora残高</span><strong>{usd(hstoraBalance?.balance)}</strong></div>
+          </div>
+          {procurementBudget?<>
+            <div className="shiire-budget-rows">
+              {budgetCategories.map(({key,label,tone})=>(
+                <div className={`shiire-budget-row ${tone}`} key={key}>
+                  <div><strong>{label}</strong><span>予算残 {usd(procurementBudget.budget.available[key])}</span></div>
+                  <label className="shiire-percent-field">
+                    <span className="sr-only">{label}の割合</span>
+                    <input type="number" aria-label={label+"の割合"} min="0" max="100" step="1"
+                      disabled={controlBusy||detailBusy}
+                      value={procurementBudget.percentages[key]}
+                      onChange={event=>setProcurementBudget(current=>current?{
+                        ...current,percentages:{...current.percentages,[key]:Number(event.target.value)}
+                      }:current)} />
+                    <span>%</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+            <div className="shiire-budget-total" role="status">
+              <strong>合計 {budgetTotal}%</strong>
+              <span>{budgetValid?"保存できます":"0〜100の整数で、合計100%にしてください"}</span>
+            </div>
+            <div className="shiire-control-buttons">
+              <button className="primary" disabled={controlBusy||detailBusy||!budgetValid} onClick={()=>void saveProcurementBudget()}>割合を保存して現在残高へ適用</button>
+            </div>
+            <p className="shiire-muted">保存後は現在残高を再配分し、今後の入金にも適用します。0%の枠は自動仕入れしません。</p>
+            <details className="shiire-disclosure"><summary>配分の詳細・再適用</summary>
+              <p className="shiire-muted">予算残 合計 {usd(procurementBudget.budget.totalAvailableUsd)} / 更新 {when(procurementBudget.budget.updatedAt)}</p>
+              <button className="secondary" disabled={controlBusy||detailBusy} onClick={()=>void rebalanceProcurementBudget()}>保存済み割合で再配分</button>
+            </details>
+          </>:<div className="shiire-empty">{detailBusy?"配分を読み込んでいます…":"配分を取得できませんでした。更新して再試行してください。"}</div>}
+        </section>
       )}
 
       {section==="funding"&&(
@@ -1266,75 +1177,43 @@ export default function ShiireOperationsCenter({
           <section className="card">
             <div className="section-head">
               <div>
-                <span className="eyebrow">PROCUREMENT BUDGET</span>
-                <h2>仕入れ資金の配分</h2>
-                <p>
-                  HStora残高を、招待用 / No shadow ban / Top Searchへ分けます。
-                  3項目の合計は100%。0%のカテゴリはその予算から自動仕入れしません。
-                </p>
+                <span className="eyebrow">AUTOMATION SAFETY</span>
+                <h2>自動運転</h2>
+                <p>初期状態はDry Runです。LIVE化・LIVE中の自動ONは確認ダイアログを必須にしています。</p>
               </div>
-              <span className="shiire-muted">
-                合計 {usd(procurementBudget?.budget?.totalAvailableUsd)}
-              </span>
             </div>
-            {procurementBudget?<>
-              <div className="shiire-kpi-grid">
-                <article className="card shiire-kpi">
-                  <span>招待用 予算残</span>
-                  <strong>{usd(procurementBudget.budget.available.INVITE_CAMPAIGN)}</strong>
-                  <small>{procurementBudget.percentages.INVITE_CAMPAIGN}%</small>
-                </article>
-                <article className="card shiire-kpi">
-                  <span>No shadow ban 予算残</span>
-                  <strong>{usd(procurementBudget.budget.available.NO_SHADOWBAN)}</strong>
-                  <small>{procurementBudget.percentages.NO_SHADOWBAN}%</small>
-                </article>
-                <article className="card shiire-kpi">
-                  <span>Top Search 予算残</span>
-                  <strong>{usd(procurementBudget.budget.available.TOP_SEARCH)}</strong>
-                  <small>{procurementBudget.percentages.TOP_SEARCH}%</small>
-                </article>
-              </div>
-              <div className="form-grid three">
-                <FundingInput
-                  label="招待用 %"
-                  value={procurementBudget.percentages.INVITE_CAMPAIGN}
-                  step={1}
-                  onChange={value=>setProcurementBudget({
-                    ...procurementBudget,
-                    percentages:{...procurementBudget.percentages,INVITE_CAMPAIGN:value}
+            <div className="shiire-control-buttons">
+              <button
+                className={overview?.safety.dryRun?"danger":"secondary"}
+                disabled={controlBusy||overview?.safety.emergencyStop}
+                onClick={()=>void updateAutomation({dry_run:!overview?.safety.dryRun})}
+              >
+                {overview?.safety.dryRun?"Dry Runを解除":"Dry Runへ戻す"}
+              </button>
+              {!manualFunding&&(
+                <button
+                  className={overview?.safety.autoPurchaseEnabled?"secondary":"danger"}
+                  disabled={controlBusy||overview?.safety.emergencyStop}
+                  onClick={()=>void updateAutomation({
+                    auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
                   })}
-                />
-                <FundingInput
-                  label="No shadow ban %"
-                  value={procurementBudget.percentages.NO_SHADOWBAN}
-                  step={1}
-                  onChange={value=>setProcurementBudget({
-                    ...procurementBudget,
-                    percentages:{...procurementBudget.percentages,NO_SHADOWBAN:value}
-                  })}
-                />
-                <FundingInput
-                  label="Top Search %"
-                  value={procurementBudget.percentages.TOP_SEARCH}
-                  step={1}
-                  onChange={value=>setProcurementBudget({
-                    ...procurementBudget,
-                    percentages:{...procurementBudget.percentages,TOP_SEARCH:value}
-                  })}
-                />
-              </div>
-              <div className="shiire-control-buttons">
-                <button className="primary" disabled={controlBusy} onClick={()=>void saveProcurementBudget()}>
-                  割合を保存して現在残高へ適用
+                >
+                  LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
                 </button>
-                <button className="secondary" disabled={controlBusy} onClick={()=>void rebalanceProcurementBudget()}>
-                  保存済み割合で再配分
-                </button>
-              </div>
-            </>:<div className="shiire-empty">仕入れ予算を読み込んでいます。</div>}
+              )}
+              <button
+                className={overview?.safety.autoProcurementEnabled?"secondary":"danger"}
+                disabled={controlBusy||overview?.safety.emergencyStop}
+                onClick={()=>void updateAutomation({
+                  auto_procurement_enabled:!overview?.safety.autoProcurementEnabled
+                })}
+              >
+                自動仕入れ {overview?.safety.autoProcurementEnabled?"OFFにする":"ONにする"}
+              </button>
+            </div>
           </section>
 
+          <details className="shiire-disclosure shiire-funding-details"><summary>補充・為替・自動運転の設定</summary>
           {!manualFunding&&detailBusy&&!binance&&<div className="progress"><span /></div>}
           {!manualFunding&&(
             <section className="shiire-kpi-grid">
@@ -1589,45 +1468,6 @@ export default function ShiireOperationsCenter({
             </article>
           </section>
 
-          <section className="card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">AUTOMATION SAFETY</span>
-                <h2>自動運転</h2>
-                <p>初期状態はDry Runです。LIVE化・LIVE中の自動ONは確認ダイアログを必須にしています。</p>
-              </div>
-            </div>
-            <div className="shiire-control-buttons">
-              <button
-                className={overview?.safety.dryRun?"danger":"secondary"}
-                disabled={controlBusy||overview?.safety.emergencyStop}
-                onClick={()=>void updateAutomation({dry_run:!overview?.safety.dryRun})}
-              >
-                {overview?.safety.dryRun?"Dry Runを解除":"Dry Runへ戻す"}
-              </button>
-              {!manualFunding&&(
-                <button
-                  className={overview?.safety.autoPurchaseEnabled?"secondary":"danger"}
-                  disabled={controlBusy||overview?.safety.emergencyStop}
-                  onClick={()=>void updateAutomation({
-                    auto_purchase_enabled:!overview?.safety.autoPurchaseEnabled
-                  })}
-                >
-                  LTC自動購入 {overview?.safety.autoPurchaseEnabled?"OFFにする":"ONにする"}
-                </button>
-              )}
-              <button
-                className={overview?.safety.autoProcurementEnabled?"secondary":"danger"}
-                disabled={controlBusy||overview?.safety.emergencyStop}
-                onClick={()=>void updateAutomation({
-                  auto_procurement_enabled:!overview?.safety.autoProcurementEnabled
-                })}
-              >
-                自動仕入れ {overview?.safety.autoProcurementEnabled?"OFFにする":"ONにする"}
-              </button>
-            </div>
-          </section>
-
           {!manualFunding&&(
             <section className="two-col">
               <article className="card">
@@ -1691,6 +1531,7 @@ export default function ShiireOperationsCenter({
               </div>
             </article>
           </section>
+          </details>
         </>
       )}
 
@@ -1738,6 +1579,9 @@ export default function ShiireOperationsCenter({
                   step={0.01}
                   onChange={value=>setProcurementControls({...procurementControls,max_no_shadowban_unit_price_usd:value})}
                 />
+              </div>
+              <details className="shiire-disclosure"><summary>詳細な仕入れ条件・品質ガード</summary>
+              <div className="form-grid two">
                 <FundingInput
                   label="Top Search 発注点"
                   value={procurementControls.reorder_point}
@@ -1745,7 +1589,7 @@ export default function ShiireOperationsCenter({
                   onChange={value=>setProcurementControls({...procurementControls,reorder_point:value})}
                 />
                 <FundingInput
-                  label="Top Search target_stock"
+                  label="Top Search 補充目標（定時入荷以外）"
                   value={procurementControls.target_stock}
                   step={1}
                   onChange={value=>setProcurementControls({...procurementControls,target_stock:value})}
@@ -1757,7 +1601,7 @@ export default function ShiireOperationsCenter({
                   onChange={value=>setProcurementControls({...procurementControls,no_shadowban_reorder_point:value})}
                 />
                 <FundingInput
-                  label="No shadow ban target_stock"
+                  label="No shadow ban 補充目標（定時入荷以外）"
                   value={procurementControls.no_shadowban_target_stock}
                   step={1}
                   onChange={value=>setProcurementControls({...procurementControls,no_shadowban_target_stock:value})}
@@ -1861,9 +1705,11 @@ export default function ShiireOperationsCenter({
                   <small>閾値以上のLIVE仕入れを自動で止め、承認操作がある時だけ許可します。</small>
                 </span>
               </label>
+              </details>
             </>:<div className="shiire-empty">仕入れ条件を読み込んでいます。</div>}
           </section>
 
+          <details className="shiire-disclosure"><summary>注文履歴・候補商品・大量購入の承認</summary>
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi accent">
               <span>TOP_SEARCH 上限</span>
@@ -1962,6 +1808,7 @@ export default function ShiireOperationsCenter({
             <h2>仕入れ注文履歴</h2>
             <OrderList rows={orders?.orders??overview?.recentOrders??[]} />
           </section>
+          </details>
         </>
       )}
 
@@ -2420,22 +2267,6 @@ function HealthRow({
     <span className={`shiire-dot ${tone}`} />
     <div><strong>{label}</strong>{detail&&<small>{detail}</small>}</div>
     <b>{neutral?"N/A":ok?"OK":"CHECK"}</b>
-  </div>;
-}
-
-function StockLine({
-  label,ready,reserved,reorder,target,limit
-}:{label:string;ready:number;reserved:number;reorder:number;target:number;limit:string}){
-  const total=ready+reserved;
-  const ratio=target>0?Math.min(100,total/target*100):0;
-  const low=total<=reorder;
-  return <div className="shiire-stock-line">
-    <div className="shiire-stock-head">
-      <strong>{label}</strong>
-      <span className={low?"low":""}>{total} / {target}</span>
-    </div>
-    <div className="shiire-stock-bar"><i style={{width:ratio+"%"}} /></div>
-    <small>販売可 {ready} / 予約中 {reserved} / 発注点 {reorder} / 上限 {limit}</small>
   </div>;
 }
 

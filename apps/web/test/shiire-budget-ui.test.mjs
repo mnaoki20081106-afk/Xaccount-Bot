@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {build} from 'esbuild';
+import {JSDOM} from 'jsdom';
+import {mkdtemp,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+
+test('budget navigation validates percentages, saves the three classes and reloads persisted values',async t=>{
+ const dir=await mkdtemp(path.resolve('.shiire-ui-test-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ await build({entryPoints:['src/ShiireOperationsCenter.tsx'],bundle:true,platform:'node',format:'esm',packages:'external',loader:{'.css':'empty'},outfile:path.join(dir,'Shiire.mjs'),define:{'import.meta.env.VITE_API_BASE_URL':'"https://fixture.example"'},jsx:'automatic'});
+ const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'https://fixture.example'});
+ for(const key of ['window','document','navigator','HTMLElement','Element','Node','MutationObserver','localStorage','sessionStorage','location','getComputedStyle']) Object.defineProperty(globalThis,key,{value:key==='getComputedStyle'?dom.window.getComputedStyle.bind(dom.window):dom.window[key],configurable:true});
+ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+ t.after(()=>dom.window.close());
+ const React=await import('react');
+ const {render,screen,waitFor,cleanup}=await import('@testing-library/react');
+ const {default:userEvent}=await import('@testing-library/user-event');
+ t.after(cleanup);
+ const {default:Shiire}=await import(pathToFileURL(path.join(dir,'Shiire.mjs')).href);
+ let percentages={INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50};
+ const writes=[],errors=[];
+ const overview={generatedAt:Date.now(),safety:{fundingMode:'manual_hstora',fundingModeLabel:'LTC手動補充',dryRun:true,emergencyStop:false,autoProcurementEnabled:false},settings:{},funding:{ok:true,data:{}},balances:{hstora:{ok:true,data:{balance:100,currency:'USD'}}},inventoryByClass:{NO_SHADOWBAN:{READY_FOR_DELIVERY:12},TOP_SEARCH:{READY_FOR_DELIVERY:8},INVITE_CAMPAIGN:{READY_FOR_DELIVERY:3}},today:{count:0,amount:0},circuitBreakers:[],recentErrors:[],providerIssues:[],integrations:{hstoraConfigured:true,credentialsEncryptionConfigured:true},recentOrders:[]};
+ const nativeFetch=globalThis.fetch;
+ t.after(()=>{globalThis.fetch=nativeFetch});
+ globalThis.fetch=async(input,init={})=>{
+  const p=new URL(String(input)).pathname;
+  if(p.endsWith('/operations/overview'))return Response.json(overview);
+  if(p.endsWith('/daily-restock'))return Response.json({config:{top_search_target_stock:20,no_shadowban_target_stock:20}});
+  if(p.endsWith('/procurement-budget')){
+   if(init.method==='POST'){
+    const payload=JSON.parse(init.body);writes.push(payload);
+    percentages={INVITE_CAMPAIGN:payload.inviteCampaignPercent,NO_SHADOWBAN:payload.noShadowbanPercent,TOP_SEARCH:payload.topSearchPercent};
+   }
+   return Response.json({percentages,budget:{initialized:true,available:{INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50},totalAvailableUsd:100,updatedAt:Date.now()}});
+  }
+  throw new Error('Unexpected request: '+p);
+ };
+ const props={guildId:'fixture',channels:[],roles:[],onNotice:()=>{},onError:error=>errors.push(error)};
+ const user=userEvent.setup();render(React.createElement(Shiire,props));
+ await screen.findByText('$100');
+ assert.equal(screen.queryByRole('spinbutton'),null,'overview contains no settings wall');
+ assert.equal(screen.getByText('直近の注文').parentElement.open,false);
+ assert.equal(screen.getByText('連携状態').parentElement.open,false);
+ await user.click(screen.getByRole('button',{name:'配分を設定'}));
+ const shadow=await screen.findByRole('spinbutton',{name:'No shadow banの割合'});
+ const top=screen.getByRole('spinbutton',{name:'Top Searchの割合'});
+ const invite=screen.getByRole('spinbutton',{name:'招待キャンペーンの割合'});
+ const save=screen.getByRole('button',{name:'割合を保存して現在残高へ適用'});
+ await waitFor(()=>assert.equal(save.disabled,false));
+ await user.clear(shadow);await user.type(shadow,'60');
+ assert.equal(save.disabled,true);assert.equal(writes.length,0);
+ await user.clear(top);await user.type(top,'30');
+ await user.clear(invite);await user.type(invite,'10');
+ assert.equal(save.disabled,false);
+ await user.clear(shadow);await user.type(shadow,'60.5');
+ await user.clear(top);await user.type(top,'29.5');
+ assert.equal(save.disabled,true,'fractions must not save even when total is 100');
+ await user.clear(shadow);await user.type(shadow,'110');
+ await user.clear(top);await user.type(top,'-20');
+ assert.equal(save.disabled,true,'out-of-range percentages must not save even when total is 100');
+ await user.clear(shadow);await user.type(shadow,'60');
+ await user.clear(top);await user.type(top,'30');
+ await user.click(save);
+ await waitFor(()=>assert.equal(writes.length,1));
+ assert.deepEqual(writes[0],{inviteCampaignPercent:10,noShadowbanPercent:60,topSearchPercent:30});
+ await waitFor(()=>assert.equal(save.disabled,false));
+ cleanup();render(React.createElement(Shiire,props));
+ await screen.findByText('$100');
+ await user.click(screen.getByRole('button',{name:'残高・配分'}));
+ assert.equal((await screen.findByRole('spinbutton',{name:'No shadow banの割合'})).value,'60');
+ assert.equal(screen.getByRole('spinbutton',{name:'Top Searchの割合'}).value,'30');
+ assert.equal(screen.getByRole('spinbutton',{name:'招待キャンペーンの割合'}).value,'10');
+ assert.deepEqual(errors,[]);
+});

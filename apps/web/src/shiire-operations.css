@@ -68,3 +68,56 @@
 .shiire-ops .card>.shiire-kpi-grid{
   margin-top:14px;
 }
+
+/* Keep the operating view readable without hiding any configuration. */
+.shiire-ops{gap:18px}
+.shiire-ops .eyebrow{display:none}
+.shiire-ops .section-head p{font-size:13px;line-height:1.7;max-width:64ch}
+.shiire-hero{padding:20px 24px}
+.shiire-hero-main p{font-size:13px;line-height:1.6}
+.shiire-safety-strip span{font-size:11px}
+.shiire-subnav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;overflow:visible}
+.shiire-subnav button{min-width:0;padding:12px 8px;text-align:center}
+.shiire-subnav strong{font-size:13px}
+.shiire-kpi>span{font-size:12px;letter-spacing:0}
+.shiire-kpi strong{font-size:26px}
+.shiire-kpi small{font-size:12px;line-height:1.6}
+.shiire-kpi button{margin-top:8px}
+.shiire-muted{font-size:12px;line-height:1.7}
+.shiire-empty{font-size:13px}
+.shiire-quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
+.shiire-quick-grid button{text-align:left;padding:18px;background:#10192b;border:1px solid #2c3850;border-radius:12px;color:#e2e9f8;cursor:pointer;min-width:0}
+.shiire-quick-grid strong,.shiire-quick-grid span{display:block}
+.shiire-quick-grid strong{font-size:15px}
+.shiire-quick-grid span{font-size:12px;line-height:1.6;margin-top:5px;color:#a0aec5}
+.shiire-disclosure>summary{cursor:pointer;font-size:14px;font-weight:700;color:#cbd7ec;padding:10px 0}
+.shiire-disclosure[open]>summary{margin-bottom:12px}
+.shiire-funding-details{padding:6px 0}
+.shiire-funding-details>section{margin-top:16px}
+.shiire-budget-balance{display:grid;gap:5px;text-align:right}
+.shiire-budget-balance span{font-size:12px;color:#9baac2}
+.shiire-budget-balance strong{font-size:26px}
+.shiire-budget-rows{display:grid;gap:12px;margin-top:20px}
+.shiire-budget-row{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid #2a3650;border-left:4px solid #99a7ff;border-radius:12px;padding:18px;background:#0e1728}
+.shiire-budget-row.shadow{border-left-color:#6bd6a7}
+.shiire-budget-row.invite{border-left-color:#f1be6b}
+.shiire-budget-row strong,.shiire-budget-row div>span{display:block}
+.shiire-budget-row strong{font-size:15px}
+.shiire-budget-row div>span{margin-top:6px;color:#a4b2c9;font-size:13px}
+.shiire-percent-field{display:flex;align-items:center;gap:10px;font-size:16px}
+.shiire-percent-field input{width:90px;min-height:44px;text-align:right;font-size:20px;padding:10px;border:1px solid #445472;border-radius:9px;color:#edf2ff;background:#08111f}
+.shiire-budget-total{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:16px 0;font-size:13px;color:#b9c7de}
+.shiire-budget .shiire-disclosure{border-top:1px solid #29344b;margin-top:20px;padding-top:6px}
+.shiire-ops button:focus-visible,.shiire-ops summary:focus-visible{outline:2px solid #99adff;outline-offset:3px}
+.shiire-ops .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:760px){
+  .shiire-subnav{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .shiire-subnav button{min-width:0;padding:12px 4px}
+  .shiire-subnav strong{font-size:12px}
+  .shiire-quick-grid{grid-template-columns:1fr}
+  .shiire-ops .section-head{flex-wrap:wrap;gap:14px}
+  .shiire-budget-balance{text-align:left}
+  .shiire-budget-row{padding:14px;gap:8px}
+  .shiire-budget-row strong{font-size:14px}
+  .shiire-percent-field input{width:76px}
+}
