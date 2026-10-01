@@ -61,13 +61,16 @@ export async function checkPayPayLink(link:string){
 }
 
 export async function acceptPayPayLink(
-  link:string,account:{phone:string;password:string;uuid:string}
+  link:string,account:{phone:string;password:string;uuid:string},expectedAmount=1
 ):Promise<{ok:boolean;pending:boolean;amount:number;status:string}>{
   const code=payCode(link);
   const info:any=await checkPayPayLink(link);
   if(!info) return {ok:false,pending:false,amount:0,status:"INVALID"};
   const amount=Number(info?.payload?.message?.data?.amount??0);
   const status=String(info?.payload?.orderStatus??"UNKNOWN");
+  if(!Number.isSafeInteger(amount)||amount<expectedAmount){
+    return {ok:false,pending:false,amount,status:"AMOUNT_INSUFFICIENT"};
+  }
   if(info?.payload?.pendingP2PInfo?.isSetPasscode){
     return {ok:false,pending:false,amount,status:"PASSCODE_REQUIRED"};
   }
@@ -153,14 +156,16 @@ export async function checkKyashLink(link:string){
   return {amount:Number(amount),uuid:raw};
 }
 
-export async function receiveKyashLink(link:string,account:{clientUuid:string;installationUuid:string;accessToken:string}){
+export async function receiveKyashLink(link:string,account:{clientUuid:string;installationUuid:string;accessToken:string},expectedAmount=1){
   const info=await checkKyashLink(link);
   if(!info) return {ok:false,amount:0,status:"INVALID"};
+  if(!Number.isSafeInteger(info.amount)||info.amount<expectedAmount) return {ok:false,amount:info.amount,status:"AMOUNT_INSUFFICIENT"};
   const response=await fetch("https://api.kyash.me/v1/links/"+encodeURIComponent(info.uuid)+"/receive",{
     method:"PUT",headers:kyashHeaders(account.clientUuid,account.installationUuid,account.accessToken)
   });
   const data:any=await response.json().catch(()=>null);
-  return {ok:response.ok&&data?.code===200,amount:info.amount,status:data?.code===200?"COMPLETED":"FAILED"};
+  const ok=response.ok&&data?.code===200;
+  return {ok,pending:!ok&&(response.status>=500||!data),amount:info.amount,status:ok?"COMPLETED":"FAILED"};
 }
 
 export async function saveKyashAccount(

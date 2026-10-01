@@ -872,7 +872,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
 
         let result;
         try{
-          result=await acceptPayPayLink(link,account);
+          result=await acceptPayPayLink(link,account,order.total_amount);
         }catch(error){
           console.error("PayPay receive ambiguous",order.id,error);
           return ires(eph(
@@ -929,7 +929,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
 
         let result;
         try{
-          result=await receiveKyashLink(link,account);
+          result=await receiveKyashLink(link,account,order.total_amount);
         }catch(error){
           console.error("Kyash receive ambiguous",order.id,error);
           return ires(eph(
@@ -937,6 +937,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
           ));
         }
         if(!result.ok){
+          if(result.pending) return ires(eph("Kyash受取結果を確定できないため注文と在庫を保持しています。管理者に確認を依頼してください。"));
           await clearPaymentLink(env,order.id);
           return ires(eph("Kyash決済を確認できませんでした。別の送金リンクを入力してください。"));
         }
@@ -976,9 +977,20 @@ export async function vendingSweep(env:Env){
     const order=await getOrder(env,row.id); if(!order||!order.payment_link_enc) continue;
     try{
       const {decrypt}=await import("./utils"); const link=await decrypt(env.SESSION_ENCRYPTION_KEY,order.payment_link_enc),info:any=await checkPayPayLink(link),status=String(info?.payload?.orderStatus??"");
-      if(status==="SUCCESS"||status==="COMPLETED"){
-        await markPaid(env,order.id,"paypay",order.payment_link_hash); const paid=await getOrder(env,order.id); if(paid) await deliver(env,paid);
+      // Public link status cannot prove WHICH account received the money.
+      // Only an authenticated acceptance response may authorize delivery.
+      if(status==="PENDING"){
+        const vm=await getMachine(env,order.vending_machine_id);
+        const account=vm?await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY):null;
+        if(!account) continue;
+        const result=await acceptPayPayLink(link,account,order.total_amount);
+        if(result.ok){
+          await markPaid(env,order.id,"paypay",order.payment_link_hash);
+          const paid=await getOrder(env,order.id);
+          if(paid) await deliver(env,paid);
+        }
       }
+
     }catch(e){console.error("vending sweep",row.id,e);}
   }
 
