@@ -12,13 +12,13 @@ test('two sales categories can be edited independently and machine deletion requ
  const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'https://fixture.example'});
  for(const key of ['window','document','navigator','HTMLElement','Element','Node','MutationObserver','localStorage','sessionStorage','location','getComputedStyle'])Object.defineProperty(globalThis,key,{value:key==='getComputedStyle'?dom.window.getComputedStyle.bind(dom.window):dom.window[key],configurable:true});
  globalThis.IS_REACT_ACT_ENVIRONMENT=true;t.after(()=>dom.window.close());
- const React=await import('react');const {render,screen,waitFor,cleanup}=await import('@testing-library/react');const {default:userEvent}=await import('@testing-library/user-event');t.after(cleanup);
+ const React=await import('react');const {render,screen,waitFor,cleanup,within}=await import('@testing-library/react');const {default:userEvent}=await import('@testing-library/user-event');t.after(cleanup);
  const {default:Vending}=await import(pathToFileURL(path.join(dir,'Vending.mjs')).href);
  const products=(machineId)=>[
   {id:machineId+'-normal',vending_machine_id:machineId,procurement_class:'NO_SHADOWBAN',supplier_product_id:'',name:'Search Top + No shadow ban',description:'Normal',price_paypay:150,price_kyash:150,stock_count:0,sales_count:0},
   {id:machineId+'-old',vending_machine_id:machineId,procurement_class:'TOP_SEARCH',supplier_product_id:'',name:'【old】Search Top + No shadow ban',description:'Old',price_paypay:500,price_kyash:500,stock_count:0,sales_count:0}
  ];
- const machine=(id,name)=>({id,guild_id:'fixture',name,products:products(id),panels:[],stockNotification:null});
+ const machine=(id,name)=>({id,guild_id:'fixture',name,panel_title:null,panel_description:null,panel_image_url:null,products:products(id),panels:[],stockNotification:null});
  let machines=[machine('one','First machine'),machine('two','Second machine')],allowDelete=false;
  const writes=[],deletes=[],errors=[];globalThis.confirm=()=>allowDelete;
  const nativeFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=nativeFetch;delete globalThis.confirm;});
@@ -35,6 +35,14 @@ test('two sales categories can be edited independently and machine deletion requ
   if(update&&init.method==='PATCH'){
    const payload=JSON.parse(init.body);writes.push(payload);const product=machines.find(m=>m.id===update[1]).products.find(p=>p.id===update[2]);Object.assign(product,{name:payload.name,description:payload.description,price_paypay:payload.pricePayPay,price_kyash:payload.priceKyash});return Response.json({ok:true});
   }
+  const machineUpdate=p.match(/\/vending\/([^/]+)$/);
+  if(machineUpdate&&init.method==='PATCH'){
+   const payload=JSON.parse(init.body),row=machines.find(m=>m.id===machineUpdate[1]);
+   Object.assign(row,{name:payload.name,panel_title:payload.panelTitle,panel_description:payload.panelDescription});return Response.json({ok:true});
+  }
+  if(p.endsWith('/panel-image')&&init.method==='DELETE'){
+   machines.find(m=>m.id===p.split('/').at(-2)).panel_image_url=null;return Response.json({ok:true});
+  }
   if(init.method==='DELETE'){
    const id=p.split('/').at(-1);deletes.push(id);machines=machines.filter(m=>m.id!==id);return Response.json({ok:true,panelErrors:[]});
   }
@@ -43,19 +51,49 @@ test('two sales categories can be edited independently and machine deletion requ
  const user=userEvent.setup();render(React.createElement(Vending,{guildId:'fixture',channels:[],roles:[],onNotice:()=>{},onError:e=>errors.push(e)}));
  await screen.findByRole('button',{name:'Search Top + No shadow banを編集'});
  await user.click(screen.getByRole('button',{name:'【old】Search Top + No shadow banを編集'}));
- assert.equal(screen.getByLabelText(/PayPay価格/).value,'500');
- await user.clear(screen.getByLabelText(/PayPay価格/));await user.type(screen.getByLabelText(/PayPay価格/),'450');
+ assert.equal(screen.getByLabelText(/^PayPay価格/).value,'500');
+ await user.clear(screen.getByLabelText(/^PayPay価格/));await user.type(screen.getByLabelText(/^PayPay価格/),'450');
  await user.click(screen.getByRole('button',{name:'商品変更を保存'}));
  await waitFor(()=>assert.equal(writes.length,1));assert.equal(writes[0].procurementClass,'TOP_SEARCH');assert.equal(writes[0].pricePayPay,450);
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}).disabled,false));
  await user.click(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}));
- assert.equal(screen.getByLabelText(/PayPay価格/).value,'150','editing Old must leave normal price alone');
+ assert.equal(screen.getByLabelText(/^PayPay価格/).value,'150','editing Old must leave normal price alone');
+ const preview=screen.getByTestId('discord-panel-preview');
+ assert.equal(preview.querySelectorAll('img').length,0,'no image means no image slot or upload placeholder');
+ assert.equal(within(preview).getByRole('button',{name:'🛒 購入する'}).getAttribute('aria-disabled'),'true');
+ await user.click(screen.getByRole('button',{name:'プレビューのタイトルを編集'}));
+ await user.type(screen.getByLabelText('プレビューのタイトル'),'開設キャンペーン');
+ await user.click(screen.getByRole('button',{name:'プレビューの説明を編集'}));
+ await user.type(screen.getByLabelText('プレビューの説明'),'**おすすめ**\n150円から販売');
+ await user.click(screen.getByRole('button',{name:'【old】Search Top + No shadow banをプレビューから編集'}));
+ await user.clear(screen.getByLabelText('プレビューの商品名'));await user.type(screen.getByLabelText('プレビューの商品名'),'Oldキャンペーン');
+ assert.equal(screen.getByLabelText('プレビューの商品名').value,'Oldキャンペーン');
+ await user.clear(screen.getByLabelText('プレビューのPayPay価格'));await user.type(screen.getByLabelText('プレビューのPayPay価格'),'470');
+ await user.click(screen.getByRole('button',{name:'Search Top + No shadow banをプレビューから編集'}));
+ await user.clear(screen.getByLabelText('プレビューのPayPay価格'));await user.type(screen.getByLabelText('プレビューのPayPay価格'),'160');
+ await user.click(screen.getByRole('button',{name:'表示のみ'}));
+ assert.match(preview.textContent,/PayPay: 160円/);assert.match(preview.textContent,/PayPay: 470円/);
+ assert.equal(preview.querySelector('strong').textContent,'おすすめ');
+ assert.equal(preview.querySelectorAll('input,textarea').length,0,'view-only has no editing controls');
+ await user.click(screen.getByRole('button',{name:'スマホ'}));assert.ok(preview.classList.contains('is-mobile'));
+ machines[0].panel_image_url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCXsAAAAASUVORK5CYII=';
+ await user.click(screen.getByRole('button',{name:'プレビューの変更を保存・反映'}));
+ await waitFor(()=>assert.equal(writes.length,3));
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'選択中の自販機を削除'}).disabled,false));
+ assert.equal(machines[0].panel_title,'開設キャンペーン');assert.equal(machines[0].panel_description,'**おすすめ**\n150円から販売');
+ assert.equal(machines[0].products[0].price_paypay,160);assert.equal(machines[0].products[1].price_paypay,470);
+ assert.match(screen.getByTestId('discord-panel-preview').textContent,/PayPay: 470円/);
+ assert.equal(screen.getByTestId('discord-panel-preview').querySelectorAll('img').length,1,'configured image is embedded exactly once');
+ await user.clear(screen.getByLabelText('パネルタイトル'));await user.type(screen.getByLabelText('パネルタイトル'),'画像削除中の未保存タイトル');
+ await user.click(screen.getByRole('button',{name:'パネル画像を削除'}));
+ await waitFor(()=>assert.equal(screen.getByTestId('discord-panel-preview').querySelectorAll('img').length,0));
+ assert.equal(screen.getByLabelText('パネルタイトル').value,'画像削除中の未保存タイトル','image removal must preserve text drafts');
  await user.click(screen.getByRole('button',{name:'選択中の自販機を削除'}));assert.equal(deletes.length,0);
  allowDelete=true;await user.click(screen.getByRole('button',{name:'選択中の自販機を削除'}));
  await waitFor(()=>assert.deepEqual(deletes,['one']));
  await waitFor(()=>assert.equal(screen.getByLabelText('自販機名').value,'Second machine'));
  await user.click(screen.getByRole('button',{name:'自販機を作成'}));
  await waitFor(()=>assert.equal(screen.getByLabelText('自販機名').value,'Xアカウント自販機','newly created machine should become selected'));
- assert.equal(screen.getAllByRole('button',{name:/を編集$/}).length,2);
+ assert.equal(screen.getAllByRole('button',{name:/Search Top \+ No shadow banを編集$/}).length,2);
  assert.deepEqual(errors,[]);
 });

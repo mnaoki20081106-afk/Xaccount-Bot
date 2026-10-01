@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+const ShiirePanelPreview=lazy(()=>import("./ShiirePanelPreview"));
 
 type Channel={
   id:string;
@@ -171,6 +172,7 @@ export default function ShiireVendingManager({
   const [priceKyash,setPriceKyash]=useState(100);
   const [emoji,setEmoji]=useState("");
   const [editingProductId,setEditingProductId]=useState("");
+  const [productDrafts,setProductDrafts]=useState<Record<string,Product>>({});
 
   const [notifyEnabled,setNotifyEnabled]=useState(false);
   const [notifyChannel,setNotifyChannel]=useState("");
@@ -215,6 +217,7 @@ export default function ShiireVendingManager({
       ]);
       setStatus(nextStatus);
       setMachines(nextMachines);
+      setProductDrafts({});
       setSources(nextSources.products??[]);
       setOrders(nextOrders.orders??[]);
       const nextId=
@@ -288,23 +291,45 @@ export default function ShiireVendingManager({
     }catch(reason){onError(reason);}finally{setBusy(false);}
   }
 
-  async function saveMachine(){
+  function machineDraft(){
+    return {name:machineName.trim(),panelTitle,panelDescription,publicLogChannelId:publicLogChannel||null,privateLogChannelId:privateLogChannel||null,roleId:buyerRole||null};
+  }
+
+  function currentProductDraft():Product|null{
+    const product=selected?.products?.find(row=>row.id===editingProductId);
+    return product?{...product,name:productName,description:productDescription.slice(0,500),price_paypay:pricePayPay,price_kyash:priceKyash,emoji:emoji.trim().slice(0,64)||null,
+      procurement_class:sourceId==="class:TOP_SEARCH"?"TOP_SEARCH":sourceId==="class:NO_SHADOWBAN"?"NO_SHADOWBAN":null,supplier_product_id:sourceId.startsWith("class:")?"":sourceId}:null;
+  }
+  const currentDraft=currentProductDraft();
+  const previewProducts=(selected?.products??[]).map(product=>product.id===editingProductId&&currentDraft?currentDraft:productDrafts[product.id]??product);
+
+  async function persistPanelDraft(){
     if(!selected) return;
-    await mutate(
-      `/api/guilds/${guildId}/shiire/vending/${selected.id}`,
-      {
-        method:"PATCH",
-        body:JSON.stringify({
-          name:machineName,
-          panelTitle,
-          panelDescription,
-          publicLogChannelId:publicLogChannel||null,
-          privateLogChannelId:privateLogChannel||null,
-          roleId:buyerRole||null
-        })
-      },
-      "自販機設定を保存しました"
-    );
+    const drafts={...productDrafts,...(currentDraft?{[currentDraft.id]:currentDraft}:{})};
+    if(!machineName.trim()||machineName.trim().length>80) throw new Error("自販機名は1〜80文字で入力してください");
+    for(const product of Object.values(drafts)){
+      if(!Number.isSafeInteger(product.price_paypay)||product.price_paypay<0||!Number.isSafeInteger(product.price_kyash)||product.price_kyash<0) throw new Error("価格は0以上の整数で入力してください");
+      if(product.name.trim().length>80) throw new Error("商品名は80文字以内で入力してください");
+    }
+    await api(`/api/guilds/${guildId}/shiire/vending/${selected.id}`,{method:"PATCH",body:JSON.stringify(machineDraft())},20_000);
+    for(const product of Object.values(drafts)){
+      await api(`/api/guilds/${guildId}/shiire/vending/${selected.id}/products/${product.id}`,{method:"PATCH",body:JSON.stringify({name:product.name.trim()||"Xアカウント",description:product.description,pricePayPay:product.price_paypay,priceKyash:product.price_kyash,emoji:product.emoji,
+        ...(product.procurement_class?{procurementClass:product.procurement_class}:{supplierProductId:product.supplier_product_id})})},20_000);
+    }
+  }
+
+  async function savePanelPreview(){
+    setBusy(true);
+    try{
+      await persistPanelDraft();
+      setEditingProductId("");
+      await load();
+      onNotice("プレビューの変更を保存し、既設パネルへ反映しました");
+    }catch(reason){onError(reason);}finally{setBusy(false);}
+  }
+
+  async function saveMachine(){
+    await savePanelPreview();
   }
 
   async function addProduct(repostPanels=false){
@@ -328,12 +353,14 @@ export default function ShiireVendingManager({
       ...(editingProductId&&repostPanels?{repostPanels:true}:{})
     };
     if(editingProductId){
-      await mutate(
-        `/api/guilds/${guildId}/shiire/vending/${selected.id}/products/${editingProductId}`,
-        {method:"PATCH",body:JSON.stringify(payload)},
-        "販売商品を更新しました"
-      );
-      setEditingProductId("");
+      setBusy(true);
+      try{
+        await persistPanelDraft();
+        if(repostPanels) await api(`/api/guilds/${guildId}/shiire/vending/${selected.id}/panel/repost`,{method:"POST",body:"{}"},20_000);
+        setEditingProductId("");
+        await load();
+        onNotice(repostPanels?"変更を保存し、自販機を再設置しました":"販売商品とパネルの変更を保存しました");
+      }catch(reason){onError(reason);}finally{setBusy(false);}
       return;
     }
     await mutate(
@@ -344,6 +371,8 @@ export default function ShiireVendingManager({
   }
 
   function editProduct(product:Product){
+    if(currentDraft&&currentDraft.id!==product.id) setProductDrafts(rows=>({...rows,[currentDraft.id]:currentDraft}));
+    product=productDrafts[product.id]??product;
     setEditingProductId(product.id);
     setSourceId(
       product.procurement_class
@@ -358,6 +387,7 @@ export default function ShiireVendingManager({
   }
 
   function cancelProductEdit(){
+    setProductDrafts(rows=>{const next={...rows};delete next[editingProductId];return next;});
     setEditingProductId("");
     setProductDescription("");
     setEmoji("");
@@ -369,6 +399,8 @@ export default function ShiireVendingManager({
       return onError(new Error("再設置できる既存の自販機パネルがありません"));
     }
     if(!confirm("既設の自販機パネルを新しいメッセージとして再設置しますか？")) return;
+    setBusy(true);
+    try{await persistPanelDraft();}catch(reason){onError(reason);setBusy(false);return;}
     await mutate(
       `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel/repost`,
       {method:"POST",body:"{}"},
@@ -413,8 +445,8 @@ export default function ShiireVendingManager({
         30_000
       );
       setPanelImageUrl(result.url);
+      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,panel_image_url:result.url}:row));
       onNotice("仕入れBOTパネル画像をアップロードしました");
-      await load();
     }catch(reason){
       onError(reason);
     }finally{
@@ -431,8 +463,8 @@ export default function ShiireVendingManager({
         {method:"DELETE"}
       );
       setPanelImageUrl("");
+      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,panel_image_url:null}:row));
       onNotice("仕入れBOTパネル画像を削除しました");
-      await load();
     }catch(reason){
       onError(reason);
     }finally{
@@ -442,6 +474,8 @@ export default function ShiireVendingManager({
 
   async function publishPanel(){
     if(!selected||!panelChannel) return onError(new Error("設置先チャンネルを選択してください"));
+    setBusy(true);
+    try{await persistPanelDraft();}catch(reason){onError(reason);setBusy(false);return;}
     await mutate(
       `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel`,
       {method:"POST",body:JSON.stringify({channelId:panelChannel})},
@@ -453,6 +487,8 @@ export default function ShiireVendingManager({
     if(!selected||!panelMessageUrl.trim()){
       return onError(new Error("更新するDiscordメッセージURLを入力してください"));
     }
+    setBusy(true);
+    try{await persistPanelDraft();}catch(reason){onError(reason);setBusy(false);return;}
     await mutate(
       `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel/update`,
       {method:"POST",body:JSON.stringify({messageUrl:panelMessageUrl.trim()})},
@@ -572,7 +608,7 @@ export default function ShiireVendingManager({
                 key={machine.id}
                 type="button"
                 className={machine.id===selectedId?"primary":"secondary"}
-                onClick={()=>{setEditingProductId("");setSelectedId(machine.id);}}
+                onClick={()=>{setEditingProductId("");setProductDrafts({});setSelectedId(machine.id);}}
               >
                 {machine.name}
               </button>
@@ -616,6 +652,19 @@ export default function ShiireVendingManager({
               </button>
             </div>
 
+            <Suspense fallback={<p>パネルプレビューを読み込み中…</p>}><ShiirePanelPreview key={selected.id} disabled={busy||panelImageBusy}
+              machine={{...selected,name:machineName.trim(),panel_title:panelTitle,panel_description:panelDescription,panel_image_url:panelImageUrl||null}}
+              products={previewProducts}
+              editingProductId={editingProductId} onProductChange={patch=>{
+                if(patch.name!==undefined)setProductName(patch.name);
+                if(patch.description!==undefined)setProductDescription(patch.description);
+                if(patch.price_paypay!==undefined)setPricePayPay(patch.price_paypay);
+                if(patch.price_kyash!==undefined)setPriceKyash(patch.price_kyash);
+              }}
+              onTitle={setPanelTitle} onDescription={setPanelDescription}
+              onProduct={id=>{const product=selected.products?.find(row=>row.id===id);if(product) editProduct(product);}} /></Suspense>
+            <div className="button-row"><button className="primary" disabled={busy||panelImageBusy} onClick={()=>void savePanelPreview()}>プレビューの変更を保存・反映</button></div>
+
             <div className="form-grid two">
               <label className="field">
                 <span>自販機名</span>
@@ -632,7 +681,7 @@ export default function ShiireVendingManager({
               </label>
               <label className="field">
                 <span>パネルタイトル</span>
-                <input value={panelTitle} onChange={e=>setPanelTitle(e.target.value)} />
+                <input maxLength={256} value={panelTitle} onChange={e=>setPanelTitle(e.target.value)} />
               </label>
               <label className="field">
                 <span>公開ログ</span>
@@ -657,19 +706,14 @@ export default function ShiireVendingManager({
               <span>パネル説明</span>
               <textarea
                 value={panelDescription}
+                maxLength={3000}
                 onChange={e=>setPanelDescription(e.target.value)}
                 rows={4}
               />
             </label>
             <div className="field">
               <span>パネル画像</span>
-              {panelImageUrl&&(
-                <img
-                  src={panelImageUrl}
-                  alt="仕入れBOT自販機パネル"
-                  style={{maxWidth:"100%",maxHeight:260,borderRadius:12,objectFit:"contain"}}
-                />
-              )}
+              <small>画像を設定すると、上のパネル本文の下に表示されます。画像の変更・削除は保存直後にDiscordへ反映されます。</small>
               <input
                 type="file"
                 accept="image/*"

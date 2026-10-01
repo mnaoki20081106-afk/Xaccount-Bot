@@ -1,0 +1,27 @@
+.shiire-panel-studio { margin:24px 0; }
+.shiire-panel-studio h3 { margin:0; }
+.discord-panel-preview { background:#313338; padding:20px; border-radius:8px; color:#dbdee1; font:14px/1.4 "gg sans","Noto Sans",Arial,sans-serif; width:100%; }
+.discord-panel-preview.is-mobile { max-width:390px; }
+.discord-panel-embed { background:#2b2d31; border-left:4px solid; border-radius:4px; padding:12px 16px 16px 12px; max-width:520px; width:fit-content; min-width:0; overflow-wrap:anywhere; }
+.discord-panel-preview .discord-panel-title { display:block; background:transparent; border:0; border-radius:2px; padding:0; color:#f2f3f5; font-size:16px; font-weight:600; text-align:left; margin:0 0 8px; line-height:1.4; width:100%; }
+.discord-panel-section { margin:0 0 14px; border-radius:2px; }
+.discord-panel-section:last-child { margin-bottom:0; }
+.discord-panel-section p { color:inherit; font:inherit; margin:0; }
+.discord-panel-section ul,.discord-panel-section ol { padding-left:24px; margin:4px 0; }
+.discord-panel-section h1,.discord-panel-section h2,.discord-panel-section h3 { margin:4px 0; color:inherit; }
+.discord-editable { cursor:text; }
+.discord-editable:hover,.discord-editable:focus-visible { outline:1px dashed #949ba4; outline-offset:3px; }
+.discord-panel-preview .discord-inline-input { color:#dbdee1; background:#232428; border:1px solid #5865f2; border-radius:3px; padding:4px; width:100%; max-width:100%; min-width:0; font:inherit; }
+.discord-panel-preview .discord-inline-input.discord-panel-title { font-weight:600; font-size:16px; }
+.discord-panel-preview .discord-panel-image { display:block; max-width:100%; max-height:350px; height:auto; width:auto; margin-top:16px; border-radius:4px; object-fit:contain; }
+.discord-panel-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.discord-panel-preview .discord-action { padding:6px 16px; border-radius:3px; color:#fff; font-size:14px; font-weight:500; line-height:20px; min-height:32px; cursor:default; }
+.discord-action.style-3 { background:#248046; }
+.discord-action.style-1 { background:#5865f2; }
+.discord-preview-link { color:#00a8fc; }
+.discord-panel-section blockquote { border-left:3px solid #4e5058; margin:4px 0; padding-left:12px; }
+@media (max-width:600px) { .discord-panel-preview { padding:12px; } .discord-panel-embed { width:100%; } }
+
+.discord-product-editor { margin-bottom:14px; display:grid; gap:8px; }
+.discord-product-editor label { display:grid; gap:4px; color:#b5bac1; font-size:12px; }
+.discord-price-editor { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
