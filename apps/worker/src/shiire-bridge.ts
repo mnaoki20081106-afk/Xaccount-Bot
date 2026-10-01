@@ -12,7 +12,7 @@ import {
   getKyashAccount,
   receiveKyashLink
 } from "./vending-payments";
-import { json, randomId, sha256Hex } from "./utils";
+import { json, randomId, sha256Hex, withCors } from "./utils";
 
 const MAX_CLOCK_SKEW_MS=5*60_000;
 const OWNER_ID="shared-dashboard";
@@ -140,13 +140,13 @@ export async function handleShiireDashboardProxy(
       body:body||undefined
     });
     const text=await response.text();
-    return new Response(text,{
+    return withCors(env,new Response(text,{
       status:response.status,
       headers:{
         "Content-Type":response.headers.get("Content-Type")??"application/json; charset=utf-8",
         "Cache-Control":"no-store"
       }
-    });
+    }));
   }catch(error){
     const message=error instanceof Error?error.message:String(error);
     if(message==="SHIIRE_API_BASE_URL_NOT_CONFIGURED"){
