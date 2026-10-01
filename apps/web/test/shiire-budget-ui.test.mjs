@@ -21,6 +21,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
  const {default:Shiire}=await import(pathToFileURL(path.join(dir,'Shiire.mjs')).href);
  let percentages={INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50};
  const writes=[],errors=[];
+ let budgetFailure=false,zeroBudget=false;
  const overview={generatedAt:Date.now(),safety:{fundingMode:'manual_hstora',fundingModeLabel:'LTC手動補充',dryRun:true,emergencyStop:false,autoProcurementEnabled:false},settings:{},funding:{ok:true,data:{}},balances:{hstora:{ok:true,data:{balance:100,currency:'USD'}}},inventoryByClass:{NO_SHADOWBAN:{READY_FOR_DELIVERY:12},TOP_SEARCH:{READY_FOR_DELIVERY:8},INVITE_CAMPAIGN:{READY_FOR_DELIVERY:3}},today:{count:0,amount:0},circuitBreakers:[],recentErrors:[],providerIssues:[],integrations:{hstoraConfigured:true,credentialsEncryptionConfigured:true},recentOrders:[]};
  const nativeFetch=globalThis.fetch;
  t.after(()=>{globalThis.fetch=nativeFetch});
@@ -29,11 +30,12 @@ test('budget navigation validates percentages, saves the three classes and reloa
   if(p.endsWith('/operations/overview'))return Response.json(overview);
   if(p.endsWith('/daily-restock'))return Response.json({config:{top_search_target_stock:20,no_shadowban_target_stock:20}});
   if(p.endsWith('/procurement-budget')){
+   if(budgetFailure)return Response.json({message:'INVALID_BRIDGE_SIGNATURE'},{status:401});
    if(init.method==='POST'){
     const payload=JSON.parse(init.body);writes.push(payload);
     percentages={INVITE_CAMPAIGN:payload.inviteCampaignPercent,NO_SHADOWBAN:payload.noShadowbanPercent,TOP_SEARCH:payload.topSearchPercent};
    }
-   return Response.json({percentages,budget:{initialized:true,available:{INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50},totalAvailableUsd:100,updatedAt:Date.now()}});
+   return Response.json({percentages,budget:{initialized:true,available:zeroBudget?{INVITE_CAMPAIGN:0,NO_SHADOWBAN:0,TOP_SEARCH:0}:{INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50},totalAvailableUsd:zeroBudget?0:100,updatedAt:Date.now()}});
   }
   throw new Error('Unexpected request: '+p);
  };
@@ -73,4 +75,15 @@ test('budget navigation validates percentages, saves the three classes and reloa
  assert.equal(screen.getByRole('spinbutton',{name:'Top Searchの割合'}).value,'30');
  assert.equal(screen.getByRole('spinbutton',{name:'招待キャンペーンの割合'}).value,'10');
  assert.deepEqual(errors,[]);
+ budgetFailure=true;
+ await user.click(screen.getByRole('button',{name:'概要'}));
+ await user.click(screen.getByRole('button',{name:'残高・配分'}));
+ assert.match((await screen.findByRole('alert')).textContent,/INVALID_BRIDGE_SIGNATURE/);
+ assert.equal(screen.queryByRole('spinbutton'),null,'failed GET must not invent a zero balance or editable allocation');
+ assert.equal(errors.length,1);
+ budgetFailure=false;zeroBudget=true;
+ await user.click(screen.getByRole('button',{name:'配分だけ再取得'}));
+ await screen.findByRole('spinbutton',{name:'No shadow banの割合'});
+ assert.equal(screen.queryByRole('alert'),null);
+ assert.equal(screen.getAllByText('予算残 $0').length,3,'valid zero budgets must render all three categories');
 });

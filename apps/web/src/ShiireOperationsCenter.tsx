@@ -230,6 +230,7 @@ export default function ShiireOperationsCenter({
   const [fundingControls,setFundingControls]=useState<FundingControls|null>(null);
   const [procurementControls,setProcurementControls]=useState<ProcurementControls|null>(null);
   const [procurementBudget,setProcurementBudget]=useState<ProcurementBudgetDetail|null>(null);
+  const [budgetError,setBudgetError]=useState("");
   const [dailyRestock,setDailyRestock]=useState<DailyRestockDetail|null>(null);
   const [inviteCampaign,setInviteCampaign]=useState<InviteCampaignDetail|null>(null);
   const [payPayObservation,setPayPayObservation]=useState(0);
@@ -372,9 +373,14 @@ export default function ShiireOperationsCenter({
     try{
       if(target==="budget"){
         setProcurementBudget(null);
-        setProcurementBudget(await api<ProcurementBudgetDetail>(
+        setBudgetError("");
+        const data=await api<ProcurementBudgetDetail>(
           `/api/guilds/${guildId}/shiire/procurement-budget`, {}, 20_000
-        ));
+        );
+        if(!data?.percentages||!data?.budget?.available){
+          throw new Error("配分APIの応答形式が正しくありません。Discord-Shiireの稼働バージョンを確認してください。");
+        }
+        setProcurementBudget(data);
       }else if(target==="funding"){
         if(overview?.safety.fundingMode==="manual_hstora"){
           setBinance(null);
@@ -439,6 +445,7 @@ export default function ShiireOperationsCenter({
         ));
       }
     }catch(reason){
+      if(target==="budget") setBudgetError(reason instanceof Error?reason.message:String(reason));
       onError(reason);
     }finally{
       setDetailBusy(false);
@@ -455,6 +462,7 @@ export default function ShiireOperationsCenter({
     setFundingControls(null);
     setProcurementControls(null);
     setProcurementBudget(null);
+    setBudgetError("");
     setDailyRestock(null);
     setInviteCampaign(null);
     setPayPayObservation(0);
@@ -1113,7 +1121,12 @@ export default function ShiireOperationsCenter({
               <p className="shiire-muted">予算残 合計 {usd(procurementBudget.budget.totalAvailableUsd)} / 更新 {when(procurementBudget.budget.updatedAt)}</p>
               <button className="secondary" disabled={controlBusy||detailBusy} onClick={()=>void rebalanceProcurementBudget()}>保存済み割合で再配分</button>
             </details>
-          </>:<div className="shiire-empty">{detailBusy?"配分を読み込んでいます…":"配分を取得できませんでした。更新して再試行してください。"}</div>}
+          </>:detailBusy?<div className="shiire-empty">配分を読み込んでいます…</div>:<div className="shiire-callout warn" role="alert">
+            <strong>配分を取得できませんでした</strong>
+            <span>{budgetError||"配分の取得が完了していません。再取得してください。"}</span>
+            <span>未入金でも取得に成功すれば予算残は $0 になります。取得失敗を残高0として表示することはありません。</span>
+            <button className="secondary" disabled={busy||controlBusy||detailBusy} onClick={()=>void loadDetail("budget")}>配分だけ再取得</button>
+          </div>}
         </section>
       )}
 
