@@ -204,7 +204,7 @@ export default function ShiireVendingManager({
     );
   }
 
-  async function load(){
+  async function load(preferredId=selectedId){
     setBusy(true);
     try{
       const [nextStatus,nextMachines,nextSources,nextOrders]=await Promise.all([
@@ -218,15 +218,15 @@ export default function ShiireVendingManager({
       setSources(nextSources.products??[]);
       setOrders(nextOrders.orders??[]);
       const nextId=
-        nextMachines.some(machine=>machine.id===selectedId)
-          ?selectedId
+        nextMachines.some(machine=>machine.id===preferredId)
+          ?preferredId
           :nextMachines[0]?.id??"";
       setSelectedId(nextId);
       const machine=nextMachines.find(row=>row.id===nextId)??null;
       applySelected(machine);
       if(!sourceId){
-        const preset=CLASS_SALES_PRESETS["class:TOP_SEARCH"];
-        setSourceId("class:TOP_SEARCH");
+        const preset=CLASS_SALES_PRESETS["class:NO_SHADOWBAN"];
+        setSourceId("class:NO_SHADOWBAN");
         setProductName(preset.name);
         setProductDescription(preset.description);
         setPricePayPay(preset.price);
@@ -265,11 +265,27 @@ export default function ShiireVendingManager({
   async function createMachine(){
     const name=newMachineName.trim();
     if(!name) return onError(new Error("自販機名を入力してください"));
-    await mutate(
-      `/api/guilds/${guildId}/shiire/vending`,
-      {method:"POST",body:JSON.stringify({name})},
-      "仕入れBOT自販機を作成しました"
-    );
+    setBusy(true);
+    try{
+      const created=await api<Machine>(`/api/guilds/${guildId}/shiire/vending`,{method:"POST",body:JSON.stringify({name})},20_000);
+      setEditingProductId("");
+      await load(created.id);
+      onNotice("2種類の商品を備えた自販機を作成しました");
+    }catch(reason){onError(reason);}finally{setBusy(false);}
+  }
+
+  async function deleteMachine(){
+    if(!selected) return;
+    if(!confirm(`自販機「${selected.name}」とDiscord上の設置パネルを削除しますか？仕入れ在庫と購入履歴は保持します。`)) return;
+    setBusy(true);
+    try{
+      const result=await api<{ok:boolean;panelErrors?:unknown[]}>(`/api/guilds/${guildId}/shiire/vending/${selected.id}`,{method:"DELETE"},25_000);
+      setEditingProductId("");
+      await load();
+      onNotice(result.panelErrors?.length
+        ?"自販機を削除しました。一部のDiscordパネルを撤去できなかったため、残ったパネルは手動で削除してください。販売は停止しています。"
+        :"自販機と設置パネルを削除しました");
+    }catch(reason){onError(reason);}finally{setBusy(false);}
   }
 
   async function saveMachine(){
@@ -556,11 +572,12 @@ export default function ShiireVendingManager({
                 key={machine.id}
                 type="button"
                 className={machine.id===selectedId?"primary":"secondary"}
-                onClick={()=>setSelectedId(machine.id)}
+                onClick={()=>{setEditingProductId("");setSelectedId(machine.id);}}
               >
                 {machine.name}
               </button>
             ))}
+            {selected&&<button className="danger" disabled={busy} onClick={()=>void deleteMachine()}>選択中の自販機を削除</button>}
             {!machines.length&&<p>まだ仕入れBOT自販機がありません。</p>}
           </div>
         </article>
@@ -680,6 +697,31 @@ export default function ShiireVendingManager({
             <article className="card">
               <span className="eyebrow">PRODUCTS</span>
               <h2>販売商品</h2>
+              <p>通常商品とOld商品をそれぞれ設定します。仕入れ元の商品IDが変わっても、対応する種類の在庫から自動納品します。</p>
+              <div className="list-stack">
+                {(selected.products??[]).map(product=>(
+                  <div className="serverless-note" key={product.id}>
+                    <strong>{product.emoji} {product.name}</strong>
+                    <span>
+                      {product.procurement_class
+                        ?product.procurement_class+" / "
+                        :"個別商品 / "}
+                      在庫 {product.stock_count} / 販売 {product.sales_count} /
+                      PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
+                    </span>
+                    <div className="button-row">
+                      <button className="secondary" aria-label={product.name+"を編集"} onClick={()=>editProduct(product)} disabled={busy}>
+                        商品を編集
+                      </button>
+                      <button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>
+                        商品を削除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <details className="shiire-disclosure" open={Boolean(editingProductId)}><summary>{editingProductId?"選択した商品の編集":"商品を追加（詳細設定）"}</summary>
+
               <div className="form-grid two">
                 <label className="field">
                   <span>仕入れ商品</span>
@@ -767,28 +809,7 @@ export default function ShiireVendingManager({
                 </p>
               )}
 
-              <div className="list-stack">
-                {(selected.products??[]).map(product=>(
-                  <div className="serverless-note" key={product.id}>
-                    <strong>{product.emoji} {product.name}</strong>
-                    <span>
-                      {product.procurement_class
-                        ?product.procurement_class+" / "
-                        :"個別商品 / "}
-                      在庫 {product.stock_count} / 販売 {product.sales_count} /
-                      PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
-                    </span>
-                    <div className="button-row">
-                      <button className="secondary" onClick={()=>editProduct(product)} disabled={busy}>
-                        商品を編集
-                      </button>
-                      <button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>
-                        商品を削除
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              </details>
             </article>
 
             <article className="card">
