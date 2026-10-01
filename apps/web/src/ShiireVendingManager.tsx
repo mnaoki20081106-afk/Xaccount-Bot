@@ -61,6 +61,12 @@ type Machine={
   panel_image_url:string|null;
   active:number;
   products?:Product[];
+  panels?:Array<{
+    channel_id:string;
+    message_id:string;
+    created_at:number;
+    updated_at:number;
+  }>;
   coupons?:Array<{code:string;discount:number;created_at:number}>;
   stockNotification?:Notification;
 };
@@ -285,7 +291,7 @@ export default function ShiireVendingManager({
     );
   }
 
-  async function addProduct(){
+  async function addProduct(repostPanels=false){
     if(!selected) return;
     if(!sourceId) return onError(new Error("仕入れ商品を選択してください"));
     const procurementClass=
@@ -302,7 +308,8 @@ export default function ShiireVendingManager({
       description:productDescription,
       pricePayPay:Number(pricePayPay),
       priceKyash:Number(priceKyash),
-      emoji:emoji.trim()||null
+      emoji:emoji.trim()||null,
+      ...(editingProductId&&repostPanels?{repostPanels:true}:{})
     };
     if(editingProductId){
       await mutate(
@@ -338,6 +345,19 @@ export default function ShiireVendingManager({
     setEditingProductId("");
     setProductDescription("");
     setEmoji("");
+  }
+
+  async function repostPanels(){
+    if(!selected) return;
+    if(!(selected.panels?.length??0)){
+      return onError(new Error("再設置できる既存の自販機パネルがありません"));
+    }
+    if(!confirm("既設の自販機パネルを新しいメッセージとして再設置しますか？")) return;
+    await mutate(
+      `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel/repost`,
+      {method:"POST",body:"{}"},
+      "既設の自販機パネルを新しい内容で再設置しました"
+    );
   }
 
   async function deleteProduct(productId:string){
@@ -722,15 +742,30 @@ export default function ShiireVendingManager({
                 <textarea value={productDescription} onChange={e=>setProductDescription(e.target.value)} rows={3} />
               </label>
               <div className="button-row">
-                <button className="primary" onClick={()=>void addProduct()} disabled={busy||!sourceId}>
+                <button className="primary" onClick={()=>void addProduct(false)} disabled={busy||!sourceId}>
                   {editingProductId?"商品変更を保存":"販売商品へ追加"}
                 </button>
                 {editingProductId&&(
-                  <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
-                    編集をキャンセル
-                  </button>
+                  <>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busy||!(selected.panels?.length??0)}
+                      onClick={()=>void addProduct(true)}
+                    >
+                      保存して自販機を再設置
+                    </button>
+                    <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
+                      編集をキャンセル
+                    </button>
+                  </>
                 )}
               </div>
+              {editingProductId&&(
+                <p className="hint">
+                  「保存して自販機を再設置」は価格・商品内容を保存後、既設パネルを同じチャンネルへ新しいメッセージとして再投稿し、旧パネルを削除します。
+                </p>
+              )}
 
               <div className="list-stack">
                 {(selected.products??[]).map(product=>(
@@ -809,9 +844,21 @@ export default function ShiireVendingManager({
                   ))}
                 </select>
               </label>
-              <button className="primary" onClick={()=>void publishPanel()} disabled={busy||!panelChannel}>
-                パネルを設置
-              </button>
+              <div className="button-row">
+                <button className="primary" onClick={()=>void publishPanel()} disabled={busy||!panelChannel}>
+                  パネルを設置
+                </button>
+                <button
+                  className="secondary"
+                  onClick={()=>void repostPanels()}
+                  disabled={busy||!(selected.panels?.length??0)}
+                >
+                  既設パネルを削除して再設置
+                </button>
+              </div>
+              <small>
+                現在追跡中の既設パネル: {selected.panels?.length??0}件
+              </small>
               <label className="field">
                 <span>既存パネルのDiscordメッセージURL</span>
                 <input

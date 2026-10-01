@@ -66,3 +66,11 @@ test("vending editor presets the requested sales names descriptions and prices",
   assert.match(vendingSource,/検索上位にのるシャドバンされていないOld垢です。より運用向きです！/);
   assert.match(vendingSource,/price:500/);
 });
+
+
+test("vending price edits can repost existing Discord panels",()=>{
+  assert.match(vendingSource,/保存して自販機を再設置/);
+  assert.match(vendingSource,/既設パネルを削除して再設置/);
+  assert.match(vendingSource,/repostPanels:true/);
+  assert.match(vendingSource,/\/panel\/repost/);
+});
