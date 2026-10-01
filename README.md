@@ -124,22 +124,42 @@ XACCOUNT_BOT_BASE_URL
 
 ### 仕入れbotタブから管理できるもの
 
-- Discord-Shiire Botの導入状態
-- 既存PayPay/Kyash受取設定の利用可否
+Discord-Shiireの日常運用は、原則としてXAccount-Botのメイン管理サイトだけで完結します。
+
+- Discord-Shiire Botの導入状態 / API接続状態
+- HStora / Binance / LTC / 資金状態
+- LTC補充モード
+- 仕入れ資金配分（招待用 / No shadow ban / Top Search）
+- 資金割合変更時のHStora現在残高への再配分
+- PayPay残高 / USD・JPY観測
+- 資金上限・LTC目標・各種急変停止設定
+- Dry Run / 自動購入 / 自動仕入れ / Emergency Stop
+- Circuit Breaker解除 / 大量購入一時承認
+- HStora仕入れ条件・価格上限・試験購入・品質ガード
+- 承認済みHStora商品ID / Seller品質モード
+- 毎日18:00のNo shadow ban / Top Search恒常在庫
+- 18:00入荷のON/OFF / 今すぐ差分入荷
+- 在庫入荷通知の文言 / 通知チャンネル / 通知パネル設置・更新
+- 招待キャンペーンON/OFF
+- 何人招待ごとに1垢 / 招待用恒常在庫
+- 招待状態再同期 / 報酬配布再試行
+- 在庫 / HStora商品キャッシュ / 仕入れ注文 / 監査ログ
 - Shiire自販機の作成
-- HStora仕入れ商品と販売商品の紐付け
+- HStora仕入れ商品または在庫クラスと販売商品の紐付け
 - PayPay/Kyash販売価格
 - 商品名 / 説明 / 絵文字
-- 商品編集
+- 商品編集 / PayPay・Kyash販売価格の変更
+- 商品変更保存時に既設Discord自販機パネルを同じチャンネルへ再設置
 - 自販機パネルタイトル / 説明
 - パネル画像アップロード
 - Discordパネル設置 / 更新
 - 購入後ロール
 - 公開 / 非公開購入ログ
-- 在庫入荷通知 ON/OFF
-- 入荷通知チャンネル / メンションロール
+- 自販機単位の在庫入荷通知設定
 - クーポン
-- 注文履歴
+- 販売注文履歴
+
+API Secret・暗号化キー・HMAC Secretなどの秘密情報と、注文照合用の内部スナップショットは管理画面から直接編集できません。これらはWorker Secretまたは専用の安全な操作経路で管理します。
 
 ### Bridge安全設計
 
@@ -172,16 +192,18 @@ NO_SHADOWBAN
   - 上限 0.50〜0.60 USD / 1垢
 ```
 
-両方の文言がある商品は `TOP_SEARCH` として扱い、`NO_SHADOWBAN` へ二重計上しません。
+No Shadowban と TOP Search の両方を明示する高品質商品は、現行の仕入れポリシーでは偶数個で購入して `TOP_SEARCH` / `NO_SHADOWBAN` へ50:50で配分します。HStora商品 4521 は品質方針上の例外として `NO_SHADOWBAN` のみに分類します。
 
-仕入れbotタブの「自動仕入れ条件」から、各クラスの価格上限・発注点・目標在庫・初回試験購入数・1回最大仕入れ数を変更できます。Dry Run解除と自動仕入れON/OFFはこの画面からは変更できません。
+仕入れbotタブの「仕入れ」から、各クラスの価格上限・発注点・旧target_stock・初回試験購入数・1回最大仕入れ数・品質ガード・大量購入ガードを変更できます。通常販売在庫の実際の恒常在庫数は「18:00入荷」で別途設定します。Dry Run、自動購入、自動仕入れも「資金・LTC」から操作できます。
 
 販売商品は個別HStora商品IDではなく在庫クラスへ紐付けることを推奨します。これにより、最安の仕入先が商品Aから商品Bへ変わっても、同じDiscord自販機商品へ自動的に在庫が追加されます。
 
 
 ### 仕入れbotの資金・安全設定
 
-Discord-ShiireとのBridge設定後は、Main管理画面の「仕入れbot」タブから資金上限・PayPay残高観測・USD/JPY観測・Dry Run・自動購入・自動仕入れ・Emergency Stop・Circuit Breaker解除・大量購入一時承認まで操作できます。
+Discord-ShiireとのBridge設定後は、Main管理画面の「仕入れbot」タブから資金上限・仕入れ割合・PayPay残高観測・USD/JPY観測・Dry Run・自動購入・自動仕入れ・Emergency Stop・Circuit Breaker解除・大量購入一時承認まで操作できます。
+
+HStoraへの入金増加は1分Cronで検知して設定済みの仕入れ割合へ配分します。No shadow ban / Top Searchの通常販売在庫は毎日18:00に恒常在庫との差分だけを仕入れ、招待キャンペーン在庫は報酬切れを避けるため随時補充します。18:00の顧客向け在庫通知は、実際に在庫追加が1個以上あった日だけ送信します。
 
 LIVEへ切り替える操作と、LIVE中に自動購入/自動仕入れをONにする操作は確認ダイアログを要求します。Emergency Stopを解除しても自動購入・自動仕入れは自動では再開しません。
 

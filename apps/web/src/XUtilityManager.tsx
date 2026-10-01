@@ -43,6 +43,15 @@ export default function XUtilityManager({
     null
   );
   const [totpFeedback, setTotpFeedback] = useState<Feedback | null>(null);
+  const [authToken, setAuthToken] = useState("");
+  const [ct0, setCt0] = useState("");
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialStatus, setCredentialStatus] = useState<{
+    configured: boolean;
+    updatedAt: number | null;
+  }>({ configured: false, updatedAt: null });
+  const [credentialFeedback, setCredentialFeedback] =
+    useState<Feedback | null>(null);
 
   useEffect(() => {
     const first = messageChannels[0]?.id ?? "";
@@ -58,10 +67,114 @@ export default function XUtilityManager({
     );
   }, [guildId, messageChannels]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setCredentialFeedback(null);
+    void api<{
+      configured: boolean;
+      updatedAt: number | null;
+    }>("/api/guilds/" + guildId + "/xutility/search-credential")
+      .then((status) => {
+        if (!cancelled) setCredentialStatus(status);
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        setCredentialFeedback({
+          kind: "error",
+          message:
+            "X検索用ログイン情報の状態を取得できません: " +
+            (reason instanceof Error ? reason.message : String(reason))
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
+
+  async function saveCredential() {
+    if (!authToken.trim() || !ct0.trim()) {
+      setCredentialFeedback({
+        kind: "error",
+        message: "auth_token と ct0 を両方入力してください"
+      });
+      return;
+    }
+
+    setCredentialBusy(true);
+    setCredentialFeedback({
+      kind: "info",
+      message: "X検索用ログイン情報を保存中..."
+    });
+    try {
+      const status = await api<{
+        configured: boolean;
+        updatedAt: number | null;
+      }>("/api/guilds/" + guildId + "/xutility/search-credential", {
+        method: "PUT",
+        body: JSON.stringify({
+          session: authToken.trim(),
+          csrf: ct0.trim()
+        })
+      });
+      setCredentialStatus(status);
+      setAuthToken("");
+      setCt0("");
+      setCredentialFeedback({
+        kind: "success",
+        message: "X検索用ログイン情報を保存しました"
+      });
+      onNotice("X検索用ログイン情報を保存しました");
+    } catch (reason) {
+      setCredentialFeedback({
+        kind: "error",
+        message:
+          "保存に失敗しました: " +
+          (reason instanceof Error ? reason.message : String(reason))
+      });
+      onError(reason);
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
+  async function clearCredential() {
+    setCredentialBusy(true);
+    setCredentialFeedback({
+      kind: "info",
+      message: "X検索用ログイン情報を削除中..."
+    });
+    try {
+      const status = await api<{
+        configured: boolean;
+        updatedAt: number | null;
+      }>("/api/guilds/" + guildId + "/xutility/search-credential", {
+        method: "DELETE"
+      });
+      setCredentialStatus(status);
+      setAuthToken("");
+      setCt0("");
+      setCredentialFeedback({
+        kind: "success",
+        message: "X検索用ログイン情報を削除しました"
+      });
+      onNotice("X検索用ログイン情報を削除しました");
+    } catch (reason) {
+      setCredentialFeedback({
+        kind: "error",
+        message:
+          "削除に失敗しました: " +
+          (reason instanceof Error ? reason.message : String(reason))
+      });
+      onError(reason);
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
   async function deploy(kind: "shadowban" | "2fa") {
     const isShadowban = kind === "shadowban";
     const channelId = isShadowban ? shadowbanChannelId : totpChannelId;
-    const label = isShadowban ? "シャドウバンチェックパネル" : "2FAパネル";
+    const label = isShadowban ? "X 垢状態チェックパネル" : "2FAパネル";
     const setFeedback = isShadowban
       ? setShadowbanFeedback
       : setTotpFeedback;
@@ -146,9 +259,9 @@ export default function XUtilityManager({
         <div className="section-head">
           <div>
             <span className="eyebrow">X UTILITY</span>
-            <h2>シャドウバンチェック</h2>
+            <h2>X 垢状態チェック</h2>
             <p className="muted">
-              IRith形式の6項目を確認するX-Utilityパネルを設置します。
+              シャドウバン・凍結を確認するX-Utilityパネルを設置します。
             </p>
           </div>
         </div>
@@ -167,10 +280,87 @@ export default function XUtilityManager({
           >
             {busy === "shadowban"
               ? "設置中..."
-              : "シャドウバンチェックパネルを設置"}
+              : "X 垢状態チェックパネルを設置"}
           </button>
         </div>
         {feedback(shadowbanFeedback)}
+
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">X SEARCH SESSION</span>
+            <h3>X検索用ログイン情報</h3>
+            <p className="muted">
+              Search Ban / Search Suggestion Banの確認に使います。
+              チェック専用のXアカウントを推奨します。
+            </p>
+          </div>
+          <strong>
+            {credentialStatus.configured ? "設定済み" : "未設定"}
+          </strong>
+        </div>
+
+        <label className="field">
+          <span>auth_token</span>
+          <input
+            type="password"
+            value={authToken}
+            autoComplete="off"
+            placeholder={
+              credentialStatus.configured
+                ? "変更する場合のみ入力"
+                : "auth_token を入力"
+            }
+            onChange={(event) => setAuthToken(event.target.value)}
+          />
+        </label>
+
+        <label className="field">
+          <span>ct0</span>
+          <input
+            type="password"
+            value={ct0}
+            autoComplete="off"
+            placeholder={
+              credentialStatus.configured
+                ? "変更する場合のみ入力"
+                : "ct0 を入力"
+            }
+            onChange={(event) => setCt0(event.target.value)}
+          />
+        </label>
+
+        {credentialStatus.updatedAt && (
+          <p className="muted">
+            最終更新: {new Date(credentialStatus.updatedAt).toLocaleString("ja-JP")}
+          </p>
+        )}
+
+        <div className="button-row">
+          <button
+            type="button"
+            className="primary"
+            disabled={credentialBusy}
+            onClick={() => void saveCredential()}
+          >
+            {credentialBusy ? "処理中..." : "ログイン情報を保存"}
+          </button>
+          {credentialStatus.configured && (
+            <button
+              type="button"
+              disabled={credentialBusy}
+              onClick={() => void clearCredential()}
+            >
+              保存済み情報を削除
+            </button>
+          )}
+        </div>
+        {feedback(credentialFeedback)}
+
+        <div className="panel-feedback info" role="note">
+          管理者向け: Search Ban / Search Suggestion Ban が「現在確認できません」になる場合は、
+          X-Utility側のX検索用ログイン情報が無効・期限切れになっていないか確認してください。
+          利用者側には内部エラーやログイン情報の更新案内は表示されません。
+        </div>
       </article>
 
       <article className="card">

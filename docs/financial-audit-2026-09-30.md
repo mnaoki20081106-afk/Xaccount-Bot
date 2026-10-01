@@ -22,3 +22,8 @@ Transaction reference: https://developers.cloudflare.com/d1/worker-api/d1-databa
 Reproduced a Kyash receipt retry returning provider status `COMPLETED` instead of bridge status `completed`. This blocked Discord-Shiire's completion validation after response loss. Replayed successful receipts now preserve the bridge response contract without another receive request. Missing payment-account configuration also leaves a retryable rejected receipt instead of an ambiguous in-flight receipt.
 
 Validation: Worker typecheck, bundle dry-run and all 62 Worker tests passed (9 financial regression cases). No live payments or deployment were performed.
+
+## 2026-10-01 main統合検証
+
+最新main（4ec5454）の管理画面と価格更新時パネル再設置、検索認証情報管理を統合。全workspaceビルド・Worker 62テスト・Web 13テスト成功。
+実送金・本番デプロイの検証は実施していない。

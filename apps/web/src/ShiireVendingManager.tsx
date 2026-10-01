@@ -61,20 +61,14 @@ type Machine={
   panel_image_url:string|null;
   active:number;
   products?:Product[];
+  panels?:Array<{
+    channel_id:string;
+    message_id:string;
+    created_at:number;
+    updated_at:number;
+  }>;
   coupons?:Array<{code:string;discount:number;created_at:number}>;
   stockNotification?:Notification;
-};
-type ProcurementSettings={
-  max_unit_price_jpy:number;
-  max_no_shadowban_unit_price_usd:number;
-  reorder_point:number;
-  target_stock:number;
-  no_shadowban_reorder_point:number;
-  no_shadowban_target_stock:number;
-  trial_purchase_count:number;
-  max_batch_purchase:number;
-  dry_run:boolean;
-  auto_procurement_enabled:boolean;
 };
 type Order={
   id:string;
@@ -123,6 +117,23 @@ function postableChannels(channels:Channel[]){
   );
 }
 
+const CLASS_SALES_PRESETS={
+  "class:NO_SHADOWBAN":{
+    name:"Search Top + No shadow ban",
+    description:"検索上位に載るシャドバンされてない垢です。",
+    price:350
+  },
+  "class:TOP_SEARCH":{
+    name:"【old】Search Top + No shadow ban",
+    description:"検索上位にのるシャドバンされていないOld垢です。より運用向きです！",
+    price:500
+  }
+} as const;
+
+function classSalesPreset(id:string){
+  return CLASS_SALES_PRESETS[id as keyof typeof CLASS_SALES_PRESETS]??null;
+}
+
 export default function ShiireVendingManager({
   guildId,
   channels,
@@ -140,7 +151,6 @@ export default function ShiireVendingManager({
   const [machines,setMachines]=useState<Machine[]>([]);
   const [sources,setSources]=useState<SourceProduct[]>([]);
   const [orders,setOrders]=useState<Order[]>([]);
-  const [procurement,setProcurement]=useState<ProcurementSettings|null>(null);
   const [selectedId,setSelectedId]=useState("");
   const [busy,setBusy]=useState(false);
   const [newMachineName,setNewMachineName]=useState("Xアカウント自販機");
@@ -197,18 +207,16 @@ export default function ShiireVendingManager({
   async function load(){
     setBusy(true);
     try{
-      const [nextStatus,nextMachines,nextSources,nextOrders,nextProcurement]=await Promise.all([
+      const [nextStatus,nextMachines,nextSources,nextOrders]=await Promise.all([
         api<Status>(`/api/guilds/${guildId}/shiire/status`,{},15_000),
         api<Machine[]>(`/api/guilds/${guildId}/shiire/vending`,{},15_000),
         api<{products:SourceProduct[]}>(`/api/guilds/${guildId}/shiire/source-products`,{},15_000),
-        api<{orders:Order[]}>(`/api/guilds/${guildId}/shiire/orders`,{},15_000),
-        api<ProcurementSettings>(`/api/guilds/${guildId}/shiire/procurement-settings`,{},15_000)
+        api<{orders:Order[]}>(`/api/guilds/${guildId}/shiire/orders`,{},15_000)
       ]);
       setStatus(nextStatus);
       setMachines(nextMachines);
       setSources(nextSources.products??[]);
       setOrders(nextOrders.orders??[]);
-      setProcurement(nextProcurement);
       const nextId=
         nextMachines.some(machine=>machine.id===selectedId)
           ?selectedId
@@ -217,8 +225,12 @@ export default function ShiireVendingManager({
       const machine=nextMachines.find(row=>row.id===nextId)??null;
       applySelected(machine);
       if(!sourceId){
+        const preset=CLASS_SALES_PRESETS["class:TOP_SEARCH"];
         setSourceId("class:TOP_SEARCH");
-        setProductName("検索トップXアカウント");
+        setProductName(preset.name);
+        setProductDescription(preset.description);
+        setPricePayPay(preset.price);
+        setPriceKyash(preset.price);
       }
     }catch(reason){
       onError(reason);
@@ -242,36 +254,6 @@ export default function ShiireVendingManager({
     try{
       await api(path,init,20_000);
       onNotice(success);
-      await load();
-    }catch(reason){
-      onError(reason);
-    }finally{
-      setBusy(false);
-    }
-  }
-
-  async function saveProcurementSettings(){
-    if(!procurement) return;
-    setBusy(true);
-    try{
-      await api(
-        `/api/guilds/${guildId}/shiire/procurement-settings`,
-        {
-          method:"PATCH",
-          body:JSON.stringify({
-            max_unit_price_jpy:Number(procurement.max_unit_price_jpy),
-            max_no_shadowban_unit_price_usd:Number(procurement.max_no_shadowban_unit_price_usd),
-            reorder_point:Number(procurement.reorder_point),
-            target_stock:Number(procurement.target_stock),
-            no_shadowban_reorder_point:Number(procurement.no_shadowban_reorder_point),
-            no_shadowban_target_stock:Number(procurement.no_shadowban_target_stock),
-            trial_purchase_count:Number(procurement.trial_purchase_count),
-            max_batch_purchase:Number(procurement.max_batch_purchase)
-          })
-        },
-        20_000
-      );
-      onNotice("仕入れ条件を保存しました");
       await load();
     }catch(reason){
       onError(reason);
@@ -309,7 +291,7 @@ export default function ShiireVendingManager({
     );
   }
 
-  async function addProduct(){
+  async function addProduct(repostPanels=false){
     if(!selected) return;
     if(!sourceId) return onError(new Error("仕入れ商品を選択してください"));
     const procurementClass=
@@ -326,7 +308,8 @@ export default function ShiireVendingManager({
       description:productDescription,
       pricePayPay:Number(pricePayPay),
       priceKyash:Number(priceKyash),
-      emoji:emoji.trim()||null
+      emoji:emoji.trim()||null,
+      ...(editingProductId&&repostPanels?{repostPanels:true}:{})
     };
     if(editingProductId){
       await mutate(
@@ -362,6 +345,19 @@ export default function ShiireVendingManager({
     setEditingProductId("");
     setProductDescription("");
     setEmoji("");
+  }
+
+  async function repostPanels(){
+    if(!selected) return;
+    if(!(selected.panels?.length??0)){
+      return onError(new Error("再設置できる既存の自販機パネルがありません"));
+    }
+    if(!confirm("既設の自販機パネルを新しいメッセージとして再設置しますか？")) return;
+    await mutate(
+      `/api/guilds/${guildId}/shiire/vending/${selected.id}/panel/repost`,
+      {method:"POST",body:"{}"},
+      "既設の自販機パネルを新しい内容で再設置しました"
+    );
   }
 
   async function deleteProduct(productId:string){
@@ -529,135 +525,12 @@ export default function ShiireVendingManager({
         )}
       </section>
 
-      <section className="card">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">PROCUREMENT POLICY</span>
-            <h2>自動仕入れ条件</h2>
-            <p>
-              TOP_SEARCHとNO_SHADOWBANは別在庫として補充します。
-              両方不足している場合はTOP_SEARCHを先に補充します。
-            </p>
-          </div>
-          <button
-            className="primary"
-            onClick={()=>void saveProcurementSettings()}
-            disabled={busy||!procurement}
-          >
-            仕入れ条件を保存
-          </button>
-        </div>
-
-        {procurement&&(
-          <>
-            <div className="form-grid two">
-              <label className="field">
-                <span>TOP_SEARCH 上限単価（円）</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.max_unit_price_jpy}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_unit_price_jpy:Number(e.target.value)
-                  })}
-                />
-                <small>検索トップ明記があるX垢だけ。初期値80円。</small>
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 上限単価（USD）</span>
-                <input
-                  type="number"
-                  min="0.5"
-                  max="0.6"
-                  step="0.01"
-                  value={procurement.max_no_shadowban_unit_price_usd}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_no_shadowban_unit_price_usd:Number(e.target.value)
-                  })}
-                />
-                <small>TOP表記なし + No Shadowban明記のみ。0.50〜0.60ドル。</small>
-              </label>
-              <label className="field">
-                <span>TOP_SEARCH 発注点</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.reorder_point}
-                  onChange={e=>setProcurement({...procurement,reorder_point:Number(e.target.value)})}
-                />
-              </label>
-              <label className="field">
-                <span>TOP_SEARCH 目標在庫</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.target_stock}
-                  onChange={e=>setProcurement({...procurement,target_stock:Number(e.target.value)})}
-                />
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 発注点</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.no_shadowban_reorder_point}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    no_shadowban_reorder_point:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>NO_SHADOWBAN 目標在庫</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={procurement.no_shadowban_target_stock}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    no_shadowban_target_stock:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>初回試験購入数</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.trial_purchase_count}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    trial_purchase_count:Number(e.target.value)
-                  })}
-                />
-              </label>
-              <label className="field">
-                <span>1回最大仕入れ数</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={procurement.max_batch_purchase}
-                  onChange={e=>setProcurement({
-                    ...procurement,
-                    max_batch_purchase:Number(e.target.value)
-                  })}
-                />
-              </label>
-            </div>
-            <div className="serverless-note">
-              <strong>
-                {procurement.dry_run?"Dry Run ON":"Dry Run OFF"} /
-                自動仕入れ {procurement.auto_procurement_enabled?"ON":"OFF"}
-              </strong>
-              <span>
-                この画面ではDry Run解除や自動仕入れON/OFFは変更しません。
-                資金を動かす設定はDiscord-Shiire側の安全設定から明示的に操作してください。
-              </span>
-            </div>
-          </>
-        )}
+      <section className="serverless-note">
+        <strong>仕入れ条件は「仕入れ」タブへ統合しました</strong>
+        <span>
+          価格上限・品質ガード・試験購入・大量購入ガード・18:00恒常在庫・仕入れ割合は、
+          仕入れbot運用センターの各専用タブから一元管理します。
+        </span>
       </section>
 
       <section className="two-col">
@@ -815,12 +688,12 @@ export default function ShiireVendingManager({
                     onChange={e=>{
                       const id=e.target.value;
                       setSourceId(id);
-                      if(id==="class:TOP_SEARCH"){
-                        setProductName("検索トップXアカウント");
-                        return;
-                      }
-                      if(id==="class:NO_SHADOWBAN"){
-                        setProductName("No Shadowban Xアカウント");
+                      const preset=classSalesPreset(id);
+                      if(preset){
+                        setProductName(preset.name);
+                        setProductDescription(preset.description);
+                        setPricePayPay(preset.price);
+                        setPriceKyash(preset.price);
                         return;
                       }
                       const source=sources.find(row=>row.supplier_product_id===id);
@@ -829,11 +702,11 @@ export default function ShiireVendingManager({
                   >
                     <option value="">選択してください</option>
                     <optgroup label="自動仕入れ在庫クラス">
-                      <option value="class:TOP_SEARCH">
-                        TOP_SEARCH — 検索トップ在庫をまとめて販売
-                      </option>
                       <option value="class:NO_SHADOWBAN">
-                        NO_SHADOWBAN — TOP表記なし・No Shadowban在庫
+                        NO_SHADOWBAN — Search Top + No shadow ban / 350円
+                      </option>
+                      <option value="class:TOP_SEARCH">
+                        TOP_SEARCH — 【old】Search Top + No shadow ban / 500円
                       </option>
                     </optgroup>
                     <optgroup label="個別HStora商品（上級設定）">
@@ -869,15 +742,30 @@ export default function ShiireVendingManager({
                 <textarea value={productDescription} onChange={e=>setProductDescription(e.target.value)} rows={3} />
               </label>
               <div className="button-row">
-                <button className="primary" onClick={()=>void addProduct()} disabled={busy||!sourceId}>
+                <button className="primary" onClick={()=>void addProduct(false)} disabled={busy||!sourceId}>
                   {editingProductId?"商品変更を保存":"販売商品へ追加"}
                 </button>
                 {editingProductId&&(
-                  <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
-                    編集をキャンセル
-                  </button>
+                  <>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busy||!(selected.panels?.length??0)}
+                      onClick={()=>void addProduct(true)}
+                    >
+                      保存して自販機を再設置
+                    </button>
+                    <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
+                      編集をキャンセル
+                    </button>
+                  </>
                 )}
               </div>
+              {editingProductId&&(
+                <p className="hint">
+                  「保存して自販機を再設置」は価格・商品内容を保存後、既設パネルを同じチャンネルへ新しいメッセージとして再投稿し、旧パネルを削除します。
+                </p>
+              )}
 
               <div className="list-stack">
                 {(selected.products??[]).map(product=>(
@@ -956,9 +844,21 @@ export default function ShiireVendingManager({
                   ))}
                 </select>
               </label>
-              <button className="primary" onClick={()=>void publishPanel()} disabled={busy||!panelChannel}>
-                パネルを設置
-              </button>
+              <div className="button-row">
+                <button className="primary" onClick={()=>void publishPanel()} disabled={busy||!panelChannel}>
+                  パネルを設置
+                </button>
+                <button
+                  className="secondary"
+                  onClick={()=>void repostPanels()}
+                  disabled={busy||!(selected.panels?.length??0)}
+                >
+                  既設パネルを削除して再設置
+                </button>
+              </div>
+              <small>
+                現在追跡中の既設パネル: {selected.panels?.length??0}件
+              </small>
               <label className="field">
                 <span>既存パネルのDiscordメッセージURL</span>
                 <input
