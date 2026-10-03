@@ -23,7 +23,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
  const writes=[],errors=[],automationWrites=[],settingsWrites=[],restockWrites=[];
  let limitsFailure=false;
  let controls={max_unit_price_jpy:80,max_no_shadowban_unit_price_usd:0.6};
- let restock={config:{enabled:true,top_search_target_stock:20,no_shadowban_target_stock:20,notification_channel_id:'',notification_message:'入荷しました'}};
+ let restock={config:{enabled:true,top_search_target_stock:20,no_shadowban_target_stock:20,notification_channel_id:'',notification_message:'入荷しました',notification_mention:'everyone'}};
  const nativeConfirm=globalThis.confirm;
  globalThis.confirm=()=>true;
  t.after(()=>{globalThis.confirm=nativeConfirm;});
