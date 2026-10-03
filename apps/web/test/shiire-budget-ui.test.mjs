@@ -15,12 +15,15 @@ test('budget navigation validates percentages, saves the three classes and reloa
  globalThis.IS_REACT_ACT_ENVIRONMENT=true;
  t.after(()=>dom.window.close());
  const React=await import('react');
- const {render,screen,waitFor,cleanup}=await import('@testing-library/react');
+ const {render,screen,waitFor,cleanup,act,within}=await import('@testing-library/react');
  const {default:userEvent}=await import('@testing-library/user-event');
  t.after(cleanup);
  const {default:Shiire}=await import(pathToFileURL(path.join(dir,'Shiire.mjs')).href);
  let percentages={INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50};
- const writes=[],errors=[];
+ const writes=[],errors=[],automationWrites=[];
+ const nativeConfirm=globalThis.confirm;
+ globalThis.confirm=()=>true;
+ t.after(()=>{globalThis.confirm=nativeConfirm;});
  let budgetFailure=false,zeroBudget=false;
  const overview={generatedAt:Date.now(),safety:{fundingMode:'manual_hstora',fundingModeLabel:'LTC手動補充',dryRun:true,emergencyStop:false,autoProcurementEnabled:false},settings:{},funding:{ok:true,data:{}},balances:{hstora:{ok:true,data:{balance:100,currency:'USD'}}},inventoryByClass:{NO_SHADOWBAN:{READY_FOR_DELIVERY:12},TOP_SEARCH:{READY_FOR_DELIVERY:8},INVITE_CAMPAIGN:{READY_FOR_DELIVERY:3}},today:{count:0,amount:0},circuitBreakers:[],recentErrors:[],providerIssues:[],integrations:{hstoraConfigured:true,credentialsEncryptionConfigured:true},recentOrders:[]};
  const nativeFetch=globalThis.fetch;
@@ -28,6 +31,12 @@ test('budget navigation validates percentages, saves the three classes and reloa
  globalThis.fetch=async(input,init={})=>{
   const p=new URL(String(input)).pathname;
   if(p.endsWith('/operations/overview'))return Response.json(overview);
+  if(p.endsWith('/automation-settings')){
+   const patch=JSON.parse(init.body);automationWrites.push(patch);
+   overview.safety.dryRun=patch.dry_run??overview.safety.dryRun;
+   overview.safety.autoProcurementEnabled=patch.auto_procurement_enabled;
+   return Response.json({ok:true});
+  }
   if(p.endsWith('/daily-restock'))return Response.json({config:{top_search_target_stock:20,no_shadowban_target_stock:20}});
   if(p.endsWith('/procurement-budget')){
    if(budgetFailure)return Response.json({message:'INVALID_BRIDGE_SIGNATURE'},{status:401});
@@ -43,6 +52,18 @@ test('budget navigation validates percentages, saves the three classes and reloa
  const user=userEvent.setup();render(React.createElement(Shiire,props));
  await screen.findByText('$100');
  assert.equal(screen.queryByRole('spinbutton'),null,'overview contains no settings wall');
+ assert.equal(screen.getByRole('button',{name:'詳細メニュー'}).getAttribute('aria-expanded'),'false');
+ assert.equal(Boolean(within(screen.getByRole('navigation')).queryByRole('button',{name:'運転設定'})),false);
+ await user.click(screen.getByRole('button',{name:'詳細メニュー'}));
+ assert.ok(within(screen.getByRole('navigation')).getByRole('button',{name:'運転設定'}));
+ await user.click(screen.getByRole('button',{name:'詳細メニューを閉じる'}));
+ await user.click(screen.getByRole('button',{name:'自動仕入れを開始'}));
+ await screen.findByRole('button',{name:'自動仕入れを一時停止'});
+ assert.deepEqual(automationWrites[0],{dry_run:false,auto_procurement_enabled:true,confirmLive:true});
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'自動仕入れを一時停止'}).disabled,false));
+ await user.click(screen.getByRole('button',{name:'自動仕入れを一時停止'}));
+ await screen.findByRole('button',{name:'自動仕入れを開始'});
+ assert.deepEqual(automationWrites[1],{auto_procurement_enabled:false,confirmLive:false});
  assert.equal(screen.getByText('直近の注文').parentElement.open,false);
  assert.equal(screen.getByText('連携状態').parentElement.open,false);
  await user.click(screen.getByRole('button',{name:'配分を設定'}));
@@ -86,4 +107,39 @@ test('budget navigation validates percentages, saves the three classes and reloa
  await screen.findByRole('spinbutton',{name:'No shadow banの割合'});
  assert.equal(screen.queryByRole('alert'),null);
  assert.equal(screen.getAllByText('予算残 $0').length,3,'valid zero budgets must render all three categories');
+
+ cleanup();
+ let overviewFailure=true,notices=[];
+ globalThis.fetch=async(input)=>{
+  const p=new URL(String(input)).pathname;
+  if(p.endsWith('/operations/overview'))return overviewFailure?Response.json({message:'bridge unavailable'},{status:503}):Response.json(overview);
+  if(p.endsWith('/daily-restock'))return Response.json({config:{}});
+  throw new Error('Unexpected request: '+p);
+ };
+ render(React.createElement(Shiire,{...props,onNotice:m=>notices.push(m)}));
+ assert.match((await screen.findByRole('alert')).textContent,/bridge unavailable/);
+ assert.ok(screen.getByText('接続エラー'));
+ await user.click(screen.getByRole('button',{name:'更新'}));
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'更新'}).disabled,false));
+ assert.deepEqual(notices,[],'failed refresh must not report success');
+ overviewFailure=false;
+ await user.click(screen.getByRole('button',{name:'再取得'}));
+ await screen.findByText('$100');
+ assert.equal(screen.queryByRole('alert'),null);
+ cleanup();
+ let releaseOld;
+ const oldResponse=new Promise(resolve=>releaseOld=resolve);
+ globalThis.fetch=async(input)=>{
+  const p=new URL(String(input)).pathname;
+  if(p.includes('/old/')&&p.endsWith('/operations/overview'))return oldResponse;
+  if(p.endsWith('/operations/overview'))return Response.json({...overview,balances:{hstora:{ok:true,data:{balance:200,currency:'USD'}}}});
+  if(p.endsWith('/daily-restock'))return Response.json({config:{}});
+  throw new Error('Unexpected request: '+p);
+ };
+ const view=render(React.createElement(Shiire,{...props,guildId:'old'}));
+ view.rerender(React.createElement(Shiire,{...props,guildId:'new'}));
+ await screen.findByText('$200');
+ await act(async()=>{releaseOld(Response.json(overview));await oldResponse;});
+ assert.ok(screen.getByText('$200'),'old guild response must not overwrite current guild');
+ assert.equal(screen.queryByText('$100'),null);
 });

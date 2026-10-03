@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import ShiireVendingManager from "./ShiireVendingManager";
 import "./shiire-operations.css";
@@ -219,6 +219,12 @@ export default function ShiireOperationsCenter({
   onError:(reason:unknown)=>void;
 }){
   const [section,setSection]=useState<Section>("overview");
+  const [advanced,setAdvanced]=useState(false);
+  const [overviewError,setOverviewError]=useState("");
+  const activeGuild=useRef(guildId);
+  const overviewRequest=useRef(0);
+  const detailRequest=useRef(0);
+  const staleRequest=useRef(new Error("STALE_SHIIRE_REQUEST"));
   const [overview,setOverview]=useState<Overview|null>(null);
   const [binance,setBinance]=useState<BinanceDetail|null>(null);
   const [hstora,setHstora]=useState<HstoraDetail|null>(null);
@@ -251,7 +257,8 @@ export default function ShiireOperationsCenter({
     (overview?.providerIssues?.length??0);
 
   const overallState=useMemo(()=>{
-    if(!overview) return {label:"読込中",tone:"warn",detail:"Discord-Shiireの状態を取得しています"};
+    if(overviewError) return {label:"接続エラー",tone:"bad",detail:overviewError};
+    if(!overview) return {label:overviewError?"接続エラー":"読込中",tone:overviewError?"bad":"warn",detail:overviewError||"Discord-Shiireの状態を取得しています"};
     if(overview.safety.emergencyStop){
       return {label:"緊急停止",tone:"bad",detail:"自動購入・自動仕入れは停止されています"};
     }
@@ -266,30 +273,40 @@ export default function ShiireOperationsCenter({
       };
     }
     if(overview.safety.dryRun){
-      return {label:"DRY RUN",tone:"good",detail:"เงินจริงを動かさない安全モードです"};
+      return {label:"DRY RUN",tone:"good",detail:"実際のお金を動かさない安全モードです"};
     }
     if(!overview.safety.autoProcurementEnabled){
       return {label:"待機",tone:"warn",detail:"LIVE設定ですが自動仕入れはOFFです"};
     }
     return {label:"自動運転",tone:"good",detail:"設定範囲内で自動仕入れが有効です"};
-  },[overview]);
+  },[overview,overviewError]);
 
   async function loadOverview(showBusy=true){
+    if(activeGuild.current!==guildId) return false;
+    const requestId=++overviewRequest.current;
+    const active=()=>overviewRequest.current===requestId&&activeGuild.current===guildId;
+    const load=async<T,>(path:string,init:RequestInit={},timeoutMs?:number):Promise<T>=>{
+      const result=await api<T>(path,init,timeoutMs);
+      if(!active()) throw staleRequest.current;
+      return result;
+    };
+    setOverviewError("");
     if(showBusy) setBusy(true);
     try{
-      const data=await api<Overview>(
+      const data=await load<Overview>(
         `/api/guilds/${guildId}/shiire/operations/overview`,
         {},
         25_000
       );
       setOverview(data);
       try{
-        setDailyRestock(await api<DailyRestockDetail>(
+        setDailyRestock(await load<DailyRestockDetail>(
           `/api/guilds/${guildId}/shiire/daily-restock`,
           {},
           20_000
         ));
-      }catch{
+      }catch(error){
+        if(!active()) throw staleRequest.current;
         // Keep the existing operations center usable during a staggered
         // XAccount-Bot / Discord-Shiire deployment. The dedicated 18:00 tab
         // will still surface the bridge error if the backend is outdated.
@@ -335,10 +352,14 @@ export default function ShiireOperationsCenter({
       });
       setPayPayObservation(Number(data.settings?.observed_paypay_balance_jpy??0));
       setUsdJpyObservation(Number(data.settings?.usd_jpy_rate??0));
+      return true;
     }catch(reason){
+      if(!active()) return false;
+      setOverviewError(reason instanceof Error?reason.message:String(reason));
       onError(reason);
+      return false;
     }finally{
-      if(showBusy) setBusy(false);
+      if(active()) setBusy(false);
     }
   }
 
@@ -368,13 +389,21 @@ export default function ShiireOperationsCenter({
   }
 
   async function loadDetail(target:Section){
+    if(activeGuild.current!==guildId) return false;
     if(target==="overview"||target==="vending") return;
+    const requestId=++detailRequest.current;
+    const active=()=>detailRequest.current===requestId&&activeGuild.current===guildId;
+    const load=async<T,>(path:string,init:RequestInit={},timeoutMs?:number):Promise<T>=>{
+      const result=await api<T>(path,init,timeoutMs);
+      if(!active()) throw staleRequest.current;
+      return result;
+    };
     setDetailBusy(true);
     try{
       if(target==="budget"){
         setProcurementBudget(null);
         setBudgetError("");
-        const data=await api<ProcurementBudgetDetail>(
+        const data=await load<ProcurementBudgetDetail>(
           `/api/guilds/${guildId}/shiire/procurement-budget`, {}, 20_000
         );
         if(!data?.percentages||!data?.budget?.available){
@@ -385,23 +414,23 @@ export default function ShiireOperationsCenter({
         if(overview?.safety.fundingMode==="manual_hstora"){
           setBinance(null);
         }else{
-          setBinance(await api<BinanceDetail>(
+          setBinance(await load<BinanceDetail>(
             `/api/guilds/${guildId}/shiire/operations/binance`, {}, 25_000
           ));
         }
       }else if(target==="procurement"){
         const [nextOrders,nextHstora,nextSettings]=await Promise.all([
-          api<OrderDetail>(
+          load<OrderDetail>(
             `/api/guilds/${guildId}/shiire/operations/orders`,
             {},
             20_000
           ),
-          api<HstoraDetail>(
+          load<HstoraDetail>(
             `/api/guilds/${guildId}/shiire/operations/hstora`,
             {},
             25_000
           ),
-          api<any>(
+          load<any>(
             `/api/guilds/${guildId}/shiire/procurement-settings`,
             {},
             20_000
@@ -411,25 +440,25 @@ export default function ShiireOperationsCenter({
         setHstora(nextHstora);
         applyProcurementControls(nextSettings);
       }else if(target==="restock"){
-        setDailyRestock(await api<DailyRestockDetail>(
+        setDailyRestock(await load<DailyRestockDetail>(
           `/api/guilds/${guildId}/shiire/daily-restock`,
           {},
           20_000
         ));
       }else if(target==="invite"){
-        setInviteCampaign(await api<InviteCampaignDetail>(
+        setInviteCampaign(await load<InviteCampaignDetail>(
           `/api/guilds/${guildId}/shiire/invite-campaign`,
           {},
           20_000
         ));
       }else if(target==="inventory"){
         const [nextInventory,nextRestock]=await Promise.all([
-          api<InventoryDetail>(
+          load<InventoryDetail>(
             `/api/guilds/${guildId}/shiire/operations/inventory`,
             {},
             20_000
           ),
-          api<DailyRestockDetail>(
+          load<DailyRestockDetail>(
             `/api/guilds/${guildId}/shiire/daily-restock`,
             {},
             20_000
@@ -438,21 +467,25 @@ export default function ShiireOperationsCenter({
         setInventory(nextInventory);
         setDailyRestock(nextRestock);
       }else if(target==="logs"){
-        setLogs(await api<LogDetail>(
+        setLogs(await load<LogDetail>(
           `/api/guilds/${guildId}/shiire/operations/logs`,
           {},
           20_000
         ));
       }
+      return true;
     }catch(reason){
+      if(!active()) return false;
       if(target==="budget") setBudgetError(reason instanceof Error?reason.message:String(reason));
       onError(reason);
+      return false;
     }finally{
-      setDetailBusy(false);
+      if(active()) setDetailBusy(false);
     }
   }
 
   useEffect(()=>{
+    activeGuild.current=guildId;
     setOverview(null);
     setBinance(null);
     setHstora(null);
@@ -468,17 +501,24 @@ export default function ShiireOperationsCenter({
     setPayPayObservation(0);
     setUsdJpyObservation(0);
     setSection("overview");
+    setAdvanced(false);
+    setOverviewError("");
+    setBusy(false);
+    setDetailBusy(false);
     void loadOverview();
+    return ()=>{overviewRequest.current++;detailRequest.current++;};
   },[guildId]);
 
   useEffect(()=>{
     if(section!=="overview"&&section!=="vending") void loadDetail(section);
-  },[section]);
+    else setDetailBusy(false);
+    return ()=>{detailRequest.current++;};
+  },[section,guildId]);
 
   async function refresh(){
-    await loadOverview();
-    if(section!=="overview"&&section!=="vending") await loadDetail(section);
-    onNotice("仕入れbotの運用情報を更新しました");
+    const overviewOk=await loadOverview();
+    const detailOk=section!=="overview"&&section!=="vending"?await loadDetail(section):true;
+    if(overviewOk&&detailOk) onNotice("仕入れbotの運用情報を更新しました");
   }
 
   async function setFundingMode(mode:"manual_hstora"|"binance_auto"){
@@ -877,7 +917,7 @@ export default function ShiireOperationsCenter({
       );
     const confirmLive=turningLive||enablingWhileLive;
     if(confirmLive&&!confirm(
-      "เงินจริงを動かす可能性がある設定です。資金上限・残高・API接続・仕入対象を確認済みですか？"
+      "実際のお金を動かす可能性がある設定です。資金上限・残高・API接続・仕入対象を確認済みですか？"
     )) return;
     setControlBusy(true);
     try{
@@ -1021,7 +1061,7 @@ export default function ShiireOperationsCenter({
       </section>
 
       <nav className="shiire-subnav" aria-label="仕入れbot管理メニュー">
-        {sections.map(item=>(
+        {sections.filter(item=>advanced||["overview","budget","restock","vending"].includes(item.id)).map(item=>(
           <button
             type="button"
             key={item.id}
@@ -1033,12 +1073,43 @@ export default function ShiireOperationsCenter({
 
           </button>
         ))}
+        <button type="button" aria-expanded={advanced} onClick={()=>{
+          if(advanced&&["funding","procurement","invite","inventory","logs"].includes(section)) setSection("overview");
+          setAdvanced(!advanced);
+        }}>{advanced?"詳細メニューを閉じる":"詳細メニュー"}</button>
       </nav>
 
+      {overviewError&&<div className="shiire-callout warn" role="alert">
+        <strong>運用情報を取得できませんでした</strong><span>{overviewError}</span>
+        {overview&&<span>表示中の情報は前回取得時点のものです。</span>}
+        <button className="secondary" disabled={busy} onClick={()=>void loadOverview()}>再取得</button>
+      </div>}
       {(busy&&!overview)&&<div className="progress"><span /></div>}
 
       {section==="overview"&&(
         <>
+          {overview&&<section className="card shiire-start-guide">
+            <h2>普段の操作はこの順番で</h2>
+            <ol>
+              <li><a href="https://hstora.com/en/wallet" target="_blank" rel="noreferrer">HStora WalletでLTC入金先を発行</a>し、Exodusから送金。反映後は自動で予算へ配分します。</li>
+              <li><button className="secondary" aria-label="配分を開く" onClick={()=>setSection("budget")}>残高・配分</button>で仕入れ割合を設定。</li>
+              <li><button className="secondary" aria-label="入荷設定を開く" onClick={()=>setSection("restock")}>18:00入荷</button>で在庫目標を設定。</li>
+              <li><button className="secondary" aria-label="自販機を開く" onClick={()=>setSection("vending")}>自販機</button>で価格と販売先を設定。</li>
+            </ol>
+            <div className="shiire-callout neutral" role="status">
+              <strong>{overview.safety.emergencyStop?"次に：停止原因を確認し、停止解除":overview.providerIssues?.length?"次に：接続エラーを確認":overview.safety.dryRun?"次に：テスト運転を終了して自動仕入れを開始":!overview.safety.autoProcurementEnabled?"次に：自動仕入れを開始":Number(hstoraBalance?.balance??0)<=0?"次に：HStoraへLTCを補充":"自動仕入れは有効です。通常在庫は18:00に差分補充します。"}</strong>
+              {!overview.safety.emergencyStop&&<button className="secondary" disabled={controlBusy||busy} onClick={()=>void updateAutomation(overview.safety.dryRun||!overview.safety.autoProcurementEnabled?{dry_run:false,auto_procurement_enabled:true}:{auto_procurement_enabled:false})}>
+                {overview.safety.dryRun||!overview.safety.autoProcurementEnabled?"自動仕入れを開始":"自動仕入れを一時停止"}
+              </button>}
+            </div>
+            <details><summary>招待キャンペーン・仕入れ条件を変更する</summary>
+              <div className="shiire-control-buttons">
+                <button className="secondary" onClick={()=>{setAdvanced(true);setSection("invite");}}>招待キャンペーン</button>
+                <button className="secondary" onClick={()=>{setAdvanced(true);setSection("procurement");}}>仕入れ条件</button>
+                <button className="secondary" onClick={()=>{setAdvanced(true);setSection("funding");}}>運転設定</button>
+              </div>
+            </details>
+          </section>}
           <section className="shiire-kpi-grid">
             <article className="card shiire-kpi">
               <span>仕入れに使える残高</span>
@@ -1061,17 +1132,8 @@ export default function ShiireOperationsCenter({
           {blockers>0&&<div className="shiire-callout warn" role="status">
             <strong>確認が必要な項目が {blockers} 件あります</strong>
             <span>{overview?.providerIssues?.[0]?.error??overview?.circuitBreakers?.[0]?.reason??overview?.recentErrors?.[0]?.message}</span>
-            <button className="secondary" onClick={()=>setSection("logs")}>障害を確認</button>
+            <button className="secondary" onClick={()=>{setAdvanced(true);setSection("logs");}}>障害を確認</button>
           </div>}
-          <section className="card">
-            <div className="section-head"><h2>よく使う設定</h2><span className="shiire-muted">本日の仕入れ {num(overview?.today.count,0)}件 / {usd(overview?.today.amount)}</span></div>
-            <div className="shiire-quick-grid">
-              <button onClick={()=>setSection("budget")}><strong>残高の使い道</strong><span>No shadow ban・Top Search・招待の割合</span></button>
-              <button onClick={()=>setSection("restock")}><strong>18:00入荷</strong><span>恒常在庫と入荷通知</span></button>
-              <button onClick={()=>setSection("invite")}><strong>招待キャンペーン</strong><span>開催・招待人数・特典在庫</span></button>
-              <button onClick={()=>setSection("vending")}><strong>自販機</strong><span>価格変更・設置・納品</span></button>
-            </div>
-          </section>
           <details className="card shiire-disclosure"><summary>直近の注文</summary>
             <OrderList rows={overview?.recentOrders??[]} compact />
           </details>

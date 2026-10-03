@@ -121,3 +121,9 @@
   .shiire-budget-row strong{font-size:14px}
   .shiire-percent-field input{width:76px}
 }
+
+.shiire-start-guide ol{display:grid;gap:12px;padding-left:24px;line-height:1.8;color:#bac8df;font-size:14px}
+.shiire-start-guide li button{margin-right:6px}
+.shiire-start-guide a{color:#aabaff;text-decoration:underline}
+.shiire-start-guide details{margin-top:16px}
+.shiire-start-guide summary{cursor:pointer;color:#bac8df;font-size:13px}
