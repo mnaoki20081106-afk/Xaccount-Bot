@@ -308,6 +308,11 @@ export default function ShiireVendingManager({
   const currentDraft=currentProductDraft();
   const previewProducts=(selected?.products??[]).map(product=>product.id===editingProductId&&currentDraft?currentDraft:productDrafts[product.id]??product);
 
+  function productPayload(product:Product){
+    return {name:product.name.trim()||"Xアカウント",description:product.description,pricePayPay:product.price_paypay,priceKyash:product.price_kyash,emoji:product.emoji||null,
+      ...(product.procurement_class?{procurementClass:product.procurement_class}:{supplierProductId:product.supplier_product_id})};
+  }
+
   async function persistPanelDraft(){
     if(!selected) return;
     const drafts={...productDrafts,...(currentDraft?{[currentDraft.id]:currentDraft}:{})};
@@ -318,21 +323,51 @@ export default function ShiireVendingManager({
       if(!Number.isSafeInteger(product.price_paypay)||product.price_paypay<0||!Number.isSafeInteger(product.price_kyash)||product.price_kyash<0) throw new Error("価格は0以上の整数で入力してください");
       if(product.name.trim().length>80) throw new Error("商品名は80文字以内で入力してください");
     }
-    await api(`/api/guilds/${guildId}/shiire/vending/${selected.id}`,{method:"PATCH",body:JSON.stringify(machineDraft())},20_000);
-    for(const product of Object.values(drafts)){
-      await api(`/api/guilds/${guildId}/shiire/vending/${selected.id}/products/${product.id}`,{method:"PATCH",body:JSON.stringify({name:product.name.trim()||"Xアカウント",description:product.description,pricePayPay:product.price_paypay,priceKyash:product.price_kyash,emoji:product.emoji,
-        ...(product.procurement_class?{procurementClass:product.procurement_class}:{supplierProductId:product.supplier_product_id})})},20_000);
+    const base={name:selected.name,panelTitle:selected.panel_title??"",panelDescription:selected.panel_description??"",panelColor:isPanelColor(selected.panel_color)?selected.panel_color:DEFAULT_PANEL_COLOR,
+      publicLogChannelId:selected.public_log_channel_id||null,privateLogChannelId:selected.private_log_channel_id||null,roleId:selected.role_id||null};
+    const patch=Object.fromEntries(Object.entries(machineDraft()).filter(([key,value])=>value!==base[key as keyof typeof base]));
+    const products=Object.values(drafts).filter(product=>{
+      const original=selected.products?.find(row=>row.id===product.id);
+      return !original||JSON.stringify(productPayload(product))!==JSON.stringify(productPayload(original));
+    });
+    const path=`/api/guilds/${guildId}/shiire/vending/${selected.id}`;
+    // An empty patch explicitly refreshes existing panels when no settings changed.
+    // Product-only edits must not revalidate unrelated channels or roles.
+    if(Object.keys(patch).length||!products.length){
+      await api(path,{method:"PATCH",body:JSON.stringify(patch)},20_000);
+      const columns:Record<string,string>={name:"name",panelTitle:"panel_title",panelDescription:"panel_description",panelColor:"panel_color",publicLogChannelId:"public_log_channel_id",privateLogChannelId:"private_log_channel_id",roleId:"role_id"};
+      const saved=Object.fromEntries(Object.entries(patch).map(([key,value])=>[columns[key],value]));
+      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,...saved}:row));
+    }
+    for(const product of products){
+      await api(`${path}/products/${product.id}`,{method:"PATCH",body:JSON.stringify(productPayload(product))},20_000);
+      // Retain confirmed saves as the retry baseline if a later request fails.
+      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,products:row.products?.map(original=>original.id===product.id?{...product,name:product.name.trim()||"Xアカウント"}:original)}:row));
     }
   }
 
   async function savePanelPreview(){
+    if(!selected) return;
     setBusy(true);
+    let saved=false;
     try{
       await persistPanelDraft();
+      saved=true;
+      // Saving vending edits does not depend on supplier/order/status endpoints.
+      const nextMachines=await api<Machine[]>(`/api/guilds/${guildId}/shiire/vending`,{},15_000);
+      const machine=nextMachines.find(row=>row.id===selected.id);
+      if(!machine) throw new Error("保存した自販機を取得できませんでした");
+      setMachines(nextMachines);
+      applySelected(machine);
+      setProductDrafts({});
       setEditingProductId("");
-      await load();
       onNotice("プレビューの変更を保存し、既設パネルへ反映しました");
-    }catch(reason){onError(reason);}finally{setBusy(false);}
+    }catch(reason){
+      const detail=reason instanceof Error?reason.message:String(reason);
+      onError(new Error(saved
+        ?`変更は保存済みですが、表示の更新に失敗しました。編集内容は残しています。再読み込みしてください。詳細: ${detail}`
+        :`保存の応答を確認できませんでした。編集内容は残しています。「変更を保存して反映」で再試行してください。詳細: ${detail}`));
+    }finally{setBusy(false);}
   }
 
 
@@ -523,7 +558,7 @@ export default function ShiireVendingManager({
   }
 
   return (
-    <div className="vending-manager">
+    <fieldset className="vending-manager" disabled={busy||panelImageBusy} aria-label="自販機の編集" style={{border:0,minWidth:0}}>
       {status&&status.panelFormat!==PANEL_FORMAT_VERSION&&<div className="shiire-callout warn" role="status">
         <strong>Discord側のパネル表示が未更新です</strong>
         <span>Bot Factoryで仕入れbotを最新版へ更新・再起動してください。その後「変更を保存して反映」で更新できます。パネルの再設置だけではbotのコードは更新されません。</span>
@@ -922,6 +957,6 @@ export default function ShiireVendingManager({
           {!orders.length&&<p>まだ注文はありません。</p>}
         </div>
       </details>
-    </div>
+    </fieldset>
   );
 }
