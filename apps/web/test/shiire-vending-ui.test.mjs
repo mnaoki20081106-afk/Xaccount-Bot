@@ -80,6 +80,8 @@ test('two sales categories can be edited independently and machine deletion requ
  await user.clear(screen.getByLabelText('プレビューのPayPay価格'));await user.type(screen.getByLabelText('プレビューのPayPay価格'),'160');
  await user.click(screen.getByRole('button',{name:'表示のみ'}));
  assert.match(preview.textContent,/PayPay: 160円/);assert.match(preview.textContent,/PayPay: 470円/);
+ assert.deepEqual([...preview.querySelectorAll('code')].map(code=>code.textContent),['PayPay: 160円 / Kyash: 150円 / 在庫: 0 / 販売: 0','PayPay: 470円 / Kyash: 500円 / 在庫: 0 / 販売: 0']);
+ assert.equal(preview.querySelector('pre'),null,'prices use inline code rather than a fenced code block');
  assert.equal(preview.querySelector('strong').textContent,'おすすめ');
  assert.equal(preview.querySelectorAll('input,textarea').length,0,'view-only has no editing controls');
  await user.click(screen.getByRole('button',{name:'スマホ'}));assert.ok(preview.classList.contains('is-mobile'));
