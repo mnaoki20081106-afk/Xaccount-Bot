@@ -52,7 +52,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
   }
   if(p.endsWith('/daily-restock/settings')){
    const patch=JSON.parse(init.body);restockWrites.push(patch);
-   restock={config:{...restock.config,enabled:patch.enabled,top_search_target_stock:patch.topSearchTargetStock,no_shadowban_target_stock:patch.noShadowbanTargetStock,notification_channel_id:patch.notificationChannelId,notification_message:patch.notificationMessage}};
+   restock={config:{...restock.config,enabled:patch.enabled,top_search_target_stock:patch.topSearchTargetStock,no_shadowban_target_stock:patch.noShadowbanTargetStock,notification_channel_id:patch.notificationChannelId,notification_message:patch.notificationMessage,notification_mention:patch.notificationMention}};
    return Response.json(restock);
   }
   if(p.endsWith('/procurement-budget')){
@@ -65,7 +65,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
   }
   throw new Error('Unexpected request: '+p);
  };
- const props={guildId:'fixture',channels:[],roles:[],onNotice:()=>{},onError:error=>errors.push(error)};
+ const props={guildId:'fixture',channels:[],roles:[{id:'123456789012345678',name:'入荷通知',isEveryone:false}],onNotice:()=>{},onError:error=>errors.push(error)};
  const user=userEvent.setup();render(React.createElement(Shiire,props));
  await screen.findByText('$100');
  assert.equal(screen.queryByRole('spinbutton'),null,'overview contains no settings wall');
@@ -133,6 +133,25 @@ test('budget navigation validates percentages, saves the three classes and reloa
  assert.equal(screen.getByRole('spinbutton',{name:'検索上位の割合'}).value,'35');
  assert.equal(screen.getByRole('spinbutton',{name:'招待特典用の割合'}).value,'10');
  assert.deepEqual(errors,[]);
+ await user.click(screen.getByText('18時の入荷まとめ通知'));
+ await user.click(screen.getByRole('button',{name:'指定の通知文に戻す'}));
+ await user.selectOptions(screen.getByLabelText('メンション先'),'123456789012345678');
+ const template=screen.getByLabelText('入荷時のメッセージ').value;
+ assert.match(template,/^\{mention\}/);assert.match(template,/現在在庫 : \{normal_stock\}個（\+\{normal_added\}個）/);
+ assert.match(template,/②【Old】Top Search \+ No shadow ban/);
+ await user.click(screen.getByRole('button',{name:'仕入れ設定を保存'}));
+ await waitFor(()=>assert.equal(restockWrites.at(-1).notificationMessage,template));
+ assert.equal(restockWrites.at(-1).notificationMention,'123456789012345678');
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'仕入れ設定を保存'}).disabled,false));
+ await user.clear(screen.getByLabelText('入荷時のメッセージ'));
+ await user.type(screen.getByLabelText('入荷時のメッセージ'),'カスタム入荷通知');
+ await user.click(screen.getByRole('button',{name:'仕入れ設定を保存'}));
+ await waitFor(()=>assert.equal(restockWrites.at(-1).notificationMessage,'カスタム入荷通知'));
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'仕入れ設定を保存'}).disabled,false));
+ await user.click(screen.getByRole('button',{name:'運用状況'}));
+ await user.click(screen.getByRole('button',{name:'仕入れ設定'}));
+ assert.equal((await screen.findByLabelText('入荷時のメッセージ')).value,'カスタム入荷通知');
+ assert.equal(screen.getByLabelText('メンション先').value,'123456789012345678');
  budgetFailure=true;
  await user.click(screen.getByRole('button',{name:'運用状況'}));
  await user.click(screen.getByRole('button',{name:'仕入れ設定'}));

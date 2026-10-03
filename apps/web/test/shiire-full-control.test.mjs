@@ -43,7 +43,7 @@ test("main dashboard exposes editable procurement policy and safety controls",()
 test("main dashboard wording reflects minute funding detection and 18:00 ordinary restock",()=>{
   assert.match(source,/入金反映は1分ごとに検知/);
   assert.match(source,/通常在庫は18:00/);
-  assert.match(source,/入荷したときのDiscord通知/);
+  assert.match(source,/18時の入荷まとめ通知/);
 });
 
 

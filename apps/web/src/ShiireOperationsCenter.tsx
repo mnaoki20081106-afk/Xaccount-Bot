@@ -1,3 +1,4 @@
+import { DEFAULT_RESTOCK_MESSAGE, renderRestockMessage, validateRestockMessage } from "./shiire-restock-message";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import ShiireVendingManager from "./ShiireVendingManager";
@@ -124,6 +125,7 @@ type DailyRestockDetail={
     no_shadowban_target_stock:number;
     notification_channel_id:string;
     notification_message:string;
+    notification_mention?:string;
     panel_channel_id:string;
     panel_message_id:string;
   };
@@ -166,7 +168,7 @@ function purchasePatches(budget:ProcurementBudgetDetail,controls:ProcurementCont
   return {
     budget:{inviteCampaignPercent:budget.percentages.INVITE_CAMPAIGN,noShadowbanPercent:budget.percentages.NO_SHADOWBAN,topSearchPercent:budget.percentages.TOP_SEARCH},
     limits:{max_unit_price_jpy:controls.max_unit_price_jpy,max_no_shadowban_unit_price_usd:controls.max_no_shadowban_unit_price_usd},
-    restock:{enabled:restock.config.enabled,topSearchTargetStock:restock.config.top_search_target_stock,noShadowbanTargetStock:restock.config.no_shadowban_target_stock,notificationChannelId:(restock.config.notification_channel_id??"").trim(),notificationMessage:(restock.config.notification_message??"").trim()}
+    restock:{enabled:restock.config.enabled,topSearchTargetStock:restock.config.top_search_target_stock,noShadowbanTargetStock:restock.config.no_shadowban_target_stock,notificationChannelId:(restock.config.notification_channel_id??"").trim(),notificationMessage:(restock.config.notification_message??"").trim(),notificationMention:restock.config.notification_mention??"everyone"}
   };
 }
 
@@ -668,7 +670,7 @@ export default function ShiireOperationsCenter({
     if(percentages.some(value=>!Number.isInteger(value)||value<0||value>100)||percentages.reduce((sum,value)=>sum+value,0)!==100){onError(new Error("仕入れ割合は0〜100の整数で、合計100%にしてください"));return;}
     if([patches.restock.topSearchTargetStock,patches.restock.noShadowbanTargetStock].some(value=>!Number.isInteger(value)||value<0||value>10000)){onError(new Error("在庫目標は0〜10000の整数で入力してください"));return;}
     if(!Number.isInteger(patches.limits.max_unit_price_jpy)||patches.limits.max_unit_price_jpy<=0||!Number.isFinite(patches.limits.max_no_shadowban_unit_price_usd)||patches.limits.max_no_shadowban_unit_price_usd<0.50||patches.limits.max_no_shadowban_unit_price_usd>0.60){onError(new Error("単価上限は、USDは0.50〜0.60、円は1以上の整数で入力してください"));return;}
-    if(!patches.restock.notificationMessage||patches.restock.notificationMessage.length>2000){onError(new Error("入荷時のメッセージは1〜2000文字で入力してください"));return;}
+    if(!validateRestockMessage(patches.restock.notificationMessage)){onError(new Error("入荷時のメッセージは、在庫数の差し込み後も2000文字以内になるように入力してください"));return;}
     if(patches.restock.notificationChannelId&&!/^\d{15,22}$/.test(patches.restock.notificationChannelId)){onError(new Error("入荷通知の送信先を選び直してください"));return;}
     const saved:string[]=[];
     const routes=[{key:"budget",label:"予算配分",path:"procurement-budget",method:"POST"},{key:"limits",label:"単価上限",path:"procurement-settings",method:"PATCH"},{key:"restock",label:"在庫と通知",path:"daily-restock/settings",method:"POST"}] as const;
@@ -1150,9 +1152,13 @@ export default function ShiireOperationsCenter({
                 <FundingInput label="検索上位の単価上限（円）" value={procurementControls.max_unit_price_jpy} step={1} onChange={value=>setProcurementControls({...procurementControls,max_unit_price_jpy:value})} />
               </div><small>USDは0.50〜0.60、円は1以上で設定できます。円への換算レートは「通常は変更不要の設定」→「資金の補充方法・運転制限」で確認できます。</small>
             </fieldset>
-            <details className="shiire-disclosure"><summary>入荷したときのDiscord通知</summary><p>実際に在庫が増えた日だけ、販売可能な在庫数を通知します。</p>
+            <details className="shiire-disclosure"><summary>18時の入荷まとめ通知</summary><p>18時の補充が完了し、在庫が増えた場合だけ1回通知します。選んだメンション先を本文へ自動で差し込みます。</p>
               <label className="field"><span>入荷通知の送信先</span><select disabled={controlBusy} value={dailyRestock.config.notification_channel_id??""} onChange={event=>setDailyRestock({...dailyRestock,config:{...dailyRestock.config,notification_channel_id:event.target.value}})}><option value="">通知しない</option>{channels.filter(channel=>(channel.type==="text"||channel.type==="announcement")&&channel.botCanPost!==false).map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}</select></label>
+              <label className="field"><span>メンション先</span><select disabled={controlBusy} value={dailyRestock.config.notification_mention??"everyone"} onChange={event=>setDailyRestock({...dailyRestock,config:{...dailyRestock.config,notification_mention:event.target.value}})}><option value="everyone">@everyone（全員）</option><option value="">メンションなし</option>{roles.filter(role=>!role.isEveryone).map(role=><option key={role.id} value={role.id}>@{role.name}</option>)}</select></label>
               <label className="field"><span>入荷時のメッセージ</span><textarea maxLength={2000} disabled={controlBusy} value={dailyRestock.config.notification_message??""} onChange={event=>setDailyRestock({...dailyRestock,config:{...dailyRestock.config,notification_message:event.target.value}})} /></label>
+              <small>自動差し込み：メンション先 {'{mention}'}、通常商品の現在在庫 {'{normal_stock}'}・追加数 {'{normal_added}'}、Old商品の現在在庫 {'{old_stock}'}・追加数 {'{old_added}'}。数字は自動で更新されます。</small>
+              <button className="secondary" disabled={controlBusy} onClick={()=>setDailyRestock({...dailyRestock,config:{...dailyRestock.config,notification_message:DEFAULT_RESTOCK_MESSAGE}})}>指定の通知文に戻す</button>
+              <details className="shiire-disclosure"><summary>通知文のプレビュー</summary><p>現在在庫と直近の補充の追加数を使った確認用表示です。通知は送信しません。</p><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{renderRestockMessage(dailyRestock.config.notification_message??"",{normal_stock:dailyRestock.stock?.NO_SHADOWBAN.current??0,old_stock:dailyRestock.stock?.TOP_SEARCH.current??0,normal_added:dailyRestock.state?.added_no_shadowban??0,old_added:dailyRestock.state?.added_top_search??0},dailyRestock.config.notification_mention??"everyone")}</pre></details>
             </details>
             <div className="shiire-save-bar"><span>予算・在庫目標・単価上限・通知をまとめて保存</span><button className="primary" disabled={controlBusy||detailBusy||!budgetValid} onClick={()=>void savePurchaseSettings()}>{controlBusy?"保存中…":"仕入れ設定を保存"}</button></div>
             <details className="shiire-disclosure"><summary>定時を待たずに入荷・通知画面を設置</summary><p>先に設定を保存してください。「今すぐ不足分を仕入れる」は購入を伴います。</p><div className="shiire-control-buttons"><button className="secondary" disabled={controlBusy||detailBusy} onClick={()=>void runDailyRestockNow()}>今すぐ不足分を仕入れる</button><button className="secondary" disabled={controlBusy||detailBusy} onClick={()=>void installDailyRestockPanelNow()}>入荷通知画面をDiscordへ設置</button></div></details>
