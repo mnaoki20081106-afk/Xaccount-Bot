@@ -144,3 +144,5 @@
 .shiire-ops input,.shiire-ops select,.shiire-ops textarea{max-width:100%}
 .shiire-ops .vending-manager .serverless-note>span{font-size:12px;line-height:1.6}
 @media(max-width:760px){.shiire-save-bar{flex-direction:column;align-items:stretch}.shiire-ops .vending-manager .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.shiire-hero-main{align-items:flex-start}.shiire-hero-actions{flex-wrap:wrap}}
+
+.shiire-panel-color input[type="color"]{width:72px;height:44px;padding:4px;cursor:pointer;border:1px solid #445472;border-radius:8px;background:#08111f}

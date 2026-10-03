@@ -12,13 +12,13 @@ test('two sales categories can be edited independently and machine deletion requ
  const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'https://fixture.example'});
  for(const key of ['window','document','navigator','HTMLElement','Element','Node','MutationObserver','localStorage','sessionStorage','location','getComputedStyle'])Object.defineProperty(globalThis,key,{value:key==='getComputedStyle'?dom.window.getComputedStyle.bind(dom.window):dom.window[key],configurable:true});
  globalThis.IS_REACT_ACT_ENVIRONMENT=true;t.after(()=>dom.window.close());
- const React=await import('react');const {render,screen,waitFor,cleanup,within}=await import('@testing-library/react');const {default:userEvent}=await import('@testing-library/user-event');t.after(cleanup);
+ const React=await import('react');const {render,screen,waitFor,cleanup,within,fireEvent}=await import('@testing-library/react');const {default:userEvent}=await import('@testing-library/user-event');t.after(cleanup);
  const {default:Vending}=await import(pathToFileURL(path.join(dir,'Vending.mjs')).href);
  const products=(machineId)=>[
   {id:machineId+'-normal',vending_machine_id:machineId,procurement_class:'NO_SHADOWBAN',supplier_product_id:'',name:'Search Top + No shadow ban',description:'Normal',price_paypay:150,price_kyash:150,stock_count:0,sales_count:0},
   {id:machineId+'-old',vending_machine_id:machineId,procurement_class:'TOP_SEARCH',supplier_product_id:'',name:'【old】Search Top + No shadow ban',description:'Old',price_paypay:500,price_kyash:500,stock_count:0,sales_count:0}
  ];
- const machine=(id,name)=>({id,guild_id:'fixture',name,panel_title:null,panel_description:null,panel_image_url:null,products:products(id),panels:[],stockNotification:null});
+ const machine=(id,name)=>({id,guild_id:'fixture',name,panel_title:null,panel_description:null,panel_image_url:null,panel_color:5763719,products:products(id),panels:[],stockNotification:null});
  let machines=[machine('one','First machine'),machine('two','Second machine')],allowDelete=false;
  const writes=[],deletes=[],errors=[];globalThis.confirm=()=>allowDelete;
  const nativeFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=nativeFetch;delete globalThis.confirm;});
@@ -38,7 +38,7 @@ test('two sales categories can be edited independently and machine deletion requ
   const machineUpdate=p.match(/\/vending\/([^/]+)$/);
   if(machineUpdate&&init.method==='PATCH'){
    const payload=JSON.parse(init.body),row=machines.find(m=>m.id===machineUpdate[1]);
-   Object.assign(row,{name:payload.name,panel_title:payload.panelTitle,panel_description:payload.panelDescription});return Response.json({ok:true});
+   Object.assign(row,{name:payload.name,panel_title:payload.panelTitle,panel_description:payload.panelDescription,panel_color:payload.panelColor});return Response.json({ok:true});
   }
   if(p.endsWith('/panel-image')&&init.method==='DELETE'){
    machines.find(m=>m.id===p.split('/').at(-2)).panel_image_url=null;return Response.json({ok:true});
@@ -84,8 +84,12 @@ test('two sales categories can be edited independently and machine deletion requ
  assert.equal(preview.querySelectorAll('input,textarea').length,0,'view-only has no editing controls');
  await user.click(screen.getByRole('button',{name:'スマホ'}));assert.ok(preview.classList.contains('is-mobile'));
  machines[0].panel_image_url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCXsAAAAASUVORK5CYII=';
+ fireEvent.change(screen.getByLabelText('パネルの色'),{target:{value:'#ff3366'}});
+ assert.equal(screen.getByTestId('discord-panel-preview').querySelector('.discord-panel-embed').style.borderLeftColor,'rgb(255, 51, 102)');
  await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
  await waitFor(()=>assert.equal(writes.length,3));
+ assert.equal(machines[0].panel_color,0xff3366);
+ assert.equal(screen.getByLabelText('パネルの色').value,'#ff3366');
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'選択中の自販機を削除'}).disabled,false));
  assert.equal(machines[0].panel_title,'開設キャンペーン');assert.equal(machines[0].panel_description,'**おすすめ**\n150円から販売');
  assert.equal(machines[0].products[0].price_paypay,160);assert.equal(machines[0].products[1].price_paypay,470);
@@ -101,6 +105,11 @@ test('two sales categories can be edited independently and machine deletion requ
  await waitFor(()=>assert.equal(screen.getByLabelText('自販機名').value,'Second machine'));
  await user.click(screen.getByRole('button',{name:'自販機を作成'}));
  await waitFor(()=>assert.equal(screen.getByLabelText('自販機名').value,'Xアカウント自販機','newly created machine should become selected'));
+ assert.equal(screen.getByLabelText('パネルの色').value,'#57f287','new vending uses the original default color');
  assert.equal(screen.getAllByRole('button',{name:/Search Top \+ No shadow banを編集$/}).length,2);
+ delete machines.find(machine=>machine.id==='new').panel_color;
+ await user.click(screen.getByRole('button',{name:'再読み込み'}));
+ await waitFor(()=>assert.equal(screen.getByLabelText('パネルの色').disabled,true));
+ assert.ok(screen.getByText('色の変更には仕入れbotの最新版への更新・再起動が必要です。'));
  assert.deepEqual(errors,[]);
 });

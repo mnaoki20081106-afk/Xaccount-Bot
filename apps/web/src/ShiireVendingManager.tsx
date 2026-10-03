@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { DEFAULT_PANEL_COLOR, isPanelColor } from "./shiire-panel-payload";
 import { api } from "./api";
 const ShiirePanelPreview=lazy(()=>import("./ShiirePanelPreview"));
 
@@ -60,6 +61,7 @@ type Machine={
   panel_title:string|null;
   panel_description:string|null;
   panel_image_url:string|null;
+  panel_color?:number|null;
   active:number;
   products?:Product[];
   panels?:Array<{
@@ -158,6 +160,7 @@ export default function ShiireVendingManager({
 
   const [machineName,setMachineName]=useState("");
   const [panelTitle,setPanelTitle]=useState("");
+  const [panelColor,setPanelColor]=useState(DEFAULT_PANEL_COLOR);
   const [panelDescription,setPanelDescription]=useState("");
   const [panelImageUrl,setPanelImageUrl]=useState("");
   const [panelImageBusy,setPanelImageBusy]=useState(false);
@@ -193,6 +196,7 @@ export default function ShiireVendingManager({
   function applySelected(machine:Machine|null){
     setMachineName(machine?.name??"");
     setPanelTitle(machine?.panel_title??"");
+    setPanelColor(isPanelColor(machine?.panel_color)?machine.panel_color:DEFAULT_PANEL_COLOR);
     setPanelDescription(machine?.panel_description??"");
     setPanelImageUrl(machine?.panel_image_url??"");
     setPublicLogChannel(machine?.public_log_channel_id??"");
@@ -292,7 +296,7 @@ export default function ShiireVendingManager({
   }
 
   function machineDraft(){
-    return {name:machineName.trim(),panelTitle,panelDescription,publicLogChannelId:publicLogChannel||null,privateLogChannelId:privateLogChannel||null,roleId:buyerRole||null};
+    return {name:machineName.trim(),panelTitle,panelDescription,panelColor,publicLogChannelId:publicLogChannel||null,privateLogChannelId:privateLogChannel||null,roleId:buyerRole||null};
   }
 
   function currentProductDraft():Product|null{
@@ -306,6 +310,8 @@ export default function ShiireVendingManager({
   async function persistPanelDraft(){
     if(!selected) return;
     const drafts={...productDrafts,...(currentDraft?{[currentDraft.id]:currentDraft}:{})};
+    if(!isPanelColor(selected.panel_color)&&panelColor!==DEFAULT_PANEL_COLOR) throw new Error("色の変更には仕入れbotの最新版への更新・再起動が必要です");
+    if(!isPanelColor(panelColor)) throw new Error("パネルの色を選び直してください");
     if(!machineName.trim()||machineName.trim().length>80) throw new Error("自販機名は1〜80文字で入力してください");
     for(const product of Object.values(drafts)){
       if(!Number.isSafeInteger(product.price_paypay)||product.price_paypay<0||!Number.isSafeInteger(product.price_kyash)||product.price_kyash<0) throw new Error("価格は0以上の整数で入力してください");
@@ -591,8 +597,13 @@ export default function ShiireVendingManager({
 
             </div>
 
+            <label className="field shiire-panel-color"><span>パネルの色</span>
+              <input type="color" aria-label="パネルの色" value={"#"+panelColor.toString(16).padStart(6,"0")} disabled={busy||panelImageBusy||!isPanelColor(selected.panel_color)} onChange={event=>setPanelColor(Number.parseInt(event.target.value.slice(1),16))} />
+              {!isPanelColor(selected.panel_color)&&<small role="status">色の変更には仕入れbotの最新版への更新・再起動が必要です。</small>}
+              <small>Discordのパネル左端の色です。選ぶとプレビューに反映されます。「変更を保存して反映」で設置済みのパネルも更新します。</small>
+            </label>
             <Suspense fallback={<p>パネルプレビューを読み込み中…</p>}><ShiirePanelPreview key={selected.id} disabled={busy||panelImageBusy}
-              machine={{...selected,name:machineName.trim(),panel_title:panelTitle,panel_description:panelDescription,panel_image_url:panelImageUrl||null}}
+              machine={{...selected,name:machineName.trim(),panel_title:panelTitle,panel_description:panelDescription,panel_color:panelColor,panel_image_url:panelImageUrl||null}}
               products={previewProducts}
               editingProductId={editingProductId} onProductChange={patch=>{
                 if(patch.name!==undefined)setProductName(patch.name);
