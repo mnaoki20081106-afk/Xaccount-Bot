@@ -148,3 +148,6 @@
 .shiire-panel-color input[type="color"]{width:72px;height:44px;padding:4px;cursor:pointer;border:1px solid #445472;border-radius:8px;background:#08111f}
 
 .discord-panel-description code{padding:2px 4px;border-radius:3px;background:#1e1f22;color:#dbdee1;font-size:.9em;white-space:break-spaces;overflow-wrap:anywhere}
+
+.discord-panel-description pre{margin:8px 0 0;padding:12px;border:1px solid #4a4b55;border-radius:8px;background:#343541;white-space:pre-wrap;overflow-wrap:anywhere}
+.discord-panel-description pre code{padding:0;background:transparent;border-radius:0;font-size:inherit;white-space:pre-wrap}

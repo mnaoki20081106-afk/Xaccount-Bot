@@ -4,6 +4,10 @@ import remarkGfm from "remark-gfm";
 import { panelPayload, panelSections, type PanelMachine, type PanelProduct } from "./shiire-panel-payload";
 
 const markdownPlugins=[remarkGfm];
+function previewMarkdown(text:string){
+  return text.replace(/^\n\n/,"").split(/(```[\s\S]*?```)/g)
+    .map((part,index)=>index%2?part:part.replace(/(?<!\n)\n(?!\n)/g,"  \n")).join("");
+}
 export default function ShiirePanelPreview({machine,products,onTitle,onDescription,onProduct,editingProductId,onProductChange,disabled}: {
   machine:PanelMachine;products:PanelProduct[];onTitle:(value:string)=>void;onDescription:(value:string)=>void;
   onProduct:(id:string)=>void;editingProductId:string;onProductChange:(patch:Partial<PanelProduct>)=>void;disabled:boolean;
@@ -34,7 +38,7 @@ export default function ShiirePanelPreview({machine,products,onTitle,onDescripti
               aria-label={section.id==="description"?"プレビューの説明を編集":(viewOnly||section.id==="empty")?undefined:products.find(p=>p.id===section.id)?.name+"をプレビューから編集"}
               onClick={()=>{if(disabled||viewOnly)return;if(section.id==="description")setEditing("description");else if(section.id!=="empty")onProduct(section.id);}}
               onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();event.currentTarget.click();}}}>
-              <Markdown remarkPlugins={markdownPlugins} skipHtml components={{a:({children})=><span className="discord-preview-link">{children}</span>,img:()=>null}}>{section.text.replace(/^\n\n/,"").replace(/(?<!\n)\n(?!\n)/g,"  \n")}</Markdown>
+              <Markdown remarkPlugins={markdownPlugins} skipHtml components={{a:({children})=><span className="discord-preview-link">{children}</span>,img:()=>null}}>{previewMarkdown(section.text)}</Markdown>
             </div>)}
         </div>
         {embed.image&&<img className="discord-panel-image" src={embed.image.url} alt="自販機パネル画像"/>}

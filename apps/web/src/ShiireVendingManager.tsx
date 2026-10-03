@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { DEFAULT_PANEL_COLOR, isPanelColor } from "./shiire-panel-payload";
+import { DEFAULT_PANEL_COLOR, isPanelColor, PANEL_FORMAT_VERSION } from "./shiire-panel-payload";
 import { api } from "./api";
 const ShiirePanelPreview=lazy(()=>import("./ShiirePanelPreview"));
 
@@ -15,6 +15,7 @@ type Role={
   isEveryone:boolean;
 };
 type Status={
+  panelFormat?:string;
   configured:boolean;
   installed:boolean;
   guild:null|{id:string;name:string};
@@ -523,6 +524,10 @@ export default function ShiireVendingManager({
 
   return (
     <div className="vending-manager">
+      {status&&status.panelFormat!==PANEL_FORMAT_VERSION&&<div className="shiire-callout warn" role="status">
+        <strong>Discord側のパネル表示が未更新です</strong>
+        <span>Bot Factoryで仕入れbotを最新版へ更新・再起動してください。その後「変更を保存して反映」で更新できます。パネルの再設置だけではbotのコードは更新されません。</span>
+      </div>}
       <section className="card">
         <div className="section-head">
           <div>

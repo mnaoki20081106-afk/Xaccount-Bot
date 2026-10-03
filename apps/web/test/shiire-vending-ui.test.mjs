@@ -19,12 +19,13 @@ test('two sales categories can be edited independently and machine deletion requ
   {id:machineId+'-old',vending_machine_id:machineId,procurement_class:'TOP_SEARCH',supplier_product_id:'',name:'【old】Search Top + No shadow ban',description:'Old',price_paypay:500,price_kyash:500,stock_count:0,sales_count:0}
  ];
  const machine=(id,name)=>({id,guild_id:'fixture',name,panel_title:null,panel_description:null,panel_image_url:null,panel_color:5763719,products:products(id),panels:[],stockNotification:null});
+ let panelFormat='price-code-block-v1';
  let machines=[machine('one','First machine'),machine('two','Second machine')],allowDelete=false;
  const writes=[],deletes=[],errors=[];globalThis.confirm=()=>allowDelete;
  const nativeFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=nativeFetch;delete globalThis.confirm;});
  globalThis.fetch=async(input,init={})=>{
   const p=new URL(String(input)).pathname;
-  if(p.endsWith('/status'))return Response.json({configured:true,installed:true,payment:{paypay:true,kyash:true},guild:{id:'fixture',name:'Fixture'}});
+  if(p.endsWith('/status'))return Response.json({panelFormat,configured:true,installed:true,payment:{paypay:true,kyash:true},guild:{id:'fixture',name:'Fixture'}});
   if(p.endsWith('/source-products'))return Response.json({products:[]});
   if(p.endsWith('/orders'))return Response.json({orders:[]});
   if(p.endsWith('/vending')){
@@ -80,8 +81,8 @@ test('two sales categories can be edited independently and machine deletion requ
  await user.clear(screen.getByLabelText('プレビューのPayPay価格'));await user.type(screen.getByLabelText('プレビューのPayPay価格'),'160');
  await user.click(screen.getByRole('button',{name:'表示のみ'}));
  assert.match(preview.textContent,/PayPay: 160円/);assert.match(preview.textContent,/PayPay: 470円/);
- assert.deepEqual([...preview.querySelectorAll('code')].map(code=>code.textContent),['PayPay: 160円 / Kyash: 150円 / 在庫: 0 / 販売: 0','PayPay: 470円 / Kyash: 500円 / 在庫: 0 / 販売: 0']);
- assert.equal(preview.querySelector('pre'),null,'prices use inline code rather than a fenced code block');
+ assert.deepEqual([...preview.querySelectorAll('pre code')].map(code=>code.textContent.trim()),['PayPay: 160円 / Kyash: 150円 / 在庫: 0 / 販売: 0','PayPay: 470円 / Kyash: 500円 / 在庫: 0 / 販売: 0']);
+ assert.equal(preview.querySelectorAll('pre').length,2,'each product has a boxed code block');
  assert.equal(preview.querySelector('strong').textContent,'おすすめ');
  assert.equal(preview.querySelectorAll('input,textarea').length,0,'view-only has no editing controls');
  await user.click(screen.getByRole('button',{name:'スマホ'}));assert.ok(preview.classList.contains('is-mobile'));
@@ -109,9 +110,12 @@ test('two sales categories can be edited independently and machine deletion requ
  await waitFor(()=>assert.equal(screen.getByLabelText('自販機名').value,'Xアカウント自販機','newly created machine should become selected'));
  assert.equal(screen.getByLabelText('パネルの色').value,'#57f287','new vending uses the original default color');
  assert.equal(screen.getAllByRole('button',{name:/Search Top \+ No shadow banを編集$/}).length,2);
+ panelFormat=undefined;
  delete machines.find(machine=>machine.id==='new').panel_color;
  await user.click(screen.getByRole('button',{name:'再読み込み'}));
  await waitFor(()=>assert.equal(screen.getByLabelText('パネルの色').disabled,true));
  assert.ok(screen.getByText('色の変更には仕入れbotの最新版への更新・再起動が必要です。'));
+ assert.ok(screen.getByText('Discord側のパネル表示が未更新です'));
+ assert.match(screen.getByText(/パネルの再設置だけではbotのコード/).textContent,/再設置だけではbotのコードは更新されません/);
  assert.deepEqual(errors,[]);
 });
