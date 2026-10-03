@@ -20,7 +20,10 @@ test('budget navigation validates percentages, saves the three classes and reloa
  t.after(cleanup);
  const {default:Shiire}=await import(pathToFileURL(path.join(dir,'Shiire.mjs')).href);
  let percentages={INVITE_CAMPAIGN:0,NO_SHADOWBAN:50,TOP_SEARCH:50};
- const writes=[],errors=[],automationWrites=[];
+ const writes=[],errors=[],automationWrites=[],settingsWrites=[],restockWrites=[];
+ let limitsFailure=false;
+ let controls={max_unit_price_jpy:80,max_no_shadowban_unit_price_usd:0.6};
+ let restock={config:{enabled:true,top_search_target_stock:20,no_shadowban_target_stock:20,notification_channel_id:'',notification_message:'入荷しました'}};
  const nativeConfirm=globalThis.confirm;
  globalThis.confirm=()=>true;
  t.after(()=>{globalThis.confirm=nativeConfirm;});
@@ -37,7 +40,21 @@ test('budget navigation validates percentages, saves the three classes and reloa
    overview.safety.autoProcurementEnabled=patch.auto_procurement_enabled;
    return Response.json({ok:true});
   }
-  if(p.endsWith('/daily-restock'))return Response.json({config:{top_search_target_stock:20,no_shadowban_target_stock:20}});
+  if(p.endsWith('/operations/logs'))return Response.json({logs:[],breakers:[],fundingEvents:[],cryptoTransactions:[]});
+  if(p.endsWith('/operations/orders'))return Response.json({orders:[{id:'order',procurement_class:'TOP_SEARCH',status:'COMPLETED',quantity:2,unit_price:0.5,currency:'USD',supplier_product_id:123,created_at:Date.now()}],statusSummary:{}});
+  if(p.endsWith('/daily-restock'))return Response.json(restock);
+  if(p.endsWith('/procurement-settings')){
+   if(init.method==='PATCH'){
+    if(limitsFailure)return Response.json({message:'limits unavailable'},{status:503});
+    const patch=JSON.parse(init.body);settingsWrites.push(patch);controls={...controls,...patch};
+   }
+   return Response.json(controls);
+  }
+  if(p.endsWith('/daily-restock/settings')){
+   const patch=JSON.parse(init.body);restockWrites.push(patch);
+   restock={config:{...restock.config,enabled:patch.enabled,top_search_target_stock:patch.topSearchTargetStock,no_shadowban_target_stock:patch.noShadowbanTargetStock,notification_channel_id:patch.notificationChannelId,notification_message:patch.notificationMessage}};
+   return Response.json(restock);
+  }
   if(p.endsWith('/procurement-budget')){
    if(budgetFailure)return Response.json({message:'INVALID_BRIDGE_SIGNATURE'},{status:401});
    if(init.method==='POST'){
@@ -52,11 +69,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
  const user=userEvent.setup();render(React.createElement(Shiire,props));
  await screen.findByText('$100');
  assert.equal(screen.queryByRole('spinbutton'),null,'overview contains no settings wall');
- assert.equal(screen.getByRole('button',{name:'詳細メニュー'}).getAttribute('aria-expanded'),'false');
- assert.equal(Boolean(within(screen.getByRole('navigation')).queryByRole('button',{name:'運転設定'})),false);
- await user.click(screen.getByRole('button',{name:'詳細メニュー'}));
- assert.ok(within(screen.getByRole('navigation')).getByRole('button',{name:'運転設定'}));
- await user.click(screen.getByRole('button',{name:'詳細メニューを閉じる'}));
+ assert.deepEqual(within(screen.getByRole('navigation')).getAllByRole('button').map(button=>button.textContent),['運用状況','仕入れ設定','販売設定','履歴と問題']);
  await user.click(screen.getByRole('button',{name:'自動仕入れを開始'}));
  await screen.findByRole('button',{name:'自動仕入れを一時停止'});
  assert.deepEqual(automationWrites[0],{dry_run:false,auto_procurement_enabled:true,confirmLive:true});
@@ -66,11 +79,11 @@ test('budget navigation validates percentages, saves the three classes and reloa
  assert.deepEqual(automationWrites[1],{auto_procurement_enabled:false,confirmLive:false});
  assert.equal(screen.getByText('直近の注文').parentElement.open,false);
  assert.equal(screen.getByText('連携状態').parentElement.open,false);
- await user.click(screen.getByRole('button',{name:'配分を設定'}));
- const shadow=await screen.findByRole('spinbutton',{name:'No shadow banの割合'});
- const top=screen.getByRole('spinbutton',{name:'Top Searchの割合'});
- const invite=screen.getByRole('spinbutton',{name:'招待キャンペーンの割合'});
- const save=screen.getByRole('button',{name:'割合を保存して現在残高へ適用'});
+ await user.click(screen.getByRole('button',{name:'仕入れ設定'}));
+ const shadow=await screen.findByRole('spinbutton',{name:'シャドウバンなしの割合'});
+ const top=screen.getByRole('spinbutton',{name:'検索上位の割合'});
+ const invite=screen.getByRole('spinbutton',{name:'招待特典用の割合'});
+ const save=screen.getByRole('button',{name:'仕入れ設定を保存'});
  await waitFor(()=>assert.equal(save.disabled,false));
  await user.clear(shadow);await user.type(shadow,'60');
  assert.equal(save.disabled,true);assert.equal(writes.length,0);
@@ -89,25 +102,52 @@ test('budget navigation validates percentages, saves the three classes and reloa
  await waitFor(()=>assert.equal(writes.length,1));
  assert.deepEqual(writes[0],{inviteCampaignPercent:10,noShadowbanPercent:60,topSearchPercent:30});
  await waitFor(()=>assert.equal(save.disabled,false));
+ // A stock-only save must never rebalance unchanged budget or touch advanced filters.
+ await user.clear(screen.getByLabelText('検索上位の在庫目標（個）'));await user.type(screen.getByLabelText('検索上位の在庫目標（個）'),'30');
+ await user.click(save);
+ await waitFor(()=>assert.equal(restockWrites.length,1));
+ await waitFor(()=>assert.equal(save.disabled,false));
+ assert.equal(writes.length,1);assert.equal(settingsWrites.length,0);
+ assert.equal(restockWrites[0].topSearchTargetStock,30);
+ // Validate every group before making any write.
+ await user.clear(shadow);await user.type(shadow,'55');await user.clear(top);await user.type(top,'35');
+ const limit=screen.getByLabelText('シャドウバンなしの単価上限（USD）');
+ await user.clear(limit);await user.type(limit,'0.7');await user.click(save);
+ assert.equal(writes.length,1,'invalid price must prevent budget changes too');
+ assert.match(errors.pop().message,/0.50〜0.60/);
+ await user.clear(limit);await user.type(limit,'0.55');
+ limitsFailure=true;await user.click(save);
+ await waitFor(()=>assert.equal(errors.length,1));
+ assert.match(errors.pop().message,/予算配分は保存済み/);
+ assert.equal(writes.length,2);assert.equal(limit.value,'0.55','failed save keeps input');
+ limitsFailure=false;await waitFor(()=>assert.equal(save.disabled,false));await user.click(save);
+ await waitFor(()=>assert.equal(settingsWrites.length,1));
+ await waitFor(()=>assert.equal(save.disabled,false));
+ assert.equal(writes.length,2,'retry must skip an already saved budget');
+ assert.deepEqual(settingsWrites[0],{max_unit_price_jpy:80,max_no_shadowban_unit_price_usd:0.55});
+ assert.equal(restockWrites.length,1);
  cleanup();render(React.createElement(Shiire,props));
  await screen.findByText('$100');
- await user.click(screen.getByRole('button',{name:'残高・配分'}));
- assert.equal((await screen.findByRole('spinbutton',{name:'No shadow banの割合'})).value,'60');
- assert.equal(screen.getByRole('spinbutton',{name:'Top Searchの割合'}).value,'30');
- assert.equal(screen.getByRole('spinbutton',{name:'招待キャンペーンの割合'}).value,'10');
+ await user.click(screen.getByRole('button',{name:'仕入れ設定'}));
+ assert.equal((await screen.findByRole('spinbutton',{name:'シャドウバンなしの割合'})).value,'55');
+ assert.equal(screen.getByRole('spinbutton',{name:'検索上位の割合'}).value,'35');
+ assert.equal(screen.getByRole('spinbutton',{name:'招待特典用の割合'}).value,'10');
  assert.deepEqual(errors,[]);
  budgetFailure=true;
- await user.click(screen.getByRole('button',{name:'概要'}));
- await user.click(screen.getByRole('button',{name:'残高・配分'}));
+ await user.click(screen.getByRole('button',{name:'運用状況'}));
+ await user.click(screen.getByRole('button',{name:'仕入れ設定'}));
  assert.match((await screen.findByRole('alert')).textContent,/INVALID_BRIDGE_SIGNATURE/);
  assert.equal(screen.queryByRole('spinbutton'),null,'failed GET must not invent a zero balance or editable allocation');
  assert.equal(errors.length,1);
  budgetFailure=false;zeroBudget=true;
- await user.click(screen.getByRole('button',{name:'配分だけ再取得'}));
- await screen.findByRole('spinbutton',{name:'No shadow banの割合'});
+ await user.click(screen.getByRole('button',{name:'仕入れ設定を再取得'}));
+ await screen.findByRole('spinbutton',{name:'シャドウバンなしの割合'});
  assert.equal(screen.queryByRole('alert'),null);
  assert.equal(screen.getAllByText('予算残 $0').length,3,'valid zero budgets must render all three categories');
 
+ await user.click(screen.getByRole('button',{name:'履歴と問題'}));
+ await screen.findByText('完了');
+ assert.ok(screen.getByText('仕入れの注文履歴'));
  cleanup();
  let overviewFailure=true,notices=[];
  globalThis.fetch=async(input)=>{

@@ -50,10 +50,17 @@ test('two sales categories can be edited independently and machine deletion requ
  };
  const user=userEvent.setup();render(React.createElement(Vending,{guildId:'fixture',channels:[],roles:[],onNotice:()=>{},onError:e=>errors.push(e)}));
  await screen.findByRole('button',{name:'Search Top + No shadow banを編集'});
+ assert.equal(screen.getByLabelText('販売所').value,'one');
+ assert.equal(Boolean(screen.queryByRole('button',{name:'Second machine'})),false,'machine choices use one selector');
+ for(const label of ['販売所を追加・削除','仕入れ元の詳しい情報','案内文・画像・購入後の設定','入荷通知を設定する','割引クーポンを設定する','設置済みメッセージの修復']) assert.equal(screen.getByText(label).parentElement.open,false,label+' is optional');
+ await user.click(screen.getByText('販売所を追加・削除'));
+ await user.click(screen.getByText('案内文・画像・購入後の設定'));
+ await user.click(screen.getByText('商品を追加・詳しい情報を編集'));
+ assert.equal(screen.getAllByRole('button',{name:'変更を保存して反映'}).length,1);
  await user.click(screen.getByRole('button',{name:'【old】Search Top + No shadow banを編集'}));
  assert.equal(screen.getByLabelText(/^PayPay価格/).value,'500');
  await user.clear(screen.getByLabelText(/^PayPay価格/));await user.type(screen.getByLabelText(/^PayPay価格/),'450');
- await user.click(screen.getByRole('button',{name:'商品変更を保存'}));
+ await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
  await waitFor(()=>assert.equal(writes.length,1));assert.equal(writes[0].procurementClass,'TOP_SEARCH');assert.equal(writes[0].pricePayPay,450);
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}).disabled,false));
  await user.click(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}));
@@ -77,7 +84,7 @@ test('two sales categories can be edited independently and machine deletion requ
  assert.equal(preview.querySelectorAll('input,textarea').length,0,'view-only has no editing controls');
  await user.click(screen.getByRole('button',{name:'スマホ'}));assert.ok(preview.classList.contains('is-mobile'));
  machines[0].panel_image_url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aCXsAAAAASUVORK5CYII=';
- await user.click(screen.getByRole('button',{name:'プレビューの変更を保存・反映'}));
+ await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
  await waitFor(()=>assert.equal(writes.length,3));
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'選択中の自販機を削除'}).disabled,false));
  assert.equal(machines[0].panel_title,'開設キャンペーン');assert.equal(machines[0].panel_description,'**おすすめ**\n150円から販売');

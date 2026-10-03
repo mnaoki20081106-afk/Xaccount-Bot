@@ -16,12 +16,12 @@ test("main dashboard exposes procurement budget controls",()=>{
 });
 
 test("main dashboard exposes daily 18:00 restock controls",()=>{
-  assert.match(source,/18:00入荷/);
-  assert.match(source,/\/shiire\/daily-restock\/settings/);
+  assert.match(source,/毎日18:00に不足分を補充/);
+  assert.match(source,/daily-restock\/settings/);
   assert.match(source,/\/shiire\/daily-restock\/panel/);
   assert.match(source,/\/shiire\/daily-restock\/run/);
-  assert.match(source,/No shadow ban 恒常在庫/);
-  assert.match(source,/Top Search 恒常在庫/);
+  assert.match(source,/シャドウバンなしの在庫目標/);
+  assert.match(source,/検索上位の在庫目標/);
 });
 
 test("main dashboard exposes invite campaign controls",()=>{
@@ -43,7 +43,7 @@ test("main dashboard exposes editable procurement policy and safety controls",()
 test("main dashboard wording reflects minute funding detection and 18:00 ordinary restock",()=>{
   assert.match(source,/入金反映は1分ごとに検知/);
   assert.match(source,/通常在庫は18:00/);
-  assert.match(source,/在庫追加が実際に1個以上あった日だけDiscordへ通知/);
+  assert.match(source,/入荷したときのDiscord通知/);
 });
 
 
@@ -54,7 +54,7 @@ const vendingSource=readFileSync(
 
 test("legacy vending screen no longer owns a second procurement settings form",()=>{
   assert.doesNotMatch(vendingSource,/async function saveProcurementSettings/);
-  assert.match(vendingSource,/仕入れ条件は「仕入れ」タブへ統合しました/);
+  assert.match(vendingSource,/仕入れの予算・在庫目標は「仕入れ設定」で変更/);
 });
 
 
@@ -69,7 +69,7 @@ test("vending editor presets the requested sales names descriptions and prices",
 
 
 test("vending price edits can repost existing Discord panels",()=>{
-  assert.match(vendingSource,/保存して自販機を再設置/);
+  assert.match(vendingSource,/設置済みメッセージの修復/);
   assert.match(vendingSource,/既設パネルを削除して再設置/);
   assert.match(vendingSource,/repostPanels:true/);
   assert.match(vendingSource,/\/panel\/repost/);

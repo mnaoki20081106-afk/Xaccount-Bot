@@ -328,9 +328,6 @@ export default function ShiireVendingManager({
     }catch(reason){onError(reason);}finally{setBusy(false);}
   }
 
-  async function saveMachine(){
-    await savePanelPreview();
-  }
 
   async function addProduct(repostPanels=false){
     if(!selected) return;
@@ -523,12 +520,8 @@ export default function ShiireVendingManager({
       <section className="card">
         <div className="section-head">
           <div>
-            <span className="eyebrow">DISCORD-SHIIRE</span>
-            <h2>仕入れbot 自販機</h2>
-            <p>
-              自動仕入れしたXアカウントを暗号化したまま販売在庫へ接続します。
-              購入確定時だけ復号し、購入者DMへ納品します。
-            </p>
+            <h2>販売設定</h2>
+            <p>販売所を選び、価格と案内文を編集してDiscordへ設置します。保存した変更は設置済みの販売画面にも反映されます。</p>
           </div>
           <button className="secondary" onClick={()=>void load()} disabled={busy}>
             再読み込み
@@ -543,12 +536,12 @@ export default function ShiireVendingManager({
           </article>
           <article className="metric card">
             <span>PAYPAY</span>
-            <strong>{status?.payment.paypay?"READY":"OFF"}</strong>
+            <strong>{status?.payment.paypay?"利用可能":"未設定"}</strong>
             <small>メインBOTの受取設定を共用</small>
           </article>
           <article className="metric card">
             <span>KYASH</span>
-            <strong>{status?.payment.kyash?"READY":"OFF"}</strong>
+            <strong>{status?.payment.kyash?"利用可能":"未設定"}</strong>
             <small>メインBOTの受取設定を共用</small>
           </article>
           <article className="metric card">
@@ -557,7 +550,7 @@ export default function ShiireVendingManager({
               {machines.flatMap(machine=>machine.products??[])
                 .reduce((sum,product)=>sum+Number(product.stock_count||0),0)}
             </strong>
-            <small>READY_FOR_DELIVERY</small>
+            <small>購入後に納品できる在庫</small>
           </article>
         </div>
 
@@ -577,66 +570,15 @@ export default function ShiireVendingManager({
         )}
       </section>
 
-      <section className="serverless-note">
-        <strong>仕入れ条件は「仕入れ」タブへ統合しました</strong>
-        <span>
-          価格上限・品質ガード・試験購入・大量購入ガード・18:00恒常在庫・仕入れ割合は、
-          仕入れbot運用センターの各専用タブから一元管理します。
-        </span>
-      </section>
-
-      <section className="two-col">
-        <article className="card">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">VENDING MACHINES</span>
-              <h2>自販機</h2>
-            </div>
-          </div>
-          <div className="form-grid">
-            <label className="field">
-              <span>新しい自販機名</span>
-              <input value={newMachineName} onChange={e=>setNewMachineName(e.target.value)} />
-            </label>
-            <button className="primary" onClick={()=>void createMachine()} disabled={busy}>
-              自販機を作成
-            </button>
-          </div>
-          <div className="list-stack">
-            {machines.map(machine=>(
-              <button
-                key={machine.id}
-                type="button"
-                className={machine.id===selectedId?"primary":"secondary"}
-                onClick={()=>{setEditingProductId("");setProductDrafts({});setSelectedId(machine.id);}}
-              >
-                {machine.name}
-              </button>
-            ))}
-            {selected&&<button className="danger" disabled={busy} onClick={()=>void deleteMachine()}>選択中の自販機を削除</button>}
-            {!machines.length&&<p>まだ仕入れBOT自販機がありません。</p>}
-          </div>
-        </article>
-
-        <article className="card">
-          <span className="eyebrow">SOURCE INVENTORY</span>
-          <h2>仕入れ元商品</h2>
-          <p>HStoraから取得・判定済みの商品を、販売商品へ紐付けます。</p>
-          <div className="list-stack">
-            {sources.slice(0,30).map(source=>(
-              <div className="serverless-note" key={source.supplier_product_id}>
-                <strong>{source.title||("#"+source.supplier_product_id)}</strong>
-                <span>
-                  {source.procurement_class??"未分類"} / ID {source.supplier_product_id} /
-                  {source.currency} {source.unit_price} /
-                  HStora表示在庫 {source.stock_available} /
-                  {source.qualified?"Qualified":"未承認"}
-                </span>
-              </div>
-            ))}
-            {!sources.length&&<p>まだHStora商品が同期されていません。</p>}
-          </div>
-        </article>
+      <section className="card">
+        <h2>1. 編集する販売所を選ぶ</h2>
+        <label className="field"><span>販売所</span><select value={selectedId} disabled={busy} onChange={event=>{setEditingProductId("");setProductDrafts({});setSelectedId(event.target.value);}}><option value="">選択してください</option>{machines.map(machine=><option key={machine.id} value={machine.id}>{machine.name}</option>)}</select></label>
+        <details className="shiire-disclosure" open={!machines.length}><summary>販売所を追加・削除</summary>
+          <div className="form-grid"><label className="field"><span>新しい自販機名</span><input value={newMachineName} onChange={e=>setNewMachineName(e.target.value)} /></label><button className="primary" onClick={()=>void createMachine()} disabled={busy}>自販機を作成</button></div>
+          {selected&&<button className="danger" disabled={busy} onClick={()=>void deleteMachine()}>選択中の自販機を削除</button>}
+          {!machines.length&&<p>まず販売所を1つ作成してください。</p>}
+        </details>
+        <details className="shiire-disclosure"><summary>仕入れ元の詳しい情報</summary><p>仕入れの予算・在庫目標は「仕入れ設定」で変更できます。</p><div className="list-stack">{sources.slice(0,30).map(source=><div className="serverless-note" key={source.supplier_product_id}><strong>{source.title||("#"+source.supplier_product_id)}</strong><span>{source.procurement_class??"未分類"} / ID {source.supplier_product_id} / {source.currency} {source.unit_price} / 在庫 {source.stock_available} / {source.qualified?"購入条件を満たす":"未承認"}</span></div>)}{!sources.length&&<p>まだ仕入れ元の商品が同期されていません。</p>}</div></details>
       </section>
 
       {selected&&(
@@ -644,12 +586,9 @@ export default function ShiireVendingManager({
           <section className="card">
             <div className="section-head">
               <div>
-                <span className="eyebrow">MACHINE SETTINGS</span>
-                <h2>{selected.name}</h2>
+                <h2>2. 価格と案内文を編集</h2><p>{selected.name} — 下の販売画面で商品を選ぶと価格を変更できます。</p>
               </div>
-              <button className="primary" onClick={()=>void saveMachine()} disabled={busy}>
-                自販機設定を保存
-              </button>
+
             </div>
 
             <Suspense fallback={<p>パネルプレビューを読み込み中…</p>}><ShiirePanelPreview key={selected.id} disabled={busy||panelImageBusy}
@@ -663,8 +602,9 @@ export default function ShiireVendingManager({
               }}
               onTitle={setPanelTitle} onDescription={setPanelDescription}
               onProduct={id=>{const product=selected.products?.find(row=>row.id===id);if(product) editProduct(product);}} /></Suspense>
-            <div className="button-row"><button className="primary" disabled={busy||panelImageBusy} onClick={()=>void savePanelPreview()}>プレビューの変更を保存・反映</button></div>
+            <div className="button-row"><button className="primary" disabled={busy||panelImageBusy} onClick={()=>void savePanelPreview()}>変更を保存して反映</button></div>
 
+            <details className="shiire-disclosure"><summary>案内文・画像・購入後の設定</summary>
             <div className="form-grid two">
               <label className="field">
                 <span>自販機名</span>
@@ -735,11 +675,11 @@ export default function ShiireVendingManager({
                 </button>
               )}
             </div>
+            </details>
           </section>
 
           <section className="two-col">
-            <article className="card">
-              <span className="eyebrow">PRODUCTS</span>
+            <details className="card shiire-disclosure"><summary>商品を追加・詳しい情報を編集</summary>
               <h2>販売商品</h2>
               <p>通常商品とOld商品をそれぞれ設定します。仕入れ元の商品IDが変わっても、対応する種類の在庫から自動納品します。</p>
               <div className="list-stack">
@@ -748,7 +688,7 @@ export default function ShiireVendingManager({
                     <strong>{product.emoji} {product.name}</strong>
                     <span>
                       {product.procurement_class
-                        ?product.procurement_class+" / "
+                        ?(({NO_SHADOWBAN:"シャドウバンなし",TOP_SEARCH:"検索上位",INVITE_CAMPAIGN:"招待特典用"} as Record<string,string>)[product.procurement_class]??product.procurement_class)+" / "
                         :"個別商品 / "}
                       在庫 {product.stock_count} / 販売 {product.sales_count} /
                       PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
@@ -757,9 +697,7 @@ export default function ShiireVendingManager({
                       <button className="secondary" aria-label={product.name+"を編集"} onClick={()=>editProduct(product)} disabled={busy}>
                         商品を編集
                       </button>
-                      <button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>
-                        商品を削除
-                      </button>
+                      <details className="shiire-disclosure"><summary>削除</summary><button className="danger" onClick={()=>void deleteProduct(product.id)} disabled={busy}>商品を削除</button></details>
                     </div>
                   </div>
                 ))}
@@ -789,10 +727,10 @@ export default function ShiireVendingManager({
                     <option value="">選択してください</option>
                     <optgroup label="自動仕入れ在庫クラス">
                       <option value="class:NO_SHADOWBAN">
-                        NO_SHADOWBAN — Search Top + No shadow ban / 350円
+                        シャドウバンなし — 通常商品 / 350円
                       </option>
                       <option value="class:TOP_SEARCH">
-                        TOP_SEARCH — 【old】Search Top + No shadow ban / 500円
+                        検索上位 — Old商品 / 500円
                       </option>
                     </optgroup>
                     <optgroup label="個別HStora商品（上級設定）">
@@ -828,36 +766,21 @@ export default function ShiireVendingManager({
                 <textarea value={productDescription} onChange={e=>setProductDescription(e.target.value)} rows={3} />
               </label>
               <div className="button-row">
-                <button className="primary" onClick={()=>void addProduct(false)} disabled={busy||!sourceId}>
-                  {editingProductId?"商品変更を保存":"販売商品へ追加"}
-                </button>
+                {!editingProductId&&<button className="primary" onClick={()=>void addProduct(false)} disabled={busy||!sourceId}>販売商品へ追加</button>}
+                {editingProductId&&<p>価格・商品内容は、上の「変更を保存して反映」で案内文とまとめて保存できます。</p>}
                 {editingProductId&&(
                   <>
-                    <button
-                      className="secondary"
-                      type="button"
-                      disabled={busy||!(selected.panels?.length??0)}
-                      onClick={()=>void addProduct(true)}
-                    >
-                      保存して自販機を再設置
-                    </button>
                     <button className="secondary" type="button" onClick={cancelProductEdit} disabled={busy}>
                       編集をキャンセル
                     </button>
                   </>
                 )}
               </div>
-              {editingProductId&&(
-                <p className="hint">
-                  「保存して自販機を再設置」は価格・商品内容を保存後、既設パネルを同じチャンネルへ新しいメッセージとして再投稿し、旧パネルを削除します。
-                </p>
-              )}
 
               </details>
-            </article>
+            </details>
 
-            <article className="card">
-              <span className="eyebrow">STOCK NOTIFICATION</span>
+            <details className="card shiire-disclosure"><summary>入荷通知を設定する</summary>
               <h2>在庫入荷通知</h2>
               <p>HStoraから新しいXアカウントが仕入れられた時だけ通知します。</p>
               <label className="toggle-row">
@@ -893,13 +816,12 @@ export default function ShiireVendingManager({
               <button className="primary" onClick={()=>void saveNotification()} disabled={busy}>
                 通知設定を保存
               </button>
-            </article>
+            </details>
           </section>
 
           <section className="two-col">
             <article className="card">
-              <span className="eyebrow">PANEL</span>
-              <h2>自販機パネル</h2>
+              <h2>3. Discordへの設置</h2><p>新しいチャンネルへ設置するときに使います。設置後は「変更を保存して反映」だけで内容を更新できます。</p>
               <label className="field">
                 <span>設置チャンネル</span>
                 <select value={panelChannel} onChange={e=>setPanelChannel(e.target.value)}>
@@ -913,6 +835,8 @@ export default function ShiireVendingManager({
                 <button className="primary" onClick={()=>void publishPanel()} disabled={busy||!panelChannel}>
                   パネルを設置
                 </button>
+              </div>
+              <details className="shiire-disclosure"><summary>設置済みメッセージの修復</summary><p>表示が更新されない場合に使います。再設置すると旧メッセージが削除され、新しいメッセージに置き換わります。</p>
                 <button
                   className="secondary"
                   onClick={()=>void repostPanels()}
@@ -920,7 +844,6 @@ export default function ShiireVendingManager({
                 >
                   既設パネルを削除して再設置
                 </button>
-              </div>
               <small>
                 現在追跡中の既設パネル: {selected.panels?.length??0}件
               </small>
@@ -935,10 +858,10 @@ export default function ShiireVendingManager({
               <button className="secondary" onClick={()=>void updatePanel()} disabled={busy||!panelMessageUrl}>
                 既存パネルを更新
               </button>
+              </details>
             </article>
 
-            <article className="card">
-              <span className="eyebrow">COUPONS</span>
+            <details className="card shiire-disclosure"><summary>割引クーポンを設定する</summary>
               <h2>クーポン</h2>
               <div className="form-grid two">
                 <label className="field">
@@ -964,14 +887,12 @@ export default function ShiireVendingManager({
                   </div>
                 ))}
               </div>
-            </article>
+            </details>
           </section>
         </>
       )}
 
-      <section className="card">
-        <span className="eyebrow">ORDERS</span>
-        <h2>仕入れBOT自販機 注文履歴</h2>
+      <details className="card shiire-disclosure"><summary>販売の注文履歴</summary>
         <div className="list-stack">
           {orders.slice(0,50).map(order=>(
             <div className="serverless-note" key={order.id}>
@@ -984,7 +905,7 @@ export default function ShiireVendingManager({
           ))}
           {!orders.length&&<p>まだ注文はありません。</p>}
         </div>
-      </section>
+      </details>
     </div>
   );
 }
