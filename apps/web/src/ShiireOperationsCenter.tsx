@@ -277,6 +277,29 @@ function integrationHealth(
   };
 }
 
+function auditLogPresentation(row:any){
+  const kind=String(row?.kind??"");
+  const message=String(row?.message??"");
+  if(
+    kind==="DAILY_RESTOCK_FAILED"&&
+    message.includes("live automatic procurement is disabled")
+  ){
+    return {
+      kind:"DAILY_RESTOCK_SKIPPED",
+      message:"旧版では故障扱いでしたが、自動仕入れ停止中またはDry Run中のため18:00入荷を実行しなかった記録です。",
+      level:"info"
+    };
+  }
+  if(kind==="DAILY_RESTOCK_SKIPPED"){
+    return {
+      kind,
+      message:"自動仕入れ停止中またはDry Run中のため、18:00入荷を安全にスキップしました。",
+      level:"info"
+    };
+  }
+  return {kind,message,level:String(row?.level??"info")};
+}
+
 export default function ShiireOperationsCenter({
   guildId,
   channels,
@@ -2176,15 +2199,16 @@ export default function ShiireOperationsCenter({
             <span className="eyebrow">AUDIT LOG</span>
             <h2>監査ログ</h2>
             <div className="shiire-log-list">
-              {(logs?.logs??[]).map((row:any)=>(
-                <div className={`shiire-log-row ${row.level||"info"}`} key={row.id}>
+              {(logs?.logs??[]).map((row:any)=>{
+                const view=auditLogPresentation(row);
+                return <div className={`shiire-log-row ${view.level}`} key={row.id}>
                   <div>
-                    <strong>{row.kind}</strong>
-                    <span>{row.message}</span>
+                    <strong>{view.kind}</strong>
+                    <span>{view.message}</span>
                   </div>
                   <time>{when(row.created_at)}</time>
-                </div>
-              ))}
+                </div>;
+              })}
             </div>
           </section>
 
