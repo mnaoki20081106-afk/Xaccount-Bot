@@ -272,7 +272,7 @@ export default function XUtilityManager({
           {busy === "account-format" ? "設置中..." : "アカウント形式判別パネルを設置"}
         </button></div>
         {feedback(formatFeedback)}
-        <p className="muted">最初のパネルに「形式判別」「チュートリアル」の2つのボタンを表示します。入力・判別結果・コピー用フォーム・2FA生成はDiscord内で完結し、結果は本人だけに表示します。外部ページへの誘導はありません。</p>
+        <p className="muted">最初のパネルに「形式判別」「チュートリアル」の2つのボタンを表示します。入力・判別結果・2FA生成はDiscord内で完結し、結果は本人だけに表示します。表示された値をタップしてコピーできます。外部ページへの誘導はありません。</p>
       </article>
       <article className="card">
         <div className="section-head">
