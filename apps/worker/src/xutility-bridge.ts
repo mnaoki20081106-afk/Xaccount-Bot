@@ -99,7 +99,7 @@ async function signedFetch(
 export async function postXUtilityPanel(
   env: Env,
   guildId: string,
-  kind: "shadowban" | "2fa",
+  kind: "shadowban" | "2fa" | "account-format",
   channelId: string
 ): Promise<{ ok: true; messageId?: string }> {
   const response = await signedFetch(

@@ -2955,11 +2955,11 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   }
 
   const xUtilityPanel=url.pathname.match(
-    /^\/api\/guilds\/(\d+)\/xutility\/(shadowban|2fa)\/panel$/
+    /^\/api\/guilds\/(\d+)\/xutility\/(shadowban|2fa|account-format)\/panel$/
   );
   if(xUtilityPanel&&request.method==="POST"){
     const guildId=xUtilityPanel[1]!;
-    const kind=xUtilityPanel[2] as "shadowban"|"2fa";
+    const kind=xUtilityPanel[2] as "shadowban"|"2fa"|"account-format";
     await requireGuild(request,env,guildId);
     const {channelId}=await bodyObject<{channelId?:string}>(request);
     if(!channelId) throw new HttpError(400,"設置先チャンネルを選択してください");
@@ -3380,7 +3380,7 @@ export default {
         (/^\/api\/guilds\/\d+\/channels\/permissions\/bulk$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")||
-        (/^\/api\/guilds\/\d+\/xutility\/(shadowban|2fa)\/panel$/.test(url.pathname)&&request.method==="POST")
+        (/^\/api\/guilds\/\d+\/xutility\/(shadowban|2fa|account-format)\/panel$/.test(url.pathname)&&request.method==="POST")
       ){
         return await handleApi(request,env,url);
       }

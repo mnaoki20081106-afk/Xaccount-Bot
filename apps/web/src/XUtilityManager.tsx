@@ -38,7 +38,9 @@ export default function XUtilityManager({
 
   const [shadowbanChannelId, setShadowbanChannelId] = useState("");
   const [totpChannelId, setTotpChannelId] = useState("");
-  const [busy, setBusy] = useState<"shadowban" | "2fa" | null>(null);
+  const [formatChannelId, setFormatChannelId] = useState("");
+  const [formatFeedback, setFormatFeedback] = useState<Feedback | null>(null);
+  const [busy, setBusy] = useState<"shadowban" | "2fa" | "account-format" | null>(null);
   const [shadowbanFeedback, setShadowbanFeedback] = useState<Feedback | null>(
     null
   );
@@ -60,6 +62,7 @@ export default function XUtilityManager({
         ? current
         : first
     );
+    setFormatChannelId((current) => messageChannels.some((channel) => channel.id === current) ? current : first);
     setTotpChannelId((current) =>
       messageChannels.some((channel) => channel.id === current)
         ? current
@@ -171,13 +174,13 @@ export default function XUtilityManager({
     }
   }
 
-  async function deploy(kind: "shadowban" | "2fa") {
+  async function deploy(kind: "shadowban" | "2fa" | "account-format") {
     const isShadowban = kind === "shadowban";
-    const channelId = isShadowban ? shadowbanChannelId : totpChannelId;
-    const label = isShadowban ? "X 垢状態チェックパネル" : "2FAパネル";
+    const channelId = isShadowban ? shadowbanChannelId : kind === "2fa" ? totpChannelId : formatChannelId;
+    const label = isShadowban ? "X 垢状態チェックパネル" : kind === "2fa" ? "2FAパネル" : "アカウント形式判別パネル";
     const setFeedback = isShadowban
       ? setShadowbanFeedback
-      : setTotpFeedback;
+      : kind === "2fa" ? setTotpFeedback : setFormatFeedback;
 
     if (!channelId) {
       setFeedback({
@@ -255,6 +258,22 @@ export default function XUtilityManager({
 
   return (
     <section className="stack">
+      <article className="card">
+        <div className="section-head"><div>
+          <span className="eyebrow">X UTILITY</span>
+          <h2>アカウント形式判別</h2>
+          <p className="muted">納品文字列をID・パスワード・メール・2FAキーなどに整理し、各項目をコピーできるパネルを設置します。</p>
+        </div></div>
+        <label className="field"><span>パネル設置チャンネル</span>
+          {channelSelect(formatChannelId, setFormatChannelId)}
+        </label>
+        <div className="button-row"><button type="button" className="primary"
+          disabled={busy !== null || !formatChannelId} onClick={() => void deploy("account-format")}>
+          {busy === "account-format" ? "設置中..." : "アカウント形式判別パネルを設置"}
+        </button></div>
+        {feedback(formatFeedback)}
+        <p className="muted">利用者はパネルから判別画面を開きます。入力は端末内で処理され、サーバーへ送信されません。複数形式に一致する場合は購入元やFormatで絞り込めます。</p>
+      </article>
       <article className="card">
         <div className="section-head">
           <div>

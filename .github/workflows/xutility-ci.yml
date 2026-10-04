@@ -8,6 +8,8 @@ on:
       - "apps/worker/src/index.ts"
       - "apps/worker/src/types.ts"
       - "apps/web/src/XUtilityManager.tsx"
+      - "apps/web/test/xutility-format-panel.test.mjs"
+      - "apps/worker/test/xutility-format-bridge.test.mjs"
       - "apps/web/src/App.tsx"
       - "bot-factory.json"
       - ".github/workflows/xutility-ci.yml"
@@ -17,6 +19,8 @@ on:
       - "apps/worker/src/index.ts"
       - "apps/worker/src/types.ts"
       - "apps/web/src/XUtilityManager.tsx"
+      - "apps/web/test/xutility-format-panel.test.mjs"
+      - "apps/worker/test/xutility-format-bridge.test.mjs"
       - "apps/web/src/App.tsx"
       - "bot-factory.json"
   workflow_dispatch:
@@ -35,3 +39,7 @@ jobs:
       - run: npm install
       - run: npm run build --workspace @dsm/worker
       - run: npm run build --workspace @dsm/web
+      - run: node --test test/xutility-format-panel.test.mjs
+        working-directory: apps/web
+      - run: node --test test/xutility-format-bridge.test.mjs
+        working-directory: apps/worker

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {build} from 'esbuild';
+import {JSDOM} from 'jsdom';
+import {mkdtemp,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+test('format panel uses selected channel and reports bridge errors',async t=>{
+ const dir=await mkdtemp(path.resolve('.xutility-ui-test-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ await build({entryPoints:['src/XUtilityManager.tsx'],bundle:true,platform:'node',format:'esm',packages:'external',outfile:path.join(dir,'Manager.mjs'),define:{'import.meta.env.VITE_API_BASE_URL':'"https://fixture.example"'},jsx:'automatic'});
+ const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'https://fixture.example'});
+ for(const key of ['window','document','navigator','HTMLElement','Element','Node','MutationObserver','localStorage','sessionStorage','location','getComputedStyle'])Object.defineProperty(globalThis,key,{value:key==='getComputedStyle'?dom.window.getComputedStyle.bind(dom.window):dom.window[key],configurable:true});
+ globalThis.IS_REACT_ACT_ENVIRONMENT=true;t.after(()=>dom.window.close());
+ const React=await import('react');const {render,screen,waitFor,cleanup,within}=await import('@testing-library/react');
+ const {default:userEvent}=await import('@testing-library/user-event');t.after(cleanup);
+ const {default:Manager}=await import(pathToFileURL(path.join(dir,'Manager.mjs')).href);
+ const nativeFetch=globalThis.fetch;t.after(()=>globalThis.fetch=nativeFetch);
+ const writes=[],errors=[];let failure=false;
+ globalThis.fetch=async(input,init={})=>{
+  const p=new URL(String(input)).pathname;
+  if(p.endsWith('/search-credential'))return Response.json({configured:false,updatedAt:null});
+  assert.equal(p,'/api/guilds/123456789012345678/xutility/account-format/panel');assert.equal(init.method,'POST');writes.push(JSON.parse(init.body));
+  return failure?Response.json({message:'fixture bridge unavailable'},{status:503}):Response.json({ok:true,messageId:'message'});
+ };
+ render(React.createElement(Manager,{guildId:'123456789012345678',channels:[{id:'1',name:'first',type:'text'},{id:'2',name:'second',type:'text'},{id:'3',name:'voice',type:'voice'}],onNotice:()=>{},onError:e=>errors.push(e)}));
+ const user=userEvent.setup();const card=screen.getByRole('heading',{name:'アカウント形式判別'}).closest('article');const select=within(card).getByRole('combobox');assert.equal(select.options.length,2);
+ await user.selectOptions(select,'2');await user.click(within(card).getByRole('button',{name:'アカウント形式判別パネルを設置'}));
+ await waitFor(()=>assert.deepEqual(writes,[{channelId:'2'}]));await waitFor(()=>assert.match(within(card).getByRole('status').textContent,/#second/));
+ failure=true;await user.click(within(card).getByRole('button',{name:'アカウント形式判別パネルを設置'}));await waitFor(()=>assert.match(within(card).getByRole('status').textContent,/設置に失敗/));assert.equal(errors.length,1);
+});
