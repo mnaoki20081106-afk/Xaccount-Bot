@@ -297,6 +297,13 @@ function auditLogPresentation(row:any){
       level:"info"
     };
   }
+  if(kind==="DAILY_RESTOCK_WAITING_FOR_FUNDS"){
+    return {
+      kind,
+      message:"仕入れ資金の入金待ちです。HStora Main WalletへのLTC入金が反映されると、1分Cronで自動的に仕入れを再開します。",
+      level:"info"
+    };
+  }
   return {kind,message,level:String(row?.level??"info")};
 }
 
