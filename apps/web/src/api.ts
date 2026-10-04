@@ -4,6 +4,26 @@ export const API_BASE =
 
 const SESSION_KEY = "dsm_session";
 
+export class ApiError extends Error {
+  status:number;
+  code:string|null;
+  saved:boolean;
+  payload:Record<string,unknown>;
+
+  constructor(
+    message:string,
+    status:number,
+    payload:Record<string,unknown>={}
+  ){
+    super(message);
+    this.name="ApiError";
+    this.status=status;
+    this.code=typeof payload.error==="string"?payload.error:null;
+    this.saved=payload.saved===true;
+    this.payload=payload;
+  }
+}
+
 function readStoredSession(): string | null {
   let persistent: string | null = null;
   try {
@@ -107,10 +127,14 @@ export async function api<T>(
       headers,
       signal: controller.signal
     });
-    const payload = await response.json().catch(() => ({}));
+    const payload = await response.json().catch(() => ({})) as Record<string,unknown>;
     if (!response.ok) {
       if (response.status === 401) clearSession();
-      throw new Error(payload.message || `HTTP ${response.status}`);
+      throw new ApiError(
+        typeof payload.message==="string"?payload.message:`HTTP ${response.status}`,
+        response.status,
+        payload
+      );
     }
     return payload as T;
   } catch (reason) {

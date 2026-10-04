@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { DEFAULT_PANEL_COLOR, isPanelColor, PANEL_FORMAT_VERSION } from "./shiire-panel-payload";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 const ShiirePanelPreview=lazy(()=>import("./ShiirePanelPreview"));
 
 type Channel={
@@ -313,6 +313,25 @@ export default function ShiireVendingManager({
       ...(product.procurement_class?{procurementClass:product.procurement_class}:{supplierProductId:product.supplier_product_id})};
   }
 
+  function applyConfirmedMachinePatch(patch:Record<string,unknown>){
+    if(!selected) return;
+    const columns:Record<string,string>={name:"name",panelTitle:"panel_title",panelDescription:"panel_description",panelColor:"panel_color",publicLogChannelId:"public_log_channel_id",privateLogChannelId:"private_log_channel_id",roleId:"role_id"};
+    const saved=Object.fromEntries(Object.entries(patch).map(([key,value])=>[columns[key],value]));
+    setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,...saved}:row));
+  }
+
+  function applyConfirmedProduct(product:Product){
+    if(!selected) return;
+    setMachines(rows=>rows.map(row=>row.id===selected.id?{
+      ...row,
+      products:row.products?.map(original=>
+        original.id===product.id
+          ?{...product,name:product.name.trim()||"Xアカウント"}
+          :original
+      )
+    }:row));
+  }
+
   async function persistPanelDraft(){
     if(!selected) return;
     const drafts={...productDrafts,...(currentDraft?{[currentDraft.id]:currentDraft}:{})};
@@ -334,15 +353,27 @@ export default function ShiireVendingManager({
     // An empty patch explicitly refreshes existing panels when no settings changed.
     // Product-only edits must not revalidate unrelated channels or roles.
     if(Object.keys(patch).length||!products.length){
-      await api(path,{method:"PATCH",body:JSON.stringify(patch)},20_000);
-      const columns:Record<string,string>={name:"name",panelTitle:"panel_title",panelDescription:"panel_description",panelColor:"panel_color",publicLogChannelId:"public_log_channel_id",privateLogChannelId:"private_log_channel_id",roleId:"role_id"};
-      const saved=Object.fromEntries(Object.entries(patch).map(([key,value])=>[columns[key],value]));
-      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,...saved}:row));
+      try{
+        await api(path,{method:"PATCH",body:JSON.stringify(patch)},20_000);
+      }catch(reason){
+        if(reason instanceof ApiError&&reason.saved){
+          applyConfirmedMachinePatch(patch);
+        }
+        throw reason;
+      }
+      applyConfirmedMachinePatch(patch);
     }
     for(const product of products){
-      await api(`${path}/products/${product.id}`,{method:"PATCH",body:JSON.stringify(productPayload(product))},20_000);
+      try{
+        await api(`${path}/products/${product.id}`,{method:"PATCH",body:JSON.stringify(productPayload(product))},20_000);
+      }catch(reason){
+        if(reason instanceof ApiError&&reason.saved){
+          applyConfirmedProduct(product);
+        }
+        throw reason;
+      }
       // Retain confirmed saves as the retry baseline if a later request fails.
-      setMachines(rows=>rows.map(row=>row.id===selected.id?{...row,products:row.products?.map(original=>original.id===product.id?{...product,name:product.name.trim()||"Xアカウント"}:original)}:row));
+      applyConfirmedProduct(product);
     }
   }
 
@@ -364,9 +395,12 @@ export default function ShiireVendingManager({
       onNotice("プレビューの変更を保存し、既設パネルへ反映しました");
     }catch(reason){
       const detail=reason instanceof Error?reason.message:String(reason);
-      onError(new Error(saved
-        ?`変更は保存済みですが、表示の更新に失敗しました。編集内容は残しています。再読み込みしてください。詳細: ${detail}`
-        :`保存の応答を確認できませんでした。編集内容は残しています。「変更を保存して反映」で再試行してください。詳細: ${detail}`));
+      const partialSave=reason instanceof ApiError&&reason.saved;
+      onError(new Error(partialSave
+        ?`変更内容は保存済みですが、Discord側のパネル反映に失敗しました。編集内容は残しています。「変更を保存して反映」で再試行すると未反映部分だけを反映します。詳細: ${detail}`
+        :saved
+          ?`変更は保存済みですが、表示の更新に失敗しました。編集内容は残しています。再読み込みしてください。詳細: ${detail}`
+          :`保存の応答を確認できませんでした。編集内容は残しています。「変更を保存して反映」で再試行してください。詳細: ${detail}`));
     }finally{setBusy(false);}
   }
 

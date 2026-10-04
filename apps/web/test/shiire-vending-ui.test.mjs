@@ -19,7 +19,7 @@ test('two sales categories can be edited independently and machine deletion requ
   {id:machineId+'-old',vending_machine_id:machineId,procurement_class:'TOP_SEARCH',supplier_product_id:'',name:'【old】Search Top + No shadow ban',description:'Old',price_paypay:500,price_kyash:500,stock_count:0,sales_count:0}
  ];
  const machine=(id,name)=>({id,guild_id:'fixture',name,panel_title:null,panel_description:null,panel_image_url:null,panel_color:5763719,products:products(id),panels:[],stockNotification:null});
- let panelFormat='price-code-block-v1',failProductSave=true,failVendingRead=false;
+ let panelFormat='price-code-block-v1',failProductSave=true,failProductPanelRefresh=false,failVendingRead=false;
  const notices=[];
  let machines=[machine('one','First machine'),machine('two','Second machine')],allowDelete=false;
  const machineWrites=[],writes=[],deletes=[],errors=[];globalThis.confirm=()=>allowDelete;
@@ -37,7 +37,12 @@ test('two sales categories can be edited independently and machine deletion requ
   const update=p.match(/\/vending\/([^/]+)\/products\/([^/]+)$/);
   if(update&&init.method==='PATCH'){
    if(failProductSave){failProductSave=false;throw new TypeError('Load failed');}
-   const payload=JSON.parse(init.body);writes.push(payload);const product=machines.find(m=>m.id===update[1]).products.find(p=>p.id===update[2]);Object.assign(product,{name:payload.name,description:payload.description,price_paypay:payload.pricePayPay,price_kyash:payload.priceKyash});return Response.json({ok:true});
+   const payload=JSON.parse(init.body);writes.push(payload);const product=machines.find(m=>m.id===update[1]).products.find(p=>p.id===update[2]);Object.assign(product,{name:payload.name,description:payload.description,price_paypay:payload.pricePayPay,price_kyash:payload.priceKyash});
+   if(failProductPanelRefresh){
+    failProductPanelRefresh=false;
+    return Response.json({ok:false,saved:true,panelRefreshOk:false,error:'VENDING_PANEL_REFRESH_FAILED',message:'商品情報は保存されましたが、Discord自販機パネルへの反映に失敗しました。再投稿してください。'},{status:502});
+   }
+   return Response.json({ok:true});
   }
   const machineUpdate=p.match(/\/vending\/([^/]+)$/);
   if(machineUpdate&&init.method==='PATCH'){
@@ -74,6 +79,25 @@ test('two sales categories can be edited independently and machine deletion requ
  errors.length=0;
  await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
  await waitFor(()=>assert.equal(writes.length,1));assert.equal(machineWrites.length,0,'product-only save must bypass unchanged machine settings');assert.equal(writes[0].procurementClass,'TOP_SEARCH');assert.equal(writes[0].pricePayPay,450);
+ await waitFor(()=>assert.equal(screen.getByRole('button',{name:'【old】Search Top + No shadow banを編集'}).disabled,false));
+ await user.click(screen.getByRole('button',{name:'【old】Search Top + No shadow banを編集'}));
+ assert.equal(screen.getByLabelText(/^PayPay価格/).value,'450');
+ await user.clear(screen.getByLabelText(/^PayPay価格/));await user.type(screen.getByLabelText(/^PayPay価格/),'460');
+ failProductPanelRefresh=true;
+ const partialNoticeCount=notices.length;
+ await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
+ await waitFor(()=>assert.equal(errors.length,1));
+ assert.match(errors[0].message,/変更内容は保存済みですが、Discord側のパネル反映に失敗しました/);
+ assert.match(errors[0].message,/未反映部分だけを反映/);
+ assert.equal(machines[0].products[1].price_paypay,460,'backend partial failure must still persist the product edit');
+ assert.equal(writes.length,2);
+ errors.length=0;
+ const machineWritesBeforeRetry=machineWrites.length;
+ await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
+ await waitFor(()=>assert.equal(notices.length,partialNoticeCount+1));
+ assert.equal(writes.length,2,'confirmed partial save must not resend the product edit');
+ assert.equal(machineWrites.length,machineWritesBeforeRetry+1,'retry should refresh the panel without resending product changes');
+ assert.deepEqual(machineWrites.at(-1),{});
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}).disabled,false));
  await user.click(screen.getByRole('button',{name:'Search Top + No shadow banを編集'}));
  assert.equal(screen.getByLabelText(/^PayPay価格/).value,'150','editing Old must leave normal price alone');
@@ -103,7 +127,7 @@ test('two sales categories can be edited independently and machine deletion requ
  failVendingRead=true;
  const noticeCount=notices.length;
  await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
- await waitFor(()=>assert.equal(writes.length,3));
+ await waitFor(()=>assert.equal(writes.length,4));
  await waitFor(()=>assert.equal(errors.length,1));
  assert.match(errors[0].message,/変更は保存済み/);
  assert.equal(notices.length,noticeCount,'failed refresh must not report success');
@@ -112,7 +136,7 @@ test('two sales categories can be edited independently and machine deletion requ
  errors.length=0;
  await user.click(screen.getByRole('button',{name:'変更を保存して反映'}));
  await waitFor(()=>assert.equal(notices.length,noticeCount+1));
- assert.equal(writes.length,3,'confirmed product saves must not repeat on retry');
+ assert.equal(writes.length,4,'confirmed product saves must not repeat on retry');
  assert.equal(machines[0].panel_color,0xff3366);
  assert.equal(screen.getByLabelText('パネルの色').value,'#ff3366');
  await waitFor(()=>assert.equal(screen.getByRole('button',{name:'選択中の自販機を削除'}).disabled,false));
