@@ -209,6 +209,97 @@ function parseJson(value:unknown){
   try{return JSON.parse(value);}catch{return value;}
 }
 
+type IntegrationHealthView={
+  label:string;
+  ok:boolean;
+  neutral:boolean;
+  detail:string;
+  status?:string;
+};
+
+function integrationHealth(
+  key:string,
+  value:unknown,
+  fundingMode:Overview["safety"]["fundingMode"]|undefined
+):IntegrationHealthView{
+  const configured=value===true;
+  const manual=fundingMode==="manual_hstora";
+  const labels:Record<string,string>={
+    hstoraConfigured:"仕入れ先との接続",
+    credentialsEncryptionConfigured:"納品情報の暗号化",
+    discordBotConfigured:"Discord Bot接続",
+    binanceTradeConfigured:"LTC購入用の取引接続",
+    binanceWithdrawConfigured:"LTC出金用の接続",
+    dedicatedHotWallet:"専用送金ウォレット",
+    binanceAutoFundingServerEnabled:"Binance自動LTC購入",
+    hstoraWebhookConfigured:"仕入れ先からの入荷Webhook",
+    discordNotifyConfigured:"障害通知Webhook"
+  };
+  const label=labels[key]??key;
+
+  if(key==="dedicatedHotWallet"){
+    return {
+      label,ok:true,neutral:true,status:"対象外",
+      detail:"設計上未使用です。LTCはHStora Main Walletへ直接補充します。"
+    };
+  }
+  if(key==="binanceWithdrawConfigured"){
+    return {
+      label,ok:configured,neutral:true,status:"未使用",
+      detail:"現在のHStora補充フローでは自動出金APIを使用しません。"
+    };
+  }
+  if(manual&&(key==="binanceTradeConfigured"||key==="binanceAutoFundingServerEnabled")){
+    return {
+      label,ok:configured,neutral:true,status:"対象外",
+      detail:key==="binanceAutoFundingServerEnabled"&&configured
+        ?"HStora手動補充モードでは実行されません。サーバー側の許可設定はONです。"
+        :"HStora手動補充モードでは不要です。"
+    };
+  }
+  if(key==="hstoraWebhookConfigured"&&!configured){
+    return {
+      label,ok:false,neutral:true,status:"任意",
+      detail:"未設定でも1分Cronの注文照合・残高確認で運用できます。"
+    };
+  }
+  if(key==="discordNotifyConfigured"&&!configured){
+    return {
+      label,ok:false,neutral:true,status:"任意",
+      detail:"運用アラート用Webhookです。仕入れ・販売そのものには必須ではありません。"
+    };
+  }
+  return {
+    label,
+    ok:configured,
+    neutral:value==="disabled",
+    detail:value==="disabled"?"無効":configured?"設定済み":"未設定"
+  };
+}
+
+function auditLogPresentation(row:any){
+  const kind=String(row?.kind??"");
+  const message=String(row?.message??"");
+  if(
+    kind==="DAILY_RESTOCK_FAILED"&&
+    message.includes("live automatic procurement is disabled")
+  ){
+    return {
+      kind:"DAILY_RESTOCK_SKIPPED",
+      message:"旧版では故障扱いでしたが、自動仕入れ停止中またはDry Run中のため18:00入荷を実行しなかった記録です。",
+      level:"info"
+    };
+  }
+  if(kind==="DAILY_RESTOCK_SKIPPED"){
+    return {
+      kind,
+      message:"自動仕入れ停止中またはDry Run中のため、18:00入荷を安全にスキップしました。",
+      level:"info"
+    };
+  }
+  return {kind,message,level:String(row?.level??"info")};
+}
+
 export default function ShiireOperationsCenter({
   guildId,
   channels,
@@ -2094,16 +2185,12 @@ export default function ShiireOperationsCenter({
             <article className="card">
               <span className="eyebrow">INTEGRATIONS</span>
               <h2>接続設定</h2>
+              {manualFunding&&<p>現在は「HStoraへLTC手動補充」モードです。Binance系・専用送金ウォレット・任意Webhookは未設定でも仕入れを止めません。</p>}
               <div className="shiire-health-list">
-                {Object.entries(overview?.integrations??{}).map(([key,value])=>(
-                  <HealthRow
-                    key={key}
-                    label={({hstoraConfigured:"仕入れ先との接続",credentialsEncryptionConfigured:"納品情報の暗号化",binanceTradeConfigured:"LTC購入用の取引接続",binanceWithdrawConfigured:"LTC出金用の接続",dedicatedHotWallet:"専用送金ウォレット",binanceAutoFundingServerEnabled:"LTCの自動購入を許可",hstoraWebhookConfigured:"仕入れ先からの入荷通知",discordNotifyConfigured:"Discordへの通知"} as Record<string,string>)[key]??key}
-                    ok={value===true}
-                    neutral={value==="disabled"}
-                    detail={value==="disabled"?"無効":value===true?"設定済み":"未設定"}
-                  />
-                ))}
+                {Object.entries(overview?.integrations??{}).map(([key,value])=>{
+                  const health=integrationHealth(key,value,overview?.safety.fundingMode);
+                  return <HealthRow key={key} {...health} />;
+                })}
               </div>
             </article>
           </section>
@@ -2112,15 +2199,16 @@ export default function ShiireOperationsCenter({
             <span className="eyebrow">AUDIT LOG</span>
             <h2>監査ログ</h2>
             <div className="shiire-log-list">
-              {(logs?.logs??[]).map((row:any)=>(
-                <div className={`shiire-log-row ${row.level||"info"}`} key={row.id}>
+              {(logs?.logs??[]).map((row:any)=>{
+                const view=auditLogPresentation(row);
+                return <div className={`shiire-log-row ${view.level}`} key={row.id}>
                   <div>
-                    <strong>{row.kind}</strong>
-                    <span>{row.message}</span>
+                    <strong>{view.kind}</strong>
+                    <span>{view.message}</span>
                   </div>
                   <time>{when(row.created_at)}</time>
-                </div>
-              ))}
+                </div>;
+              })}
             </div>
           </section>
 
@@ -2169,13 +2257,13 @@ function FundingInput({
 }
 
 function HealthRow({
-  label,ok,detail,neutral=false
-}:{label:string;ok:boolean;detail?:string;neutral?:boolean}){
+  label,ok,detail,neutral=false,status
+}:{label:string;ok:boolean;detail?:string;neutral?:boolean;status?:string}){
   const tone=neutral?"neutral":statusTone(ok);
   return <div className="shiire-health-row">
     <span className={`shiire-dot ${tone}`} />
     <div><strong>{label}</strong>{detail&&<small>{detail}</small>}</div>
-    <b>{neutral?"対象外":ok?"確認済み":"要確認"}</b>
+    <b>{status??(neutral?"対象外":ok?"確認済み":"要確認")}</b>
   </div>;
 }
 
