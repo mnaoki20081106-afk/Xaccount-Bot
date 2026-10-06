@@ -43,6 +43,7 @@ type Product={
   price_paypay:number;
   price_kyash:number;
   emoji:string|null;
+  stockless_enabled:number;
   sales_count:number;
   stock_count:number;
 };
@@ -175,6 +176,7 @@ export default function ShiireVendingManager({
   const [pricePayPay,setPricePayPay]=useState(100);
   const [priceKyash,setPriceKyash]=useState(100);
   const [emoji,setEmoji]=useState("");
+  const [stocklessEnabled,setStocklessEnabled]=useState(true);
   const [editingProductId,setEditingProductId]=useState("");
   const [productDrafts,setProductDrafts]=useState<Record<string,Product>>({});
 
@@ -303,6 +305,7 @@ export default function ShiireVendingManager({
   function currentProductDraft():Product|null{
     const product=selected?.products?.find(row=>row.id===editingProductId);
     return product?{...product,name:productName,description:productDescription.slice(0,500),price_paypay:pricePayPay,price_kyash:priceKyash,emoji:emoji.trim().slice(0,64)||null,
+      stockless_enabled:sourceId.startsWith("class:")&&stocklessEnabled?1:0,
       procurement_class:sourceId==="class:TOP_SEARCH"?"TOP_SEARCH":sourceId==="class:NO_SHADOWBAN"?"NO_SHADOWBAN":null,supplier_product_id:sourceId.startsWith("class:")?"":sourceId}:null;
   }
   const currentDraft=currentProductDraft();
@@ -310,6 +313,7 @@ export default function ShiireVendingManager({
 
   function productPayload(product:Product){
     return {name:product.name.trim()||"Xアカウント",description:product.description,pricePayPay:product.price_paypay,priceKyash:product.price_kyash,emoji:product.emoji||null,
+      stocklessEnabled:Boolean(product.stockless_enabled),
       ...(product.procurement_class?{procurementClass:product.procurement_class}:{supplierProductId:product.supplier_product_id})};
   }
 
@@ -423,6 +427,7 @@ export default function ShiireVendingManager({
       pricePayPay:Number(pricePayPay),
       priceKyash:Number(priceKyash),
       emoji:emoji.trim()||null,
+      stocklessEnabled:Boolean(procurementClass&&stocklessEnabled),
       ...(editingProductId&&repostPanels?{repostPanels:true}:{})
     };
     if(editingProductId){
@@ -457,6 +462,7 @@ export default function ShiireVendingManager({
     setPricePayPay(product.price_paypay);
     setPriceKyash(product.price_kyash);
     setEmoji(product.emoji??"");
+    setStocklessEnabled(Boolean(product.stockless_enabled));
   }
 
   function cancelProductEdit(){
@@ -464,6 +470,7 @@ export default function ShiireVendingManager({
     setEditingProductId("");
     setProductDescription("");
     setEmoji("");
+    setStocklessEnabled(true);
   }
 
   async function repostPanels(){
@@ -776,6 +783,7 @@ export default function ShiireVendingManager({
                         ?(({NO_SHADOWBAN:"シャドウバンなし",TOP_SEARCH:"検索上位",INVITE_CAMPAIGN:"招待特典用"} as Record<string,string>)[product.procurement_class]??product.procurement_class)+" / "
                         :"個別商品 / "}
                       在庫 {product.stock_count} / 販売 {product.sales_count} /
+                      無在庫 {product.stockless_enabled?"ON":"OFF"} /
                       PayPay {product.price_paypay}円 / Kyash {product.price_kyash}円
                     </span>
                     <div className="button-row">
@@ -803,8 +811,10 @@ export default function ShiireVendingManager({
                         setProductDescription(preset.description);
                         setPricePayPay(preset.price);
                         setPriceKyash(preset.price);
+                        setStocklessEnabled(true);
                         return;
                       }
+                      setStocklessEnabled(false);
                       const source=sources.find(row=>row.supplier_product_id===id);
                       if(source) setProductName(source.title||"Xアカウント");
                     }}
@@ -846,6 +856,26 @@ export default function ShiireVendingManager({
                   <input value={emoji} onChange={e=>setEmoji(e.target.value)} placeholder="🐔" />
                 </label>
               </div>
+              <label className="toggle-row">
+                <span className="toggle-copy">
+                  <strong>無在庫販売</strong>
+                  <small>
+                    在庫0のときだけ販売を継続します。PayPayマネーのみ受け付け、決済確認後にHSTORA仕入れ・自動納品へ進みます。
+                  </small>
+                </span>
+                <span className={`switch ${stocklessEnabled?"on":""}`}>
+                  <input
+                    type="checkbox"
+                    checked={stocklessEnabled}
+                    disabled={!sourceId.startsWith("class:")}
+                    onChange={e=>setStocklessEnabled(e.target.checked)}
+                  />
+                  <span />
+                </span>
+              </label>
+              {!sourceId.startsWith("class:")&&(
+                <small>無在庫販売は「自動仕入れ在庫クラス」の商品だけで利用できます。</small>
+              )}
               <label className="field">
                 <span>商品説明</span>
                 <textarea value={productDescription} onChange={e=>setProductDescription(e.target.value)} rows={3} />
