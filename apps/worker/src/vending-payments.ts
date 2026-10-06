@@ -60,8 +60,31 @@ export async function checkPayPayLink(link:string){
   return data;
 }
 
+export type PayPayWalletSplit={
+  money:number;
+  moneyLight:number;
+  known:boolean;
+};
+
+export function payPayWalletSplit(info:any):PayPayWalletSplit{
+  const split=info?.payload?.message?.data?.subWalletSplit;
+  const money=Number(split?.senderEmoneyAmount);
+  const moneyLight=Number(split?.senderPrepaidAmount);
+  const known=
+    Number.isSafeInteger(money)&&money>=0&&
+    Number.isSafeInteger(moneyLight)&&moneyLight>=0;
+  return {
+    money:known?money:0,
+    moneyLight:known?moneyLight:0,
+    known
+  };
+}
+
 export async function acceptPayPayLink(
-  link:string,account:{phone:string;password:string;uuid:string},expectedAmount=1
+  link:string,
+  account:{phone:string;password:string;uuid:string},
+  expectedAmount=1,
+  options:{requirePayPayMoney?:boolean}={}
 ):Promise<{ok:boolean;pending:boolean;amount:number;status:string}>{
   const code=payCode(link);
   const info:any=await checkPayPayLink(link);
@@ -70,6 +93,15 @@ export async function acceptPayPayLink(
   const status=String(info?.payload?.orderStatus??"UNKNOWN");
   if(!Number.isSafeInteger(amount)||amount<expectedAmount){
     return {ok:false,pending:false,amount,status:"AMOUNT_INSUFFICIENT"};
+  }
+  if(options.requirePayPayMoney){
+    const split=payPayWalletSplit(info);
+    if(!split.known){
+      return {ok:false,pending:false,amount,status:"PAYPAY_BALANCE_TYPE_UNKNOWN"};
+    }
+    if(split.moneyLight>0||split.money<expectedAmount){
+      return {ok:false,pending:false,amount,status:"PAYPAY_MONEY_LIGHT_NOT_ALLOWED"};
+    }
   }
   if(info?.payload?.pendingP2PInfo?.isSetPasscode){
     return {ok:false,pending:false,amount,status:"PASSCODE_REQUIRED"};

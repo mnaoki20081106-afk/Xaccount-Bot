@@ -8,6 +8,7 @@ import {
 import {
   acceptPayPayLink,
   checkPayPayLink,
+  payPayWalletSplit,
   checkKyashLink,
   getKyashAccount,
   receiveKyashLink
@@ -28,9 +29,18 @@ async function ensureBridgeSchema(env:Env){
   await env.DB.prepare(
     "CREATE TABLE IF NOT EXISTS shiire_payment_receipts ("+
     "idempotency_key TEXT PRIMARY KEY,method TEXT NOT NULL,link_hash TEXT NOT NULL UNIQUE,"+
-    "amount INTEGER NOT NULL,status TEXT NOT NULL,response_json TEXT NOT NULL DEFAULT '{}',"+
+    "amount INTEGER NOT NULL,paypay_money_required INTEGER NOT NULL DEFAULT 0,"+
+    "status TEXT NOT NULL,response_json TEXT NOT NULL DEFAULT '{}',"+
     "created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)"
   ).run();
+  const receiptColumns=(await env.DB.prepare(
+    "PRAGMA table_info(shiire_payment_receipts)"
+  ).all<{name:string}>()).results.map(row=>row.name);
+  if(!receiptColumns.includes("paypay_money_required")){
+    await env.DB.prepare(
+      "ALTER TABLE shiire_payment_receipts ADD COLUMN paypay_money_required INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
   bridgeSchemaReady=true;
 }
 
@@ -240,6 +250,7 @@ async function reservePaymentReceipt(
     method:"paypay"|"kyash";
     linkHash:string;
     amount:number;
+    requirePayPayMoney:boolean;
   }
 ){
   const claimOrderId="shiire:"+input.idempotencyKey;
@@ -250,7 +261,8 @@ async function reservePaymentReceipt(
     if(
       existing.method!==input.method||
       existing.link_hash!==input.linkHash||
-      Number(existing.amount)!==input.amount
+      Number(existing.amount)!==input.amount||
+      Boolean(existing.paypay_money_required)!==input.requirePayPayMoney
     ) throw new Error("IDEMPOTENCY_CONFLICT");
     const existingClaim=await env.DB.prepare(
       "SELECT order_id FROM vending_used_payment_links WHERE link_hash=?"
@@ -306,10 +318,11 @@ async function reservePaymentReceipt(
   const now=Date.now();
   await env.DB.prepare(
     "INSERT INTO shiire_payment_receipts("+
-    "idempotency_key,method,link_hash,amount,status,response_json,created_at,updated_at"+
-    ") VALUES (?,?,?,?,?,'{}',?,?)"
+    "idempotency_key,method,link_hash,amount,paypay_money_required,status,response_json,created_at,updated_at"+
+    ") VALUES (?,?,?,?,?,?,'{}',?,?)"
   ).bind(
-    input.idempotencyKey,input.method,input.linkHash,input.amount,"PROCESSING",now,now
+    input.idempotencyKey,input.method,input.linkHash,input.amount,
+    input.requirePayPayMoney?1:0,"PROCESSING",now,now
   ).run();
   return env.DB.prepare(
     "SELECT * FROM shiire_payment_receipts WHERE idempotency_key=?"
@@ -391,6 +404,7 @@ export async function handleShiireServiceBridge(
         link?:string;
         amount?:number;
         idempotencyKey?:string;
+        requirePayPayMoney?:boolean;
       };
       try{input=JSON.parse(body) as typeof input;}
       catch{return json(env,{error:"INVALID_JSON"},400);}
@@ -398,6 +412,7 @@ export async function handleShiireServiceBridge(
       const link=String(input.link??"").trim();
       const amount=Number(input.amount);
       const idempotencyKey=String(input.idempotencyKey??"").trim();
+      const requirePayPayMoney=input.requirePayPayMoney===true;
       if(
         (method!=="paypay"&&method!=="kyash")||
         !link||
@@ -409,8 +424,11 @@ export async function handleShiireServiceBridge(
         return json(env,{error:"INVALID_PAYMENT_REQUEST"},400);
       }
       const linkHash=await sha256Hex(link);
+      if(requirePayPayMoney&&method!=="paypay"){
+        return json(env,{error:"PAYPAY_MONEY_REQUIREMENT_INVALID"},400);
+      }
       const receipt=await reservePaymentReceipt(env,{
-        idempotencyKey,method,linkHash,amount
+        idempotencyKey,method,linkHash,amount,requirePayPayMoney
       });
       if(receipt?.status==="COMPLETED"){
         let response:any={};
@@ -446,6 +464,21 @@ export async function handleShiireServiceBridge(
           await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{linkAmount});
           return json(env,{error:"PAYPAY_AMOUNT_INSUFFICIENT",linkAmount,required:amount},409);
         }
+        if(requirePayPayMoney){
+          const split=payPayWalletSplit(info);
+          if(!split.known||split.moneyLight>0||split.money<amount){
+            const reason=split.known
+              ?"PAYPAY_MONEY_LIGHT_NOT_ALLOWED"
+              :"PAYPAY_BALANCE_TYPE_UNKNOWN";
+            await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
+              amount:linkAmount,
+              reason
+            });
+            return json(env,{
+              ok:false,status:"rejected",amount:linkAmount,reason
+            },409);
+          }
+        }
         if(currentStatus==="SUCCESS"||currentStatus==="COMPLETED"){
           if(!wasPending){
             await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
@@ -466,7 +499,12 @@ export async function handleShiireServiceBridge(
           stage:"PAYPAY_ACCEPT_SUBMITTED",
           amount:linkAmount
         });
-        const result=await acceptPayPayLink(link,account,amount);
+        const result=await acceptPayPayLink(
+          link,
+          account,
+          amount,
+          {requirePayPayMoney}
+        );
         if(result.ok){
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:result.amount});
           await recordUsedLink(env,method,idempotencyKey,linkHash).catch(error=>
