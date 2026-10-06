@@ -29,7 +29,14 @@ async function fixture(options={}){
  const calls=[];
  const mf=new Miniflare({modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-08-06',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{SESSION_ENCRYPTION_KEY:secret,SHIIRE_BRIDGE_SECRET:secret,WEB_ORIGIN:'https://test.example'},outboundService:async req=>{
   calls.push(req.url);
-  if(req.url.includes('getP2PLinkInfo'))return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',message:{data:{amount:options.amount??50}}}});
+  if(req.url.includes('getP2PLinkInfo')){
+   const data={amount:options.amount??50};
+   if(!options.omitSplit)data.subWalletSplit={
+    senderEmoneyAmount:options.money??(options.amount??50),
+    senderPrepaidAmount:options.moneyLight??0
+   };
+   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',message:{data}}});
+  }
   if(req.url.includes('/oauth/token'))return Response.json({access_token:'test'});
   if(req.url.includes('acceptP2P'))return Response.json({header:{resultCode:'S0000'}});
   if(req.url.includes('kyash.me/payments/'))return new Response('<span class="amountText text_send">'+(options.amount??50)+'</span><a data-href-app="kyash://claim/test">');
@@ -97,6 +104,37 @@ test('consumed PayPay link does not prove seller payment on pending receipt',asy
  assert.equal(result.ok,false);assert.equal(result.status,'pending');
  assert.equal((await db.prepare("SELECT status FROM shiire_payment_receipts WHERE idempotency_key=?").bind(input.idempotencyKey).first()).status,'PENDING');
 });
+test('stockless PayPay receipt accepts PayPay Money only',async()=>{
+ const {mf,calls}=await fixture({amount:100,money:100,moneyLight:0});
+ const input={method:'paypay',link:'money-only-link',amount:100,idempotencyKey:'stockless-money-123',requirePayPayMoney:true};
+ const response=await signed(mf,'/api/shiire/payment/receive',input);
+ const result=await response.json();
+ assert.equal(response.status,200);
+ assert.equal(result.ok,true);
+ assert.equal(result.status,'completed');
+ assert.equal(calls.filter(u=>u.includes('acceptP2P')).length,1);
+});
+test('stockless PayPay receipt rejects Money Light before acceptance',async()=>{
+ const {mf,calls}=await fixture({amount:100,money:0,moneyLight:100});
+ const input={method:'paypay',link:'money-light-link',amount:100,idempotencyKey:'stockless-light-123',requirePayPayMoney:true};
+ const response=await signed(mf,'/api/shiire/payment/receive',input);
+ const result=await response.json();
+ assert.equal(response.status,409);
+ assert.equal(result.ok,false);
+ assert.equal(result.status,'rejected');
+ assert.equal(result.reason,'PAYPAY_MONEY_LIGHT_NOT_ALLOWED');
+ assert.equal(calls.some(u=>u.includes('acceptP2P')),false);
+});
+test('stockless PayPay receipt rejects unknown balance type before acceptance',async()=>{
+ const {mf,calls}=await fixture({amount:100,omitSplit:true});
+ const input={method:'paypay',link:'unknown-wallet-link',amount:100,idempotencyKey:'stockless-unknown-123',requirePayPayMoney:true};
+ const response=await signed(mf,'/api/shiire/payment/receive',input);
+ const result=await response.json();
+ assert.equal(response.status,409);
+ assert.equal(result.reason,'PAYPAY_BALANCE_TYPE_UNKNOWN');
+ assert.equal(calls.some(u=>u.includes('acceptP2P')),false);
+});
+
 test('pending Kyash receipt survives temporarily unavailable link',async()=>{
  const {mf,db}=await fixture();
  const input={method:'kyash',link:'test-link',amount:100,idempotencyKey:'payment-test-456'};
