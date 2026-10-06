@@ -8,6 +8,7 @@ import {
 import {
   acceptPayPayLink,
   checkPayPayLink,
+  payPayWalletSplit,
   checkKyashLink,
   getKyashAccount,
   receiveKyashLink
@@ -464,14 +465,9 @@ export async function handleShiireServiceBridge(
           return json(env,{error:"PAYPAY_AMOUNT_INSUFFICIENT",linkAmount,required:amount},409);
         }
         if(requirePayPayMoney){
-          const split=info?.payload?.message?.data?.subWalletSplit;
-          const money=Number(split?.senderEmoneyAmount);
-          const moneyLight=Number(split?.senderPrepaidAmount);
-          const balanceKnown=
-            Number.isSafeInteger(money)&&money>=0&&
-            Number.isSafeInteger(moneyLight)&&moneyLight>=0;
-          if(!balanceKnown||moneyLight>0||money<amount){
-            const reason=balanceKnown
+          const split=payPayWalletSplit(info);
+          if(!split.known||split.moneyLight>0||split.money<amount){
+            const reason=split.known
               ?"PAYPAY_MONEY_LIGHT_NOT_ALLOWED"
               :"PAYPAY_BALANCE_TYPE_UNKNOWN";
             await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{
