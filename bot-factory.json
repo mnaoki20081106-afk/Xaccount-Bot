@@ -141,15 +141,7 @@
         "required": false,
         "pattern": "^.{32,}$",
         "placeholder": "Discord-Cheat側と同じ32文字以上の値",
-        "help": "代行管理タブを使う場合のみ入力します。Discord-Cheatの .env の CHEAT_BRIDGE_SECRET と同じ値にしてください。"
-      },
-      {
-        "key": "CHEAT_API_BASE_URL",
-        "label": "Discord-Cheat Bridge URL",
-        "type": "url",
-        "required": false,
-        "placeholder": "https://<Discord-Cheatを公開しているHTTPS URL>",
-        "help": "代行管理タブを使う場合のみ設定します。Discord-Cheat(Python)を動かしているマシンのBridge API(CHEAT_API_PORT)をHTTPSで公開したURLのoriginだけを入力してください。パスやクエリは不要です。"
+        "help": "代行管理タブを使う場合のみ入力します。Discord-Cheatの .env の CHEAT_BRIDGE_SECRET と同じ値(scripts/setup.py が生成)にしてください。Discord-Cheat側は外部公開不要で、このWorkerへ定期的に問い合わせに来ます。"
       }
     ],
     "discord": {

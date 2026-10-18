@@ -225,17 +225,18 @@ JPY即時入金は、期待純増額を満たすJPY残高増加を確認でき�
 - にゃんこ大戦争パネル / ツムツムパネル / ぷにぷにパネルの設置先チャンネルと色（同じチャンネルなら既存パネルを更新）
 - 3パネルの完了実績を投稿するチャンネル、実績の色、金額・ご依頼者の表示、ゲームごとの上書き、テスト送信
 
-パネル・実績の投稿自体はDiscord-Cheat BOTが行い、Xaccount-BotはHMAC-SHA256署名付き内部APIで設定と設置を指示します。
-
-Xaccount-Bot側:
+Discord-CheatはPythonの常駐プロセスで、外部公開できない環境（自宅PC・無料ホスト）でも動かせるよう、**Xaccount-Botへ接続しに来るプル方式**です。
+設定と依頼（パネル設置・テスト送信）はこのWorkerのD1（`cheat_guild` / `cheat_command`）に保存され、BOTが約10秒ごとに取りに来て実行・結果を返します。
+Xaccount-Bot側から外へ接続しないため、`CHEAT_API_BASE_URL` のようなURL設定は不要です。
 
 ```text
-CHEAT_API_BASE_URL=https://<Discord-CheatのBridge APIを公開しているHTTPS origin>
-CHEAT_BRIDGE_SECRET=<Discord-Cheat側と同じ32文字以上の値>
+CHEAT_BRIDGE_SECRET=<Discord-Cheat側と同じ32文字以上の値>   # Bot-Factoryの「Discord-Cheat連携 Secret」
 ```
 
-Discord-Cheat側は `.env` の `CHEAT_BRIDGE_SECRET`（`python scripts/setup.py` で自動生成）を同じ値にします。
-Discord-CheatはPythonの常駐プロセスのためBot-Factory（Workers専用）では起動できません。どちらかが未設定の場合、タブは接続エラーを表示して停止します（URLの推測はしません）。
+Discord-Cheat側は `.env` の `CHEAT_BRIDGE_SECRET`（`python scripts/setup.py` で自動生成）と `XACCOUNT_BOT_URL`（このWorkerのURL）を設定します。
+BOTが応答しない間、タブは「接続待ち」/「オフライン」を表示し、設置の依頼はBOT起動後に実行されます。
+
+Bot→Workerの内部API: `POST /api/cheat-bridge/{poll,report,result}`（HMAC-SHA256、時刻窓±5分）。
 
 ## X-Utility
 

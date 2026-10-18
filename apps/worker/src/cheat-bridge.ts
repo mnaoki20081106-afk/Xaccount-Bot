@@ -1,50 +1,48 @@
 import type { Env } from "./types";
-import { randomId } from "./utils";
+import {
+  claimCheatCommands,
+  CHEAT_GAMES,
+  ensureCheatGuild,
+  finishCheatCommand,
+  getCheatGuild,
+  isSnowflake,
+  saveCheatState,
+  touchLastSeen
+} from "./cheat-db";
+import { json } from "./utils";
 
-export type CheatGame = "nyanko" | "tsum" | "puni";
+/**
+ * Discord-Cheat(Python常駐Bot)は外部公開できない環境で動く前提のため、Xaccount-Botから
+ * Botへ接続せず、Botの方が定期的にこのWorkerへ取りに来る(プル方式)。
+ *
+ *   POST /api/cheat-bridge/poll    heartbeat + 設定差分と依頼(パネル設置/テスト送信)の取得
+ *   POST /api/cheat-bridge/report  参加サーバー/チャンネル/設置状況の報告
+ *   POST /api/cheat-bridge/result  依頼の結果
+ *
+ * 認証: X-Cheat-Timestamp(ms) と X-Cheat-Signature =
+ *   HMAC-SHA256(CHEAT_BRIDGE_SECRET, timestamp \n METHOD \n path+query \n body) の16進。
+ * pollは同じ内容を再送されても副作用がない(依頼は配信済み印が付くだけ)ため、nonce表は持たず
+ * 時刻窓(±5分)のみで守る。通信はHTTPS。
+ */
 
-export const CHEAT_GAMES: readonly CheatGame[] = ["nyanko", "tsum", "puni"];
+const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_GUILDS_PER_REQUEST = 50;
 
-export class CheatBridgeError extends Error {
-  status: number;
-  code: string;
-  detail: string;
-
-  constructor(status: number, code: string, detail = "") {
-    super(code + (detail ? ": " + detail : "") + " (HTTP " + status + ")");
-    this.name = "CheatBridgeError";
-    this.status = status;
-    this.code = code;
-    this.detail = detail;
-  }
+function hexBytes(value: string): Uint8Array | null {
+  if (!/^[0-9a-f]{64}$/i.test(value)) return null;
+  const out = new Uint8Array(value.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(value.slice(i * 2, i * 2 + 2), 16);
+  return out;
 }
 
-function cheatBaseUrl(env: Env): URL {
-  const raw = env.CHEAT_API_BASE_URL?.trim() ?? "";
-  if (!raw) throw new Error("CHEAT_API_BASE_URL_NOT_CONFIGURED");
-
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("CHEAT_API_BASE_URL_INVALID");
-  }
-
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    (url.pathname !== "/" && url.pathname !== "")
-  ) {
-    throw new Error("CHEAT_API_BASE_URL_MUST_BE_HTTPS_ORIGIN");
-  }
-
-  return new URL(url.origin + "/");
-}
-
-async function sign(secret: string, canonical: string): Promise<string> {
+export async function signCheatRequest(
+  secret: string,
+  timestamp: string,
+  method: string,
+  target: string,
+  body: string
+): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -52,147 +50,123 @@ async function sign(secret: string, canonical: string): Promise<string> {
     false,
     ["sign"]
   );
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical))
-  );
-  return [...signature]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
+  const canonical = timestamp + "\n" + method.toUpperCase() + "\n" + target + "\n" + body;
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Discord-Cheat の hub/api.py と同じ canonical:
-// timestamp \n nonce \n METHOD \n path+query \n body
-async function cheatRequest<T>(
-  env: Env,
-  path: string,
-  init: { method?: string; body?: unknown } = {}
-): Promise<T> {
+async function verify(request: Request, env: Env, url: URL, body: string): Promise<void> {
   const secret = env.CHEAT_BRIDGE_SECRET?.trim() ?? "";
   if (secret.length < 32) throw new Error("CHEAT_BRIDGE_SECRET_NOT_CONFIGURED");
+  const timestamp = request.headers.get("X-Cheat-Timestamp")?.trim() ?? "";
+  const signature = request.headers.get("X-Cheat-Signature")?.trim() ?? "";
+  const ts = Number(timestamp);
+  if (!/^\d{10,16}$/.test(timestamp) || !Number.isFinite(ts)) throw new Error("INVALID_TIMESTAMP");
+  if (Math.abs(Date.now() - ts) > MAX_CLOCK_SKEW_MS) throw new Error("STALE_TIMESTAMP");
+  const sig = hexBytes(signature);
+  if (!sig) throw new Error("INVALID_SIGNATURE");
 
-  const url = new URL(path.replace(/^\//, ""), cheatBaseUrl(env));
-  const method = String(init.method ?? "GET").toUpperCase();
-  const body = init.body === undefined ? "" : JSON.stringify(init.body);
-  const timestamp = String(Date.now());
-  const nonce = randomId();
-  const canonical =
-    timestamp + "\n" + nonce + "\n" + method + "\n" + url.pathname + url.search + "\n" + body;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+  const canonical = timestamp + "\n" + request.method.toUpperCase() + "\n" + url.pathname + url.search + "\n" + body;
+  const ok = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    sig.buffer as ArrayBuffer,
+    new TextEncoder().encode(canonical)
+  );
+  if (!ok) throw new Error("INVALID_SIGNATURE");
+}
 
-  const headers = new Headers();
-  headers.set("X-Cheat-Timestamp", timestamp);
-  headers.set("X-Cheat-Nonce", nonce);
-  headers.set("X-Cheat-Signature", await sign(secret, canonical));
-  if (body) headers.set("Content-Type", "application/json");
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  let response: Response;
+function parseBody(body: string): Record<string, any> {
   try {
-    response = await fetch(url.toString(), {
-      method,
-      body: body || undefined,
-      headers,
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const text = await response.text();
-  let payload: any = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
+    const value = JSON.parse(body);
+    if (value && typeof value === "object" && !Array.isArray(value)) return value;
   } catch {
-    payload = {};
+    // fallthrough
+  }
+  throw new Error("INVALID_JSON");
+}
+
+function guildIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter(isSnowflake))].slice(0, MAX_GUILDS_PER_REQUEST);
+}
+
+export async function handleCheatServiceBridge(
+  request: Request,
+  env: Env,
+  url: URL
+): Promise<Response | null> {
+  if (!url.pathname.startsWith("/api/cheat-bridge/")) return null;
+  if (request.method !== "POST") return json(env, { error: "METHOD_NOT_ALLOWED" }, 405);
+
+  const body = await request.text();
+  if (body.length > MAX_BODY_BYTES) return json(env, { error: "BODY_TOO_LARGE" }, 413);
+
+  try {
+    await verify(request, env, url, body);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "UNAUTHORIZED";
+    return json(env, { error: code }, code === "CHEAT_BRIDGE_SECRET_NOT_CONFIGURED" ? 503 : 401);
   }
 
-  if (!response.ok) {
-    throw new CheatBridgeError(
-      response.status,
-      String(payload?.error ?? "CHEAT_BRIDGE_ERROR"),
-      String(payload?.message ?? "").trim()
-    );
+  try {
+    const input = parseBody(body);
+
+    if (url.pathname === "/api/cheat-bridge/poll") {
+      const ids = guildIdList(input.guilds);
+      const revs = input.revs && typeof input.revs === "object" ? (input.revs as Record<string, unknown>) : {};
+      await touchLastSeen(env);
+
+      const configs: Record<string, { rev: number; config: unknown }> = {};
+      const needReport: string[] = [];
+      for (const id of ids) {
+        const guild = (await getCheatGuild(env, id)) ?? (await ensureCheatGuild(env, id));
+        if (revs[id] !== guild.rev) configs[id] = { rev: guild.rev, config: guild.config };
+        if (!guild.state) needReport.push(id);
+      }
+      const commands = (await claimCheatCommands(env, ids)).map((c) => ({
+        id: c.id,
+        guildId: c.guildId,
+        kind: c.kind,
+        payload: c.payload
+      }));
+      return json(env, { ok: true, configs, commands, needReport });
+    }
+
+    if (url.pathname === "/api/cheat-bridge/report") {
+      const guilds = Array.isArray(input.guilds) ? input.guilds.slice(0, MAX_GUILDS_PER_REQUEST) : [];
+      let saved = 0;
+      for (const g of guilds) {
+        if (!g || !isSnowflake(g.id)) continue;
+        await saveCheatState(env, g.id, g.state);
+        saved++;
+      }
+      await touchLastSeen(env);
+      return json(env, { ok: true, saved });
+    }
+
+    if (url.pathname === "/api/cheat-bridge/result") {
+      const id = typeof input.id === "string" ? input.id : "";
+      if (!/^[A-Za-z0-9_-]{8,128}$/.test(id)) return json(env, { error: "INVALID_COMMAND_ID" }, 400);
+      const result = input.result && typeof input.result === "object" ? input.result : {};
+      const updated = await finishCheatCommand(env, id, input.ok === true, result);
+      return json(env, { ok: true, updated });
+    }
+
+    return json(env, { error: "NOT_FOUND" }, 404);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : String(error);
+    if (code === "INVALID_JSON") return json(env, { error: code }, 400);
+    console.error("cheat bridge failed", code);
+    return json(env, { error: "CHEAT_BRIDGE_INTERNAL_ERROR" }, 500);
   }
-  return payload as T;
 }
 
-export type CheatPanelState = {
-  channelId: string | null;
-  color: number | null;
-  messageId: string | null;
-  deployedChannelId: string | null;
-  deployedAt: number | null;
-};
-
-export type CheatGameAchievement = { enabled: boolean; channelId: string | null };
-
-export type CheatAchievements = {
-  enabled: boolean;
-  channelId: string | null;
-  color: number;
-  showAmount: boolean;
-  showUser: boolean;
-  games: Record<CheatGame, CheatGameAchievement>;
-  counters: Record<CheatGame, number>;
-};
-
-export type CheatConfig = {
-  guildId: string;
-  guildName: string;
-  games: { key: CheatGame; label: string; panelName: string; defaultColor: number }[];
-  panels: Record<CheatGame, CheatPanelState>;
-  achievements: CheatAchievements;
-  channels: { id: string; name: string; canPost: boolean }[];
-};
-
-export type CheatConfigPatch = {
-  panels?: Partial<Record<CheatGame, { channelId?: string | null; color?: number | null }>>;
-  achievements?: {
-    enabled?: boolean;
-    channelId?: string | null;
-    color?: number;
-    showAmount?: boolean;
-    showUser?: boolean;
-    games?: Partial<Record<CheatGame, { enabled?: boolean; channelId?: string | null }>>;
-  };
-};
-
-export function getCheatConfig(env: Env, guildId: string): Promise<CheatConfig> {
-  return cheatRequest(env, "/bridge/main/guilds/" + guildId + "/config");
-}
-
-export function putCheatConfig(
-  env: Env,
-  guildId: string,
-  patch: CheatConfigPatch
-): Promise<CheatConfig> {
-  return cheatRequest(env, "/bridge/main/guilds/" + guildId + "/config", {
-    method: "PUT",
-    body: patch
-  });
-}
-
-export function deployCheatPanel(
-  env: Env,
-  guildId: string,
-  game: CheatGame,
-  input: { channelId: string; color?: number | null }
-): Promise<{ ok: true; game: CheatGame; channelId: string; messageId: string; updated: boolean }> {
-  const body: { channelId: string; color?: number | null } = { channelId: input.channelId };
-  if (input.color !== undefined) body.color = input.color;
-  return cheatRequest(env, "/bridge/main/guilds/" + guildId + "/panels/" + game, {
-    method: "POST",
-    body
-  });
-}
-
-export function testCheatAchievement(
-  env: Env,
-  guildId: string,
-  game: CheatGame
-): Promise<{ ok: true; channelId: string }> {
-  return cheatRequest(env, "/bridge/main/guilds/" + guildId + "/achievements/test", {
-    method: "POST",
-    body: { game }
-  });
-}
+export { CHEAT_GAMES };

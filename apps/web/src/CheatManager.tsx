@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import "./cheat-manager.css";
 
@@ -30,6 +30,9 @@ type CheatChannel = { id: string; name: string; canPost: boolean };
 type CheatConfig = {
   guildId: string;
   guildName: string;
+  online: boolean;
+  reported: boolean;
+  lastSeenAt: number | null;
   games: { key: CheatGame; label: string; panelName: string; defaultColor: number }[];
   panels: Record<CheatGame, PanelState>;
   achievements: Achievements;
@@ -51,6 +54,43 @@ const hex = (value: number) => "#" + value.toString(16).padStart(6, "0");
 const fromHex = (value: string) => Number.parseInt(value.slice(1), 16);
 const messageOf = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 
+type CommandStatus = {
+  id: string;
+  status: "pending" | "running" | "done" | "failed";
+  result: { error?: string; message?: string; channelId?: string; updated?: boolean } | null;
+  online: boolean;
+};
+
+const COMMAND_ERRORS: Record<string, string> = {
+  CHANNEL_FORBIDDEN: "Discord-Cheat BOTがそのチャンネルへ投稿できません。閲覧・送信・埋め込みリンク権限を確認してください",
+  CHANNEL_NOT_FOUND: "チャンネルが見つかりません。選び直してください",
+  GUILD_NOT_FOUND: "Discord-Cheat BOTがこのサーバーに参加していません",
+  ACHIEVEMENT_CHANNEL_NOT_SET: "実績の投稿先が未設定です。先に「実績設定を保存」を押してください",
+  ACHIEVEMENTS_DISABLED: "実績投稿がOFFです。ONにして保存してください"
+};
+
+function failureText(result: CommandStatus["result"]): string {
+  if (!result) return "原因不明のエラー";
+  return (result.error && COMMAND_ERRORS[result.error]) || result.message || result.error || "原因不明のエラー";
+}
+
+const COMMAND_WAIT_MS = 45_000;
+const COMMAND_POLL_MS = 1_500;
+
+/** Discord-Cheat BOTは約10秒ごとに取りに来る。完了するまで状態を見に行く。 */
+async function waitForCommand(guildId: string, id: string, cancelled: () => boolean): Promise<CommandStatus | "timeout"> {
+  const deadline = Date.now() + COMMAND_WAIT_MS;
+  while (Date.now() < deadline && !cancelled()) {
+    await new Promise((resolve) => setTimeout(resolve, COMMAND_POLL_MS));
+    const status = await api<CommandStatus>("/api/guilds/" + guildId + "/cheat/commands/" + id);
+    if (status.status === "done" || status.status === "failed") return status;
+  }
+  return "timeout";
+}
+
+const TIMEOUT_TEXT =
+  "Discord-Cheat BOTから応答がありません。BOTが起動しているか、XACCOUNT_BOT_URLとCHEAT_BRIDGE_SECRETを確認してください（起動後に自動で実行されます）";
+
 export default function CheatManager({ guildId, onNotice, onError }: Props) {
   const [config, setConfig] = useState<CheatConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -58,6 +98,14 @@ export default function CheatManager({ guildId, onNotice, onError }: Props) {
   const [ach, setAch] = useState<Achievements | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, Feedback | undefined>>({});
+  const disposed = useRef(false);
+
+  useEffect(() => {
+    disposed.current = false;
+    return () => {
+      disposed.current = true;
+    };
+  }, []);
 
   const applyConfig = useCallback((next: CheatConfig) => {
     setConfig(next);
@@ -159,20 +207,28 @@ export default function CheatManager({ guildId, onNotice, onError }: Props) {
       return;
     }
     setBusy("deploy:" + game);
-    setNote(game, { kind: "info", message: "パネルを設置中..." });
+    setNote(game, { kind: "info", message: "Discord-Cheat BOTへ依頼しました。反映を待っています（最大15秒ほど）..." });
     try {
-      const result = await api<{ channelId: string; updated: boolean }>(
+      const queued = await api<{ commandId: string }>(
         "/api/guilds/" + guildId + "/cheat/panels/" + game,
         { method: "POST", body: JSON.stringify({ channelId: draft.channelId, color: draft.color }) }
       );
-      await load();
-      setNote(game, {
-        kind: "success",
-        message:
-          (result.updated ? "既存のパネルを更新しました: #" : "パネルを設置しました: #") +
-          channelName(result.channelId)
-      });
-      onNotice("パネルを設置しました");
+      const done = await waitForCommand(guildId, queued.commandId, () => disposed.current);
+      if (disposed.current) return;
+      if (done === "timeout") {
+        setNote(game, { kind: "error", message: TIMEOUT_TEXT });
+      } else if (done.status === "failed") {
+        setNote(game, { kind: "error", message: "設置に失敗しました: " + failureText(done.result) });
+      } else {
+        await load();
+        setNote(game, {
+          kind: "success",
+          message:
+            (done.result?.updated ? "既存のパネルを更新しました: #" : "パネルを設置しました: #") +
+            channelName(done.result?.channelId ?? draft.channelId)
+        });
+        onNotice("パネルを設置しました");
+      }
     } catch (reason) {
       setNote(game, { kind: "error", message: "設置に失敗しました: " + messageOf(reason) });
       onError(reason);
@@ -205,13 +261,24 @@ export default function CheatManager({ guildId, onNotice, onError }: Props) {
 
   async function testAchievement(game: CheatGame) {
     setBusy("test:" + game);
-    setNote("ach", { kind: "info", message: "テスト送信中（保存済みの設定で送ります）..." });
+    setNote("ach", { kind: "info", message: "テスト送信を依頼しました（保存済みの設定で送ります。最大15秒ほど）..." });
     try {
-      const result = await api<{ channelId: string }>(
+      const queued = await api<{ commandId: string }>(
         "/api/guilds/" + guildId + "/cheat/achievements/test",
         { method: "POST", body: JSON.stringify({ game }) }
       );
-      setNote("ach", { kind: "success", message: "#" + channelName(result.channelId) + " にテストを送信しました" });
+      const done = await waitForCommand(guildId, queued.commandId, () => disposed.current);
+      if (disposed.current) return;
+      if (done === "timeout") {
+        setNote("ach", { kind: "error", message: TIMEOUT_TEXT });
+      } else if (done.status === "failed") {
+        setNote("ach", { kind: "error", message: "テスト送信に失敗しました: " + failureText(done.result) });
+      } else {
+        setNote("ach", {
+          kind: "success",
+          message: "#" + channelName(done.result?.channelId ?? null) + " にテストを送信しました"
+        });
+      }
     } catch (reason) {
       setNote("ach", { kind: "error", message: "テスト送信に失敗しました: " + messageOf(reason) });
       onError(reason);
@@ -274,8 +341,40 @@ export default function CheatManager({ guildId, onNotice, onError }: Props) {
     );
   }
 
+  if (!config.reported) {
+    return (
+      <section className="stack">
+        <article className="card">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">代行管理</span>
+              <h2>Discord-Cheat BOTの接続待ち</h2>
+            </div>
+          </div>
+          <div className="panel-feedback info" role="status">
+            {config.online
+              ? "Discord-Cheat BOTは接続していますが、このサーバーにはまだ参加していません。BOTをこのサーバーへ招待してください。"
+              : "Discord-Cheat BOTがまだ応答していません。BOTを起動し、.env の XACCOUNT_BOT_URL と CHEAT_BRIDGE_SECRET（Bot-Factoryの「Discord-Cheat連携 Secret」と同じ値）を確認してください。"}
+          </div>
+          <div className="button-row">
+            <button type="button" className="primary" onClick={() => void load()}>
+              再読み込み
+            </button>
+          </div>
+        </article>
+      </section>
+    );
+  }
+
   return (
     <section className="stack">
+      {!config.online && (
+        <div className="panel-feedback error" role="status">
+          Discord-Cheat BOTがオフラインです
+          {config.lastSeenAt ? "（最終応答 " + new Date(config.lastSeenAt).toLocaleString("ja-JP") + "）" : ""}
+          。設置・テストの依頼は、BOTが起動してから実行されます。
+        </div>
+      )}
       {config.games.map((game) => {
         const draft = panelDrafts[game.key] ?? { channelId: "", color: game.defaultColor };
         const saved = config.panels[game.key];
