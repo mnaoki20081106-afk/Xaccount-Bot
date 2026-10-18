@@ -217,6 +217,26 @@ Discord-ShiireがPayPay手動操作待ち中にBinance LTC総残高の増加を�
 JPY即時入金は、期待純増額を満たすJPY残高増加を確認できるため自動再開します。
 
 
+
+## 代行管理（Discord-Cheat）
+
+管理画面の **代行管理** タブから、別BOT Discord-Cheat（にゃんこ大戦争 / ツムツム / ぷにぷにの代行）の次を操作します。
+
+- にゃんこ大戦争パネル / ツムツムパネル / ぷにぷにパネルの設置先チャンネルと色（同じチャンネルなら既存パネルを更新）
+- 3パネルの完了実績を投稿するチャンネル、実績の色、金額・ご依頼者の表示、ゲームごとの上書き、テスト送信
+
+パネル・実績の投稿自体はDiscord-Cheat BOTが行い、Xaccount-BotはHMAC-SHA256署名付き内部APIで設定と設置を指示します。
+
+Xaccount-Bot側:
+
+```text
+CHEAT_API_BASE_URL=https://<Discord-CheatのBridge APIを公開しているHTTPS origin>
+CHEAT_BRIDGE_SECRET=<Discord-Cheat側と同じ32文字以上の値>
+```
+
+Discord-Cheat側は `.env` の `CHEAT_BRIDGE_SECRET`（`python scripts/setup.py` で自動生成）を同じ値にします。
+Discord-CheatはPythonの常駐プロセスのためBot-Factory（Workers専用）では起動できません。どちらかが未設定の場合、タブは接続エラーを表示して停止します（URLの推測はしません）。
+
 ## X-Utility
 
 管理画面の **X Utility** タブから、別BOTである X-Utility の次の2パネルだけを設置できます。

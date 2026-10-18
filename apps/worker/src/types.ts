@@ -18,6 +18,8 @@ export interface Env {
   SHIIRE_API_BASE_URL?: string;
   XUTILITY_BRIDGE_SECRET?: string;
   XUTILITY_API_BASE_URL?: string;
+  CHEAT_BRIDGE_SECRET?: string;
+  CHEAT_API_BASE_URL?: string;
   PAYPAY_API_KEY?: string;
   PAYPAY_API_SECRET?: string;
   PAYPAY_MERCHANT_ID?: string;

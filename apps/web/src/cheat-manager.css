@@ -1,0 +1,77 @@
+.cheat-color-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 13px;
+}
+
+.cheat-color-row .cheat-color {
+  margin-top: 0;
+}
+
+.cheat-color-row input[type="color"] {
+  width: 56px;
+  height: 36px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.cheat-color-row code {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.14);
+  font-size: 12px;
+}
+
+.cheat-embed-preview {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-left: 4px solid #5865f2;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+  font-size: 13px;
+}
+
+.cheat-embed-preview span {
+  opacity: 0.8;
+}
+
+.cheat-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 13px;
+  cursor: pointer;
+}
+
+.cheat-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 22px;
+}
+
+.cheat-game-rows {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.cheat-game-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.4fr) 48px auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.cheat-game-row .cheat-check {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .cheat-game-row {
+    grid-template-columns: 1fr;
+  }
+}

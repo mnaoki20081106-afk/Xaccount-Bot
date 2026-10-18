@@ -93,6 +93,16 @@ import {
   saveXUtilitySearchCredential
 } from "./xutility-bridge";
 import {
+  CHEAT_GAMES,
+  CheatBridgeError,
+  deployCheatPanel,
+  getCheatConfig,
+  putCheatConfig,
+  testCheatAchievement,
+  type CheatConfigPatch,
+  type CheatGame
+} from "./cheat-bridge";
+import {
   accountCreatedAt,
   corsHeaders,
   encrypt,
@@ -3010,6 +3020,81 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     }
   }
 
+  const cheatMatch=url.pathname.match(
+    /^\/api\/guilds\/(\d+)\/cheat\/(config|panels\/(?:nyanko|tsum|puni)|achievements\/test)$/
+  );
+  if(cheatMatch){
+    const guildId=cheatMatch[1]!;
+    const target=cheatMatch[2]!;
+    await requireGuild(request,env,guildId);
+
+    try{
+      if(target==="config"){
+        if(request.method==="GET") return json(env,await getCheatConfig(env,guildId));
+        if(request.method==="PUT"){
+          const patch=await bodyObject<CheatConfigPatch>(request);
+          return json(env,await putCheatConfig(env,guildId,patch));
+        }
+        throw new HttpError(405,"Method not allowed");
+      }
+
+      if(request.method!=="POST") throw new HttpError(405,"Method not allowed");
+
+      if(target==="achievements/test"){
+        const {game}=await bodyObject<{game?:string}>(request);
+        const kind=CHEAT_GAMES.find(item=>item===game);
+        if(!kind) throw new HttpError(400,"ゲームを選択してください");
+        return json(env,await testCheatAchievement(env,guildId,kind));
+      }
+
+      const game=target.slice("panels/".length) as CheatGame;
+      const {channelId,color}=await bodyObject<{channelId?:string;color?:number|null}>(request);
+      if(!channelId||!/^\d{15,25}$/.test(channelId)) throw new HttpError(400,"設置先チャンネルを選択してください");
+      if(color!==undefined&&color!==null&&(!Number.isInteger(color)||color<0||color>0xffffff)){
+        throw new HttpError(400,"パネルの色が不正です");
+      }
+      return json(env,await deployCheatPanel(env,guildId,game,{channelId,color}));
+    }catch(error){
+      if(error instanceof HttpError) throw error;
+      if(error instanceof CheatBridgeError){
+        const detail=error.detail?": "+error.detail.slice(0,160):"";
+        switch(error.code){
+          case "GUILD_NOT_FOUND":
+            throw new HttpError(404,"Discord-Cheat BOTがこのサーバーに参加していません。先に招待してください");
+          case "CHANNEL_NOT_FOUND":
+            throw new HttpError(404,"Discord-Cheat BOTからチャンネルを確認できません"+detail);
+          case "CHANNEL_FORBIDDEN":
+            throw new HttpError(403,"Discord-Cheat BOTがこのチャンネルへ投稿できません。閲覧・送信・埋め込みリンク権限を確認してください");
+          case "BOT_NOT_READY":
+            throw new HttpError(503,"Discord-Cheat BOTが起動中です。少し待ってからもう一度お試しください");
+          case "ACHIEVEMENT_CHANNEL_NOT_SET":
+          case "ACHIEVEMENTS_DISABLED":
+            throw new HttpError(409,error.detail||"実績の投稿先を先に保存してください");
+          case "BRIDGE_SIGNATURE_INVALID":
+          case "BRIDGE_AUTH_REQUIRED":
+          case "BRIDGE_TIMESTAMP_EXPIRED":
+          case "BRIDGE_TIMESTAMP_INVALID":
+            throw new HttpError(503,"Xaccount-BotとDiscord-Cheatの両方に同じCHEAT_BRIDGE_SECRETを設定してください");
+        }
+        if(error.status>=400&&error.status<500){
+          throw new HttpError(error.status===401?503:error.status,(error.detail||error.code).slice(0,180));
+        }
+        throw new HttpError(502,"Discord-Cheatへの依頼に失敗しました: "+(error.code+detail).slice(0,180));
+      }
+      const message=error instanceof Error?error.message:String(error);
+      if(message.startsWith("CHEAT_API_BASE_URL_NOT_CONFIGURED")){
+        throw new HttpError(503,"Discord-Cheat Bridge URLが未設定です。Bot-FactoryのXaccount-Bot設定でCHEAT_API_BASE_URLを設定してください");
+      }
+      if(message.startsWith("CHEAT_API_BASE_URL_INVALID")||message.startsWith("CHEAT_API_BASE_URL_MUST_BE_HTTPS_ORIGIN")){
+        throw new HttpError(503,"CHEAT_API_BASE_URLにはDiscord-CheatのHTTPS originだけを設定してください");
+      }
+      if(message.startsWith("CHEAT_BRIDGE_SECRET_NOT_CONFIGURED")){
+        throw new HttpError(503,"Xaccount-BotとDiscord-Cheatの両方に同じCHEAT_BRIDGE_SECRETを設定してください");
+      }
+      throw new HttpError(502,"Discord-Cheatに接続できません: "+message.slice(0,160));
+    }
+  }
+
   const productsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/products$/);
   if(productsMatch){
     const guildId=productsMatch[1]!;
@@ -3380,7 +3465,8 @@ export default {
         (/^\/api\/guilds\/\d+\/channels\/permissions\/bulk$/.test(url.pathname)&&request.method==="PATCH")||
         (/^\/api\/guilds\/\d+\/roles(?:\/\d+)?$/.test(url.pathname)&&["POST","PATCH","DELETE"].includes(request.method))||
         (/^\/api\/guilds\/\d+\/(verification|tickets)\/panel$/.test(url.pathname)&&request.method==="POST")||
-        (/^\/api\/guilds\/\d+\/xutility\/(shadowban|2fa|account-format)\/panel$/.test(url.pathname)&&request.method==="POST")
+        (/^\/api\/guilds\/\d+\/xutility\/(shadowban|2fa|account-format)\/panel$/.test(url.pathname)&&request.method==="POST")||
+        /^\/api\/guilds\/\d+\/cheat\/(config|panels\/(nyanko|tsum|puni)|achievements\/test)$/.test(url.pathname)
       ){
         return await handleApi(request,env,url);
       }

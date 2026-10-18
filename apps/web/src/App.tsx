@@ -5,6 +5,7 @@ import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import ShiireOperationsCenter from "./ShiireOperationsCenter";
 import XUtilityManager from "./XUtilityManager";
+import CheatManager from "./CheatManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
@@ -157,7 +158,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "utility" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "utility" | "cheat" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -816,6 +817,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-cheat"
+                role="tab"
+                aria-controls="admin-panel-cheat"
+                aria-selected={activeView === "cheat"}
+                className={activeView === "cheat" ? "active" : ""}
+                onClick={() => setActiveView("cheat")}
+              >
+                代行管理
+              </button>
+              <button
+                type="button"
                 id="admin-tab-backup"
                 role="tab"
                 aria-controls="admin-panel-backup"
@@ -1349,6 +1361,23 @@ export default function App() {
                   key={"XUtilityManager:"+selectedId}
                   guildId={selectedId}
                   channels={meta.channels}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
+            </section>
+
+            <section
+              id="admin-panel-cheat"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-cheat"
+              hidden={activeView !== "cheat"}
+            >
+              {activeView === "cheat" && selectedId && meta && (
+                <CheatManager
+                  key={"CheatManager:"+selectedId}
+                  guildId={selectedId}
                   onNotice={flash}
                   onError={fail}
                 />
