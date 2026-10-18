@@ -220,8 +220,7 @@ write("apps/worker/wrangler.jsonc", `{
   },
   "vars": {
     "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
-    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Xaccount-Bot/",
-    "PAYPAY_ENV": "sandbox"
+    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Xaccount-Bot/"
   }
 }
 `);

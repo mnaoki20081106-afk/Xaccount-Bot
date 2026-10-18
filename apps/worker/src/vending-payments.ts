@@ -100,6 +100,11 @@ function mergeCookies(cookies:Record<string,string>,setCookie:string|null){
   }
 }
 
+// PayPaython (WebAPI) puts the access token in the `token` cookie; there is no Authorization header.
+function sessionCookie(session:PayPaySession):string{
+  return cookieHeader({...session.cookies,token:session.accessToken});
+}
+
 function cookieHeader(cookies:Record<string,string>):string{
   return Object.entries(cookies).map(([name,value])=>`${name}=${value}`).join("; ");
 }
@@ -126,22 +131,23 @@ async function payPayPasswordLogin(account:PayPayAccount,referer:string):Promise
   if(!data?.access_token) return null;
   const cookies:Record<string,string>={};
   mergeCookies(cookies,response.headers.get("set-cookie"));
+  cookies.token=data.access_token;
   return {accessToken:data.access_token,cookies};
 }
 
 async function postAcceptP2PLink(payload:unknown,session:PayPaySession):Promise<{ok:boolean;authFailed:boolean}>{
   const response=await fetch("https://www.paypay.ne.jp/app/v2/p2p-api/acceptP2PSendMoneyLink",{
     method:"POST",
-    headers:payHeaders({
-      "Authorization":"Bearer "+session.accessToken,
-      "Cookie":cookieHeader(session.cookies)
-    }),
+    headers:payHeaders({"Cookie":sessionCookie(session)}),
     body:JSON.stringify(payload)
   });
   mergeCookies(session.cookies,response.headers.get("set-cookie"));
   if(response.status===401||response.status===403) return {ok:false,authFailed:true};
   const data:any=await response.json().catch(()=>null);
-  return {ok:response.ok&&data?.header?.resultCode==="S0000",authFailed:false};
+  const code=data?.header?.resultCode;
+  // WebAPI tokens last ~2h; PayPay answers an expired one with S0001 (or S9999) at HTTP 200.
+  if(code==="S0001"||code==="S9999") return {ok:false,authFailed:true};
+  return {ok:response.ok&&code==="S0000",authFailed:false};
 }
 
 export async function acceptPayPayLink(
@@ -207,6 +213,9 @@ export async function acceptPayPayLink(
       console.error("PayPay session save failed",error);
     }
   }
+  // Public link state cannot prove WHICH account received the money, so only the
+  // authenticated acceptance response may authorize delivery. Anything else stays pending
+  // and is re-checked while the link is still PENDING (e.g. until 受け取り保留 is released).
   const ok=received.ok;
   return {ok,pending:!ok,amount,status:ok?"COMPLETED":"PENDING"};
 }

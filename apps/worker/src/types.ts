@@ -3,7 +3,6 @@ export interface Env {
   SECURITY_GATEWAY: DurableObjectNamespace;
   WEB_ORIGIN: string;
   WEB_PUBLIC_URL: string;
-  PAYPAY_ENV: "sandbox" | "staging" | "production";
   DISCORD_APPLICATION_ID: string;
   MAIN_BOT_APPLICATION_ID?: string;
   DISCORD_PUBLIC_KEY: string;
@@ -18,9 +17,6 @@ export interface Env {
   SHIIRE_API_BASE_URL?: string;
   XUTILITY_BRIDGE_SECRET?: string;
   XUTILITY_API_BASE_URL?: string;
-  PAYPAY_API_KEY?: string;
-  PAYPAY_API_SECRET?: string;
-  PAYPAY_MERCHANT_ID?: string;
 }
 
 export type GuildSettings = {
