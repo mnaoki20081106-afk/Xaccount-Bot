@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
 
 type Channel={id:string;name:string;type?:string};
-type LinkKind="x_profile"|"x_post"|"url";
+type LinkKind=
+  |"x_profile"|"x_post"
+  |"instagram_profile"|"instagram_post"
+  |"tiktok_profile"|"tiktok_video"
+  |"youtube_channel"|"youtube_video"
+  |"url";
+type Sns="x"|"instagram"|"tiktok"|"youtube"|"other";
 
 type Live=
   |{found:false}
@@ -10,6 +16,7 @@ type Live=
 
 type Product={
   id:string;
+  machine_id:string;
   name:string;
   description:string;
   emoji:string|null;
@@ -27,11 +34,22 @@ type Product={
   bounds:{min:number;max:number}|null;
 };
 
-type Settings={
+type Machine={
+  id:string;
+  sns:Sns;
+  snsLabel:string;
+  name:string;
   panel_title:string;
   panel_description:string;
   panel_color:number;
   panel_image_url:string|null;
+  linkKinds:LinkKind[];
+  panels:Array<{channel_id:string;message_id:string}>;
+  activeProducts:number;
+  totalProducts:number;
+};
+
+type Settings={
   public_log_channel_id:string|null;
   private_log_channel_id:string|null;
   paused:number;
@@ -50,7 +68,8 @@ type Overview={
   payment:{paypay:boolean;kyash:boolean};
   settings:Settings;
   products:Product[];
-  panels:Array<{channel_id:string;message_id:string}>;
+  machines:Machine[];
+  snsOptions:Array<{id:Sns;label:string}>;
   summary:{
     byStatus:Record<string,{count:number;amount:number}>;
     refundRequired:{count:number;amount:number};
@@ -90,7 +109,7 @@ type Order={
   finished_at:number|null;
 };
 
-type Tab="overview"|"products"|"services"|"orders";
+type Tab="overview"|"machines"|"services"|"orders";
 
 const STATUS_LABEL:Record<string,string>={
   awaiting_payment:"支払い待ち",
@@ -109,14 +128,33 @@ const STATUS_LABEL:Record<string,string>={
 const LINK_KIND_LABEL:Record<LinkKind,string>={
   x_profile:"Xアカウント(フォロワー等)",
   x_post:"Xポスト(いいね・インプレ等)",
+  instagram_profile:"Instagramアカウント",
+  instagram_post:"Instagram投稿・リール",
+  tiktok_profile:"TikTokアカウント",
+  tiktok_video:"TikTok動画",
+  youtube_channel:"YouTubeチャンネル",
+  youtube_video:"YouTube動画",
   url:"任意のURL"
+};
+
+const SNS_HINT:Record<Sns,string>={
+  x:"twitter",
+  instagram:"instagram",
+  tiktok:"tiktok",
+  youtube:"youtube",
+  other:""
 };
 
 const ERROR_JA:Record<string,string>={
   SERVICE_NOT_FOUND:"LuckyPanelにそのサービスIDが見つかりません。サービス一覧を再取得してください。",
   PRICE_PERCENT_INVALID:"販売価格は原価の101%以上(101〜1000)で指定してください。",
   MARGIN_BELOW_FLOOR:"この価格設定では最低利益率を下回ります。上乗せ率か手数料を上げてください。",
-  TOO_MANY_ACTIVE_PRODUCTS:"同時に販売できる商品は25件までです。不要な商品を非公開にしてください。",
+  TOO_MANY_ACTIVE_PRODUCTS:"1つの自販機に公開できる商品は25件までです。別の自販機に分けるか、不要な商品を非公開にしてください。",
+  MACHINE_HAS_PRODUCTS:"商品が残っている自販機は削除できません。先に商品を削除または移動してください。",
+  MACHINE_NOT_FOUND:"自販機が見つかりません。",
+  TOO_MANY_MACHINES:"自販機は1サーバー20個までです。",
+  LINK_KIND_INVALID:"その自販機のSNSでは使えないURL種別です。",
+  PANEL_IMAGE_URL_MUST_BE_HTTPS:"画像URLはhttpsで指定してください。",
   LUCKYPANEL_SERVICES_UNAVAILABLE:"LuckyPanelのサービス一覧を取得できませんでした。APIキーと接続を確認してください。",
   LUCKYPANEL_API_KEY_NOT_CONFIGURED:"LUCKYPANEL_API_KEYが未設定です。Bot Factoryで仕入れbotに設定してください。",
   CONFIRM_NOT_PLACED_REQUIRED:"LuckyPanel側で未発注であることを確認してから実行してください。",
@@ -147,11 +185,14 @@ function when(ms:number|null){
   return new Date(ms).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
 }
 
-function guessLinkKind(service:Service):LinkKind{
+function guessLinkKind(service:Service,allowed:LinkKind[]):LinkKind{
   const text=(service.name+" "+service.category).toLowerCase();
-  if(/follow|フォロワー|subscriber/.test(text)) return "x_profile";
-  if(/like|いいね|retweet|repost|リポスト|impression|インプレ|view|再生|bookmark|ブックマーク|click/.test(text)) return "x_post";
-  return "url";
+  const wantsPost=/like|いいね|retweet|repost|リポスト|impression|インプレ|view|再生|bookmark|ブックマーク|click|share|save|comment/.test(text);
+  const wantsProfile=/follow|フォロワー|subscriber|登録者/.test(text);
+  const pick=(suffixes:string[])=>allowed.find(kind=>suffixes.some(suffix=>kind.endsWith(suffix)));
+  if(wantsProfile) return pick(["_profile","_channel"])??"url";
+  if(wantsPost) return pick(["_post","_video"])??"url";
+  return allowed.includes("url")?"url":allowed[0]??"url";
 }
 
 function postable(channels:Channel[]){
@@ -159,17 +200,32 @@ function postable(channels:Channel[]){
 }
 
 type ProductDraft={
+  machine_id:string;
   name:string;description:string;emoji:string;
   price_percent:number;min_qty:number;max_qty:number;
   link_kind:LinkKind;active:boolean;
 };
 
+type MachineDraft={
+  name:string;panel_title:string;panel_description:string;
+  panel_color:number;panel_image_url:string;
+};
+
 function draftFrom(product:Product):ProductDraft{
   return {
+    machine_id:product.machine_id,
     name:product.name,description:product.description,emoji:product.emoji??"",
     price_percent:product.price_percent,
     min_qty:product.min_qty,max_qty:product.max_qty,
     link_kind:product.link_kind,active:product.active===1
+  };
+}
+
+function machineDraftFrom(machine:Machine):MachineDraft{
+  return {
+    name:machine.name,panel_title:machine.panel_title,
+    panel_description:machine.panel_description,panel_color:machine.panel_color,
+    panel_image_url:machine.panel_image_url??""
   };
 }
 
@@ -184,7 +240,10 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
   const [busy,setBusy]=useState(false);
   const [overview,setOverview]=useState<Overview|null>(null);
   const [settings,setSettings]=useState<Settings|null>(null);
-  const [panelChannel,setPanelChannel]=useState("");
+  const [panelChannels,setPanelChannels]=useState<Record<string,string>>({});
+  const [newMachine,setNewMachine]=useState<{sns:Sns;name:string}>({sns:"x",name:""});
+  const [editingMachineId,setEditingMachineId]=useState("");
+  const [machineDraft,setMachineDraft]=useState<MachineDraft|null>(null);
   const [editingId,setEditingId]=useState("");
   const [draft,setDraft]=useState<ProductDraft|null>(null);
   const [services,setServices]=useState<Service[]|null>(null);
@@ -192,17 +251,21 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
   const [query,setQuery]=useState("");
   const [category,setCategory]=useState("");
   const [onlySupported,setOnlySupported]=useState(true);
+  const [targetMachineId,setTargetMachineId]=useState("");
   const [creating,setCreating]=useState<{service:Service;draft:ProductDraft}|null>(null);
   const [orders,setOrders]=useState<Order[]>([]);
   const [orderFilter,setOrderFilter]=useState("");
 
   const messageChannels=useMemo(()=>postable(channels),[channels]);
+  const channelName=(id:string)=>channels.find(channel=>channel.id===id)?.name??id;
+  const machines=overview?.machines??[];
+  const machineById=(id:string)=>machines.find(machine=>machine.id===id);
 
   async function loadOverview(){
     const next=await api<Overview>(base,{},25_000);
     setOverview(next);
     setSettings(next.settings);
-    setPanelChannel(current=>current||messageChannels[0]?.id||"");
+    setTargetMachineId(current=>next.machines.some(m=>m.id===current)?current:next.machines[0]?.id??"");
   }
 
   async function loadOrders(status=orderFilter){
@@ -242,26 +305,67 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
   async function saveSettings(patch:Partial<Settings>,success="設定を保存しました"){
     await run(async()=>{
       const result=await api<{panelsRefreshed:boolean}>(
-        base+"/settings",{method:"POST",body:JSON.stringify(patch)},25_000
+        base+"/settings",{method:"POST",body:JSON.stringify(patch)},40_000
       );
       await loadOverview();
       if(!result.panelsRefreshed) onError(new Error("設定は保存しましたが、一部のDiscordパネルを更新できませんでした。"));
     },success);
   }
 
-  async function installPanel(){
-    if(!panelChannel) return;
+  async function createMachine(){
     await run(async()=>{
-      await api(base+"/panel",{method:"POST",body:JSON.stringify({channelId:panelChannel})},25_000);
+      await api(base+"/machines",{
+        method:"POST",
+        body:JSON.stringify({sns:newMachine.sns,...(newMachine.name.trim()?{name:newMachine.name.trim()}:{})})
+      },25_000);
+      setNewMachine({sns:newMachine.sns,name:""});
       await loadOverview();
-    },"パネルを設置しました");
+    },"自販機を追加しました");
   }
 
-  async function refreshPanels(){
+  async function saveMachine(machine:Machine){
+    if(!machineDraft) return;
     await run(async()=>{
-      const result=await api<{panelsRefreshed:boolean}>(base+"/panel/refresh",{method:"POST",body:"{}"},25_000);
+      const result=await api<{panelsRefreshed:boolean}>(
+        base+"/machines/"+machine.id,
+        {method:"PATCH",body:JSON.stringify({...machineDraft,panel_image_url:machineDraft.panel_image_url||""})},40_000
+      );
+      setEditingMachineId("");setMachineDraft(null);
+      await loadOverview();
+      if(!result.panelsRefreshed) onError(new Error("保存しましたが、一部のDiscordパネルを更新できませんでした。"));
+    },"自販機を保存しました");
+  }
+
+  async function deleteMachine(machine:Machine){
+    if(!confirm(`自販機「${machine.name}」を削除します。設置済みのパネルメッセージはDiscordに残ります(購入ボタンは使えなくなります)。`)) return;
+    await run(async()=>{
+      await api(base+"/machines/"+machine.id,{method:"DELETE"},25_000);
+      await loadOverview();
+    },"自販機を削除しました");
+  }
+
+  async function installPanel(machine:Machine){
+    const channelId=panelChannels[machine.id]??"";
+    if(!channelId) return;
+    await run(async()=>{
+      await api(base+`/machines/${machine.id}/panel`,{method:"POST",body:JSON.stringify({channelId})},25_000);
+      await loadOverview();
+    },`「${machine.name}」を #${channelName(channelId)} に設置しました`);
+  }
+
+  async function refreshMachinePanels(machine:Machine){
+    await run(async()=>{
+      const result=await api<{panelsRefreshed:boolean}>(base+`/machines/${machine.id}/panel/refresh`,{method:"POST",body:"{}"},25_000);
       if(!result.panelsRefreshed) throw new Error("一部のパネルを更新できませんでした。削除されたパネルは自動で外れます。");
     },"パネルを更新しました");
+  }
+
+  async function removePanel(machine:Machine,panel:{channel_id:string;message_id:string}){
+    if(!confirm(`#${channelName(panel.channel_id)} のパネルを削除します。`)) return;
+    await run(async()=>{
+      await api(base+`/machines/${machine.id}/panels/${panel.channel_id}/${panel.message_id}`,{method:"DELETE"},25_000);
+      await loadOverview();
+    },"パネルを削除しました");
   }
 
   async function saveProduct(product:Product){
@@ -269,7 +373,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
     await run(async()=>{
       const result=await api<{panelsRefreshed:boolean}>(
         base+"/products/"+product.id,
-        {method:"PATCH",body:JSON.stringify({...draft,emoji:draft.emoji||null})},25_000
+        {method:"PATCH",body:JSON.stringify({...draft,emoji:draft.emoji||null})},40_000
       );
       setEditingId("");setDraft(null);
       await loadOverview();
@@ -279,7 +383,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
 
   async function toggleProduct(product:Product){
     await run(async()=>{
-      await api(base+"/products/"+product.id,{method:"PATCH",body:JSON.stringify({active:product.active!==1})},25_000);
+      await api(base+"/products/"+product.id,{method:"PATCH",body:JSON.stringify({active:product.active!==1})},40_000);
       await loadOverview();
     },product.active===1?"非公開にしました":"公開しました");
   }
@@ -287,7 +391,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
   async function removeProduct(product:Product){
     if(!confirm(`「${product.name}」を削除します。過去の注文履歴は残ります。`)) return;
     await run(async()=>{
-      await api(base+"/products/"+product.id,{method:"DELETE"},25_000);
+      await api(base+"/products/"+product.id,{method:"DELETE"},40_000);
       await loadOverview();
     },"商品を削除しました");
   }
@@ -301,10 +405,10 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
           ...creating.draft,emoji:creating.draft.emoji||null,
           service_id:creating.service.service
         })
-      },25_000);
+      },40_000);
       setCreating(null);
       await loadOverview();
-      setTab("products");
+      setTab("machines");
     },"商品を追加しました");
   }
 
@@ -330,10 +434,46 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
     });
   },[services,query,category,onlySupported]);
 
+  function startCreating(service:Service){
+    const machine=machineById(targetMachineId);
+    if(!machine){onError(new Error("先に「自販機(SNS別)」タブで自販機を追加してください。"));return;}
+    setCreating({
+      service,
+      draft:{
+        machine_id:machine.id,
+        name:service.name.slice(0,80),description:"",emoji:"",
+        price_percent:130,min_qty:service.min||1,max_qty:0,
+        link_kind:guessLinkKind(service,machine.linkKinds),active:true
+      }
+    });
+  }
+
+  function patchCreating(patch:Partial<ProductDraft>){
+    if(!creating) return;
+    let next={...creating.draft,...patch};
+    if(patch.machine_id){
+      const machine=machineById(patch.machine_id);
+      if(machine&&!machine.linkKinds.includes(next.link_kind)){
+        next={...next,link_kind:guessLinkKind(creating.service,machine.linkKinds)};
+      }
+    }
+    setCreating({...creating,draft:next});
+  }
+
   const balance=overview?.balance;
   const refund=overview?.summary.refundRequired;
   const holdCount=overview?.summary.byStatus.hold?.count??0;
   const lowBalance=balance?.ok&&settings&&settings.min_supplier_balance_jpy>0&&balance.balance<settings.min_supplier_balance_jpy;
+  const limit=overview?.limits.panelProductLimit??25;
+
+  const linkKindSelect=(
+    kinds:LinkKind[],value:LinkKind,onChange:(kind:LinkKind)=>void
+  )=>(
+    <label className="field"><span>入力させるURL</span>
+      <select value={value} onChange={e=>onChange(e.target.value as LinkKind)}>
+        {kinds.map(kind=><option key={kind} value={kind}>{LINK_KIND_LABEL[kind]}</option>)}
+      </select></label>
+  );
 
   return (
     <fieldset className="smm-manager" disabled={busy} aria-label="フォロ爆の管理" style={{border:0,minWidth:0}}>
@@ -341,7 +481,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
         <div className="section-head">
           <div>
             <h2>フォロ爆(SMM)販売</h2>
-            <p>LuckyPanelから無在庫で仕入れ、PayPayで受け取った代金の一部で自動発注します。</p>
+            <p>LuckyPanelから無在庫で仕入れ、PayPayで受け取った代金の一部で自動発注します。SNSごとに自販機を分けて、別々のチャンネルへ設置できます。</p>
           </div>
           <button className="secondary" onClick={()=>void run(async()=>{await loadOverview();if(tab==="orders") await loadOrders();})}>再読み込み</button>
         </div>
@@ -350,7 +490,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
           <article className="metric card">
             <span>受付状態</span>
             <strong>{overview?(overview.settings.paused?"停止中":"受付中"):"…"}</strong>
-            <small>{overview?.settings.paused?"パネルの注文ボタンは無効です":"購入者が注文できます"}</small>
+            <small>{overview?.settings.paused?"全パネルの注文ボタンが無効です":"購入者が注文できます"}</small>
           </article>
           <article className="metric card">
             <span>LUCKYPANEL残高</span>
@@ -393,131 +533,186 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
         </div>}
 
         <nav className="shiire-subnav" aria-label="フォロ爆管理メニュー">
-          {([["overview","概要・設定"],["products","販売商品"],["services","サービスから追加"],["orders","注文"]] as Array<[Tab,string]>).map(([id,label])=>(
+          {([["overview","概要・設定"],["machines","自販機(SNS別)"],["services","サービスから追加"],["orders","注文"]] as Array<[Tab,string]>).map(([id,label])=>(
             <button key={id} type="button" className={tab===id?"active":""} aria-pressed={tab===id} onClick={()=>setTab(id)}>{label}</button>
           ))}
         </nav>
       </section>
 
       {tab==="overview"&&settings&&overview&&(
-        <>
-          <section className="card">
-            <h3>受付とパネル</h3>
-            <label className="shiire-checkbox-row">
-              <input type="checkbox" checked={settings.paused===0} onChange={event=>setSettings({...settings,paused:event.target.checked?0:1})} />
-              <span>注文を受け付ける(OFFにするとボタンが無効になります)</span>
-            </label>
-            <div className="form-grid two">
-              <label className="field"><span>パネルタイトル</span>
-                <input maxLength={80} value={settings.panel_title} onChange={e=>setSettings({...settings,panel_title:e.target.value})} /></label>
-              <label className="field"><span>パネルの色</span>
-                <input type="color" aria-label="パネルの色" value={"#"+settings.panel_color.toString(16).padStart(6,"0")}
-                  onChange={e=>setSettings({...settings,panel_color:Number.parseInt(e.target.value.slice(1),16)})} /></label>
-              <label className="field"><span>公開ログ(完了のみ)</span>
-                <select value={settings.public_log_channel_id??""} onChange={e=>setSettings({...settings,public_log_channel_id:e.target.value||null})}>
-                  <option value="">送信しない</option>
-                  {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                </select></label>
-              <label className="field"><span>非公開ログ(入金・要対応・残高警告)</span>
-                <select value={settings.private_log_channel_id??""} onChange={e=>setSettings({...settings,private_log_channel_id:e.target.value||null})}>
-                  <option value="">送信しない</option>
-                  {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                </select></label>
-            </div>
-            <label className="field"><span>パネル説明</span>
-              <textarea rows={4} maxLength={1500} value={settings.panel_description} onChange={e=>setSettings({...settings,panel_description:e.target.value})} /></label>
-            <label className="field"><span>パネル画像URL(https)</span>
-              <input value={settings.panel_image_url??""} onChange={e=>setSettings({...settings,panel_image_url:e.target.value||null})} /></label>
+        <section className="card">
+          <h3>受付(全自販機共通)</h3>
+          <label className="shiire-checkbox-row">
+            <input type="checkbox" checked={settings.paused===0} onChange={event=>setSettings({...settings,paused:event.target.checked?0:1})} />
+            <span>注文を受け付ける(OFFにすると全パネルのボタンが無効になります)</span>
+          </label>
+          <div className="form-grid two">
+            <label className="field"><span>公開ログ(完了のみ)</span>
+              <select value={settings.public_log_channel_id??""} onChange={e=>setSettings({...settings,public_log_channel_id:e.target.value||null})}>
+                <option value="">送信しない</option>
+                {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+              </select></label>
+            <label className="field"><span>非公開ログ(入金・要対応・残高警告)</span>
+              <select value={settings.private_log_channel_id??""} onChange={e=>setSettings({...settings,private_log_channel_id:e.target.value||null})}>
+                <option value="">送信しない</option>
+                {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+              </select></label>
+          </div>
 
-            <h3>安全設定</h3>
-            <div className="form-grid two">
-              <label className="field"><span>最低利益率(%)</span>
-                <input type="number" min={0} max={90} value={settings.min_margin_percent} onChange={e=>setSettings({...settings,min_margin_percent:Number(e.target.value)})} />
-                <small>仕入れ原価が支払額のこの割合を超えそうな注文は発注せず「要確認」にします。商品追加時もこの利益率を下回る価格は拒否します。</small></label>
-              <label className="field"><span>1人あたりの進行中注文の上限</span>
-                <input type="number" min={1} max={50} value={settings.max_open_orders_per_user} onChange={e=>setSettings({...settings,max_open_orders_per_user:Number(e.target.value)})} /></label>
-              <label className="field"><span>LuckyPanel残高の下限(円)</span>
-                <input type="number" min={0} value={settings.min_supplier_balance_jpy} onChange={e=>setSettings({...settings,min_supplier_balance_jpy:Number(e.target.value)})} />
-                <small>注文時にこの金額を残して賄えない数量は受け付けません。下回ると非公開ログへ警告します。0で無効。</small></label>
-            </div>
-            <div className="button-row">
-              <button className="primary" onClick={()=>void saveSettings(settings)}>設定を保存</button>
-            </div>
-          </section>
-
-          <section className="card">
-            <h3>Discordへ設置</h3>
-            <div className="form-grid">
-              <label className="field"><span>設置するチャンネル</span>
-                <select value={panelChannel} onChange={e=>setPanelChannel(e.target.value)}>
-                  <option value="">選択してください</option>
-                  {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                </select></label>
-              <button className="primary" disabled={!panelChannel} onClick={()=>void installPanel()}>パネルを設置</button>
-              <button className="secondary" disabled={!overview.panels.length} onClick={()=>void refreshPanels()}>設置済みパネルを更新({overview.panels.length})</button>
-            </div>
-            {overview.settings.paused===1&&<p className="shiire-muted">現在は受付停止中です。上の「注文を受け付ける」をONにして保存すると購入できるようになります。</p>}
-          </section>
-        </>
+          <h3>安全設定</h3>
+          <div className="form-grid two">
+            <label className="field"><span>最低利益率(%)</span>
+              <input type="number" min={0} max={90} value={settings.min_margin_percent} onChange={e=>setSettings({...settings,min_margin_percent:Number(e.target.value)})} />
+              <small>仕入れ原価が支払額のこの割合を超えそうな注文は発注せず「要確認」にします。商品追加時もこの利益率を下回る価格は拒否します。</small></label>
+            <label className="field"><span>1人あたりの進行中注文の上限</span>
+              <input type="number" min={1} max={50} value={settings.max_open_orders_per_user} onChange={e=>setSettings({...settings,max_open_orders_per_user:Number(e.target.value)})} /></label>
+            <label className="field"><span>LuckyPanel残高の下限(円)</span>
+              <input type="number" min={0} value={settings.min_supplier_balance_jpy} onChange={e=>setSettings({...settings,min_supplier_balance_jpy:Number(e.target.value)})} />
+              <small>注文時にこの金額を残して賄えない数量は受け付けません。下回ると非公開ログへ警告します。0で無効。</small></label>
+          </div>
+          <div className="button-row">
+            <button className="primary" onClick={()=>void saveSettings(settings)}>設定を保存</button>
+          </div>
+          {overview.settings.paused===1&&<p className="shiire-muted">現在は受付停止中です。「注文を受け付ける」をONにして保存すると購入できるようになります。</p>}
+        </section>
       )}
 
-      {tab==="products"&&overview&&(
-        <section className="card">
-          <div className="section-head">
-            <div>
-              <h3>販売商品</h3>
-              <p>公開中 {overview.products.filter(p=>p.active===1).length} / {overview.limits.panelProductLimit}件。商品は「サービスから追加」で作ります。</p>
+      {tab==="machines"&&overview&&(
+        <>
+          <section className="card">
+            <h3>自販機を追加</h3>
+            <p className="shiire-muted">SNSごとに自販機(パネル)を作り、それぞれ別のチャンネルへ設置できます。1つの自販機に公開できる商品は{limit}件までです。</p>
+            <div className="form-grid two">
+              <label className="field"><span>SNS</span>
+                <select value={newMachine.sns} onChange={e=>setNewMachine({...newMachine,sns:e.target.value as Sns})}>
+                  {overview.snsOptions.map(option=><option key={option.id} value={option.id}>{option.label}</option>)}
+                </select></label>
+              <label className="field"><span>自販機名(空欄でSNS名)</span>
+                <input maxLength={40} value={newMachine.name} onChange={e=>setNewMachine({...newMachine,name:e.target.value})} /></label>
             </div>
-            <button className="secondary" onClick={()=>setTab("services")}>サービスから追加</button>
-          </div>
-          {!overview.products.length&&<p>まだ商品がありません。</p>}
-          <div className="list-stack">
-            {overview.products.map(product=>{
-              const live=product.live;
-              const cost=live.found?live.rate:null;
-              const editing=editingId===product.id&&draft;
-              return (
-                <div className="serverless-note" key={product.id}>
-                  <strong>{product.emoji?product.emoji+" ":""}{product.name}{product.active===1?"":"(非公開)"}</strong>
-                  <span>
-                    サービスID {product.service_id} / 1000件 {yen(product.per1000)}
-                    {cost!==null&&<> (原価 {yen(cost)} / {product.price_percent}%)</>}
-                    {" "}/ 数量 {product.bounds?`${product.bounds.min.toLocaleString("ja-JP")}〜${product.bounds.max.toLocaleString("ja-JP")}`:"—"}
-                    {" "}/ 販売 {product.sales_count}件
-                  </span>
-                  {!live.found&&<span className="shiire-muted">⚠ LuckyPanel側でサービスが見つかりません。この商品は購入できません。</span>}
-                  {live.found&&!live.supported&&<span className="shiire-muted">⚠ 未対応のサービスタイプ({live.type})です。購入できません。</span>}
-                  {editing&&draft?(
+            <div className="button-row"><button className="primary" onClick={()=>void createMachine()}>自販機を追加</button></div>
+          </section>
+
+          {!machines.length&&<section className="card"><p>まだ自販機がありません。上のフォームからSNSを選んで追加してください。</p></section>}
+
+          {machines.map(machine=>{
+            const products=overview.products.filter(product=>product.machine_id===machine.id);
+            const editingMachine=editingMachineId===machine.id&&machineDraft;
+            return (
+              <section className="card smm-machine" key={machine.id} aria-label={`${machine.name}の自販機`}>
+                <div className="section-head">
+                  <div>
+                    <h3>{machine.name} <small className="shiire-muted">({machine.snsLabel})</small></h3>
+                    <p>公開中 {machine.activeProducts} / {limit}件 ・ 設置済みパネル {machine.panels.length}件</p>
+                  </div>
+                  <div className="button-row">
+                    <button className="secondary" onClick={()=>{setTargetMachineId(machine.id);setTab("services");}}>サービスから商品を追加</button>
+                    <button className="danger" disabled={machine.totalProducts>0} title={machine.totalProducts>0?"商品を削除するとこの自販機を削除できます":""} onClick={()=>void deleteMachine(machine)}>自販機を削除</button>
+                  </div>
+                </div>
+
+                <details className="shiire-disclosure" open={Boolean(editingMachine)}>
+                  <summary>パネルの文面・色・画像</summary>
+                  {editingMachine&&machineDraft?(
                     <>
                       <div className="form-grid two">
-                        <label className="field"><span>商品名</span><input maxLength={80} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} /></label>
-                        <label className="field"><span>絵文字</span><input maxLength={8} value={draft.emoji} onChange={e=>setDraft({...draft,emoji:e.target.value})} /></label>
-                        <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={draft.price_percent} onChange={e=>setDraft({...draft,price_percent:Number(e.target.value)})} /></label>
-                        <label className="field"><span>最小数量</span><input type="number" min={1} value={draft.min_qty} onChange={e=>setDraft({...draft,min_qty:Number(e.target.value)})} /></label>
-                        <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={draft.max_qty} onChange={e=>setDraft({...draft,max_qty:Number(e.target.value)})} /></label>
-                        <label className="field"><span>入力させるURL</span>
-                          <select value={draft.link_kind} onChange={e=>setDraft({...draft,link_kind:e.target.value as LinkKind})}>
-                            {(Object.keys(LINK_KIND_LABEL) as LinkKind[]).map(kind=><option key={kind} value={kind}>{LINK_KIND_LABEL[kind]}</option>)}
-                          </select></label>
+                        <label className="field"><span>自販機名</span><input maxLength={40} value={machineDraft.name} onChange={e=>setMachineDraft({...machineDraft,name:e.target.value})} /></label>
+                        <label className="field"><span>パネルタイトル</span><input maxLength={80} value={machineDraft.panel_title} onChange={e=>setMachineDraft({...machineDraft,panel_title:e.target.value})} /></label>
+                        <label className="field"><span>パネルの色</span>
+                          <input type="color" aria-label="パネルの色" value={"#"+machineDraft.panel_color.toString(16).padStart(6,"0")} onChange={e=>setMachineDraft({...machineDraft,panel_color:Number.parseInt(e.target.value.slice(1),16)})} /></label>
+                        <label className="field"><span>パネル画像URL(https)</span><input value={machineDraft.panel_image_url} onChange={e=>setMachineDraft({...machineDraft,panel_image_url:e.target.value})} /></label>
                       </div>
-                      <label className="field"><span>説明(200文字まで)</span><input maxLength={200} value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})} /></label>
+                      <label className="field"><span>パネル説明</span>
+                        <textarea rows={4} maxLength={1500} value={machineDraft.panel_description} onChange={e=>setMachineDraft({...machineDraft,panel_description:e.target.value})} /></label>
                       <div className="button-row">
-                        <button className="primary" onClick={()=>void saveProduct(product)}>保存</button>
-                        <button className="secondary" onClick={()=>{setEditingId("");setDraft(null);}}>キャンセル</button>
+                        <button className="primary" onClick={()=>void saveMachine(machine)}>保存して反映</button>
+                        <button className="secondary" onClick={()=>{setEditingMachineId("");setMachineDraft(null);}}>キャンセル</button>
                       </div>
                     </>
                   ):(
-                    <div className="button-row">
-                      <button className="secondary" onClick={()=>{setEditingId(product.id);setDraft(draftFrom(product));}}>編集</button>
-                      <button className="secondary" onClick={()=>void toggleProduct(product)}>{product.active===1?"非公開にする":"公開する"}</button>
-                      <button className="danger" onClick={()=>void removeProduct(product)}>削除</button>
-                    </div>
+                    <>
+                      <p><strong>{machine.panel_title}</strong></p>
+                      <p className="shiire-muted" style={{whiteSpace:"pre-wrap"}}>{machine.panel_description}</p>
+                      <div className="button-row"><button className="secondary" onClick={()=>{setEditingMachineId(machine.id);setMachineDraft(machineDraftFrom(machine));}}>文面を編集</button></div>
+                    </>
                   )}
+                </details>
+
+                <h4>Discordへ設置</h4>
+                <div className="form-grid">
+                  <label className="field"><span>設置するチャンネル</span>
+                    <select aria-label={`${machine.name}の設置チャンネル`} value={panelChannels[machine.id]??""} onChange={e=>setPanelChannels({...panelChannels,[machine.id]:e.target.value})}>
+                      <option value="">選択してください</option>
+                      {messageChannels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+                    </select></label>
+                  <button className="primary" disabled={!panelChannels[machine.id]} onClick={()=>void installPanel(machine)}>パネルを設置</button>
+                  <button className="secondary" disabled={!machine.panels.length} onClick={()=>void refreshMachinePanels(machine)}>設置済みを更新({machine.panels.length})</button>
                 </div>
-              );
-            })}
-          </div>
-        </section>
+                {machine.panels.length>0&&<ul className="smm-panel-list">
+                  {machine.panels.map(panel=>(
+                    <li key={panel.message_id}>
+                      <span>#{channelName(panel.channel_id)}</span>
+                      <button className="danger subtle" onClick={()=>void removePanel(machine,panel)}>削除</button>
+                    </li>
+                  ))}
+                </ul>}
+
+                <h4>商品</h4>
+                {!products.length&&<p className="shiire-muted">商品がありません。「サービスから商品を追加」で作成します。</p>}
+                <div className="list-stack">
+                  {products.map(product=>{
+                    const live=product.live;
+                    const cost=live.found?live.rate:null;
+                    const editing=editingId===product.id&&draft;
+                    return (
+                      <div className="serverless-note" key={product.id}>
+                        <strong>{product.emoji?product.emoji+" ":""}{product.name}{product.active===1?"":"(非公開)"}</strong>
+                        <span>
+                          サービスID {product.service_id} / 1000件 {yen(product.per1000)}
+                          {cost!==null&&<> (原価 {yen(cost)} / {product.price_percent}%)</>}
+                          {" "}/ 数量 {product.bounds?`${product.bounds.min.toLocaleString("ja-JP")}〜${product.bounds.max.toLocaleString("ja-JP")}`:"—"}
+                          {" "}/ 販売 {product.sales_count}件
+                        </span>
+                        {!live.found&&<span className="shiire-muted">⚠ LuckyPanel側でサービスが見つかりません。この商品は購入できません。</span>}
+                        {live.found&&!live.supported&&<span className="shiire-muted">⚠ 未対応のサービスタイプ({live.type})です。購入できません。</span>}
+                        {editing&&draft?(
+                          <>
+                            <div className="form-grid two">
+                              <label className="field"><span>商品名</span><input maxLength={80} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} /></label>
+                              <label className="field"><span>絵文字</span><input maxLength={8} value={draft.emoji} onChange={e=>setDraft({...draft,emoji:e.target.value})} /></label>
+                              <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={draft.price_percent} onChange={e=>setDraft({...draft,price_percent:Number(e.target.value)})} /></label>
+                              <label className="field"><span>最小数量</span><input type="number" min={1} value={draft.min_qty} onChange={e=>setDraft({...draft,min_qty:Number(e.target.value)})} /></label>
+                              <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={draft.max_qty} onChange={e=>setDraft({...draft,max_qty:Number(e.target.value)})} /></label>
+                              {linkKindSelect(machineById(draft.machine_id)?.linkKinds??machine.linkKinds,draft.link_kind,kind=>setDraft({...draft,link_kind:kind}))}
+                              <label className="field"><span>所属する自販機</span>
+                                <select value={draft.machine_id} onChange={e=>{
+                                  const target=machineById(e.target.value);
+                                  setDraft({...draft,machine_id:e.target.value,link_kind:target&&!target.linkKinds.includes(draft.link_kind)?"url":draft.link_kind});
+                                }}>
+                                  {machines.map(m=><option key={m.id} value={m.id}>{m.name}({m.snsLabel})</option>)}
+                                </select></label>
+                            </div>
+                            <label className="field"><span>説明(200文字まで)</span><input maxLength={200} value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})} /></label>
+                            <div className="button-row">
+                              <button className="primary" onClick={()=>void saveProduct(product)}>保存</button>
+                              <button className="secondary" onClick={()=>{setEditingId("");setDraft(null);}}>キャンセル</button>
+                            </div>
+                          </>
+                        ):(
+                          <div className="button-row">
+                            <button className="secondary" onClick={()=>{setEditingId(product.id);setDraft(draftFrom(product));}}>編集</button>
+                            <button className="secondary" onClick={()=>void toggleProduct(product)}>{product.active===1?"非公開にする":"公開する"}</button>
+                            <button className="danger" onClick={()=>void removeProduct(product)}>削除</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </>
       )}
 
       {tab==="services"&&(
@@ -529,8 +724,17 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
             </div>
             <button className="secondary" onClick={()=>void loadServices(true)}>最新を取得</button>
           </div>
+          {!machines.length&&<div className="shiire-callout warn" role="status"><strong>追加先の自販機がありません</strong><span>「自販機(SNS別)」タブで自販機を追加してください。</span></div>}
           {servicesStale&&<div className="shiire-callout warn" role="status"><strong>最新の一覧を取得できず、保存済みの一覧を表示しています</strong></div>}
           <div className="form-grid two">
+            <label className="field"><span>追加先の自販機</span>
+              <select value={targetMachineId} onChange={e=>{
+                setTargetMachineId(e.target.value);
+                const hint=SNS_HINT[machineById(e.target.value)?.sns??"other"];
+                if(hint) setQuery(hint);
+              }}>
+                {machines.map(m=><option key={m.id} value={m.id}>{m.name}({m.snsLabel})</option>)}
+              </select></label>
             <label className="field"><span>検索</span>
               <input value={query} placeholder="例: twitter フォロワー 日本人" onChange={e=>setQuery(e.target.value)} /></label>
             <label className="field"><span>カテゴリ</span>
@@ -554,42 +758,39 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
                     <td><small>{service.category}</small><br />{service.name}{service.refill?" 🔁":""}</td>
                     <td>{yen(service.rate)}</td>
                     <td>{service.min.toLocaleString("ja-JP")}〜{service.max.toLocaleString("ja-JP")}</td>
-                    <td><button className="secondary" disabled={!service.supported} onClick={()=>setCreating({
-                      service,
-                      draft:{
-                        name:service.name.slice(0,80),description:"",emoji:"",
-                        price_percent:130,min_qty:service.min||1,max_qty:0,
-                        link_kind:guessLinkKind(service),active:true
-                      }
-                    })}>商品化</button></td>
+                    <td><button className="secondary" disabled={!service.supported||!machines.length} onClick={()=>startCreating(service)}>商品化</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {creating&&(
-            <div className="serverless-note smm-create" role="dialog" aria-label="商品を追加">
-              <strong>「{creating.service.name}」を商品にする</strong>
-              <span>原価 {yen(creating.service.rate)}/1000 → 販売 {yen(Math.ceil(creating.service.rate*creating.draft.price_percent/100))}/1000</span>
-              <div className="form-grid two">
-                <label className="field"><span>商品名</span><input maxLength={80} value={creating.draft.name} onChange={e=>setCreating({...creating,draft:{...creating.draft,name:e.target.value}})} /></label>
-                <label className="field"><span>絵文字</span><input maxLength={8} value={creating.draft.emoji} onChange={e=>setCreating({...creating,draft:{...creating.draft,emoji:e.target.value}})} /></label>
-                <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={creating.draft.price_percent} onChange={e=>setCreating({...creating,draft:{...creating.draft,price_percent:Number(e.target.value)}})} /></label>
-                <label className="field"><span>最小数量</span><input type="number" min={1} value={creating.draft.min_qty} onChange={e=>setCreating({...creating,draft:{...creating.draft,min_qty:Number(e.target.value)}})} /></label>
-                <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={creating.draft.max_qty} onChange={e=>setCreating({...creating,draft:{...creating.draft,max_qty:Number(e.target.value)}})} /></label>
-                <label className="field"><span>入力させるURL</span>
-                  <select value={creating.draft.link_kind} onChange={e=>setCreating({...creating,draft:{...creating.draft,link_kind:e.target.value as LinkKind}})}>
-                    {(Object.keys(LINK_KIND_LABEL) as LinkKind[]).map(kind=><option key={kind} value={kind}>{LINK_KIND_LABEL[kind]}</option>)}
-                  </select></label>
+          {creating&&(()=>{
+            const target=machineById(creating.draft.machine_id);
+            return (
+              <div className="serverless-note smm-create" role="dialog" aria-label="商品を追加">
+                <strong>「{creating.service.name}」を商品にする</strong>
+                <span>原価 {yen(creating.service.rate)}/1000 → 販売 {yen(Math.ceil(creating.service.rate*creating.draft.price_percent/100))}/1000</span>
+                <div className="form-grid two">
+                  <label className="field"><span>追加先の自販機</span>
+                    <select value={creating.draft.machine_id} onChange={e=>patchCreating({machine_id:e.target.value})}>
+                      {machines.map(m=><option key={m.id} value={m.id}>{m.name}({m.snsLabel}) {m.activeProducts}/{limit}</option>)}
+                    </select></label>
+                  <label className="field"><span>商品名</span><input maxLength={80} value={creating.draft.name} onChange={e=>patchCreating({name:e.target.value})} /></label>
+                  <label className="field"><span>絵文字</span><input maxLength={8} value={creating.draft.emoji} onChange={e=>patchCreating({emoji:e.target.value})} /></label>
+                  <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={creating.draft.price_percent} onChange={e=>patchCreating({price_percent:Number(e.target.value)})} /></label>
+                  <label className="field"><span>最小数量</span><input type="number" min={1} value={creating.draft.min_qty} onChange={e=>patchCreating({min_qty:Number(e.target.value)})} /></label>
+                  <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={creating.draft.max_qty} onChange={e=>patchCreating({max_qty:Number(e.target.value)})} /></label>
+                  {linkKindSelect(target?.linkKinds??["url"],creating.draft.link_kind,kind=>patchCreating({link_kind:kind}))}
+                </div>
+                <label className="field"><span>説明(200文字まで)</span><input maxLength={200} value={creating.draft.description} onChange={e=>patchCreating({description:e.target.value})} /></label>
+                <div className="button-row">
+                  <button className="primary" onClick={()=>void createProduct()}>この内容で追加</button>
+                  <button className="secondary" onClick={()=>setCreating(null)}>キャンセル</button>
+                </div>
               </div>
-              <label className="field"><span>説明(200文字まで)</span><input maxLength={200} value={creating.draft.description} onChange={e=>setCreating({...creating,draft:{...creating.draft,description:e.target.value}})} /></label>
-              <div className="button-row">
-                <button className="primary" onClick={()=>void createProduct()}>この内容で追加</button>
-                <button className="secondary" onClick={()=>setCreating(null)}>キャンセル</button>
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </section>
       )}
 

@@ -46,24 +46,29 @@ async function setup(t,handler){
  return {...testing,screen:testing.within(document.body),user:userEvent.setup(),calls,notices,errors};
 }
 
+const machine=(over={})=>({
+ id:'m1',sns:'x',snsLabel:'X(Twitter)',name:'X',panel_title:'X(Twitter) フォロ爆 自販機',panel_description:'説明',panel_color:1942002,panel_image_url:null,
+ linkKinds:['x_profile','x_post','url'],panels:[],activeProducts:1,totalProducts:1,...over
+});
+const igMachine=(over={})=>machine({id:'m2',sns:'instagram',snsLabel:'Instagram',name:'Instagram',panel_title:'Instagram フォロ爆 自販機',linkKinds:['instagram_profile','instagram_post','url'],panels:[{channel_id:'c2',message_id:'msg9'}],activeProducts:0,totalProducts:0,...over});
 const baseOverview=(overrides={})=>({
  configured:true,
  balance:{ok:true,balance:100000,currency:'JPY',currencyOk:true},
  payment:{paypay:true,kyash:false},
- settings:{panel_title:'フォロ爆 自販機',panel_description:'説明',panel_color:5793266,panel_image_url:null,public_log_channel_id:null,private_log_channel_id:null,paused:0,min_margin_percent:0,max_open_orders_per_user:5,min_supplier_balance_jpy:0},
- products:[{id:'p1',name:'X Followers',description:'',emoji:null,service_id:'101',service_name:'X Followers',service_category:'X',markup_percent:30,fee_jpy:0,price_percent:130,min_qty:10,max_qty:0,link_kind:'x_profile',active:1,sales_count:3,live:{found:true,type:'Default',rate:500,min:10,max:10000,refill:true,cancel:false,supported:true},per1000:650,bounds:{min:10,max:10000}}],
- panels:[],
+ settings:{public_log_channel_id:null,private_log_channel_id:null,paused:0,min_margin_percent:0,max_open_orders_per_user:5,min_supplier_balance_jpy:0},
+ products:[{id:'p1',machine_id:'m1',name:'X Followers',description:'',emoji:null,service_id:'101',service_name:'X Followers',service_category:'X',markup_percent:30,price_percent:130,fee_jpy:0,min_qty:10,max_qty:0,link_kind:'x_profile',active:1,sales_count:3,live:{found:true,type:'Default',rate:500,min:10,max:10000,refill:true,cancel:false,supported:true},per1000:650,bounds:{min:10,max:10000}}],
+ machines:[machine(),igMachine()],
+ snsOptions:[{id:'x',label:'X(Twitter)'},{id:'instagram',label:'Instagram'},{id:'tiktok',label:'TikTok'},{id:'youtube',label:'YouTube'},{id:'other',label:'その他'}],
  summary:{byStatus:{hold:{count:1,amount:650}},refundRequired:{count:2,amount:1300}},
  servicesCachedAt:1,
  limits:{panelProductLimit:25},
  ...overrides
 });
 
-test('overview shows balance, refund and hold warnings and saves settings',async t=>{
+test('overview shows balance, refund and hold warnings and saves shared settings',async t=>{
  const f=await setup(t,req=>{
   if(req.path===''&&req.method==='GET') return baseOverview();
   if(req.path==='/settings') return {ok:true,panelsRefreshed:true};
-  if(req.path==='/panel') return {ok:true,messageId:'m1'};
   throw new Error('unexpected '+req.method+' '+req.path);
  });
  await f.screen.findByText('¥100,000');
@@ -78,14 +83,11 @@ test('overview shows balance, refund and hold warnings and saves settings',async
  const saved=f.calls.find(c=>c.path==='/settings');
  assert.equal(saved.body.min_margin_percent,20);
  assert.equal(saved.body.paused,0);
- await f.user.selectOptions(f.screen.getByLabelText('設置するチャンネル'),'c2');
- await f.user.click(f.screen.getByRole('button',{name:'パネルを設置'}));
- await f.waitFor(()=>assert.ok(f.calls.some(c=>c.path==='/panel')));
- assert.deepEqual(f.calls.find(c=>c.path==='/panel').body,{channelId:'c2'});
+ assert.equal('panel_title' in saved.body,false,'panel texts are per machine now');
  assert.equal(f.errors.length,0);
 });
 
-test('a missing API key and non-JPY balance are called out',async t=>{
+test('a missing API key is called out',async t=>{
  const f=await setup(t,req=>{
   if(req.path==='') return baseOverview({configured:false,balance:{ok:false,error:'LUCKYPANEL_API_KEY_NOT_CONFIGURED'}});
   throw new Error('unexpected '+req.path);
@@ -94,7 +96,55 @@ test('a missing API key and non-JPY balance are called out',async t=>{
  assert.ok(f.screen.getByText('未設定',{selector:'strong'}));
 });
 
-test('a service can be turned into a product and server errors are explained in Japanese',async t=>{
+test('each machine installs its panel to its own channel and can remove it',async t=>{
+ const f=await setup(t,req=>{
+  if(req.path==='') return baseOverview();
+  if(/\/panel$/.test(req.path)&&req.method==='POST') return {ok:true,messageId:'m'};
+  if(req.method==='DELETE') return {ok:true};
+  throw new Error('unexpected '+req.method+' '+req.path);
+ });
+ await f.screen.findByText('¥100,000');
+ await f.user.click(f.screen.getByRole('button',{name:'自販機(SNS別)'}));
+ const xCard=await f.screen.findByLabelText('Xの自販機');
+ const igCard=f.screen.getByLabelText('Instagramの自販機');
+ assert.ok(f.within(xCard).getByText(/公開中 1 \/ 25件/));
+ assert.ok(f.within(igCard).getByText(/設置済みパネル 1件/));
+ await f.user.selectOptions(f.within(xCard).getByLabelText('Xの設置チャンネル'),'c2');
+ await f.user.click(f.within(xCard).getByRole('button',{name:'パネルを設置'}));
+ await f.waitFor(()=>assert.ok(f.calls.some(c=>c.path==='/machines/m1/panel')));
+ assert.deepEqual(f.calls.find(c=>c.path==='/machines/m1/panel').body,{channelId:'c2'});
+ await f.user.selectOptions(f.within(igCard).getByLabelText('Instagramの設置チャンネル'),'c1');
+ await f.user.click(f.within(igCard).getByRole('button',{name:'パネルを設置'}));
+ await f.waitFor(()=>assert.ok(f.calls.some(c=>c.path==='/machines/m2/panel')));
+ assert.deepEqual(f.calls.find(c=>c.path==='/machines/m2/panel').body,{channelId:'c1'});
+ assert.ok(f.within(igCard).getByText('#logs',{selector:'li span'}),'installed panels list the channel name');
+ globalThis.confirm=()=>true;
+ await f.user.click(f.within(igCard).getByRole('button',{name:'削除',exact:true}));
+ await f.waitFor(()=>assert.ok(f.calls.some(c=>c.method==='DELETE'&&c.path==='/machines/m2/panels/c2/msg9')));
+ assert.equal(f.errors.length,0);
+});
+
+test('machines can be added per SNS and only empty machines can be deleted',async t=>{
+ const f=await setup(t,req=>{
+  if(req.path==='') return baseOverview();
+  if(req.path==='/machines'&&req.method==='POST') return {ok:true};
+  if(req.path==='/machines/m2'&&req.method==='DELETE') return {ok:true};
+  throw new Error('unexpected '+req.method+' '+req.path);
+ });
+ await f.screen.findByText('¥100,000');
+ await f.user.click(f.screen.getByRole('button',{name:'自販機(SNS別)'}));
+ const xCard=await f.screen.findByLabelText('Xの自販機');
+ assert.equal(f.within(xCard).getByRole('button',{name:'自販機を削除'}).disabled,true,'machines with products cannot be deleted');
+ await f.user.selectOptions(f.screen.getByLabelText('SNS'),'tiktok');
+ await f.user.click(f.screen.getByRole('button',{name:'自販機を追加',exact:true}));
+ await f.waitFor(()=>assert.ok(f.calls.some(c=>c.path==='/machines'&&c.method==='POST')));
+ assert.deepEqual(f.calls.find(c=>c.path==='/machines').body,{sns:'tiktok'});
+ globalThis.confirm=()=>true;
+ await f.user.click(f.within(f.screen.getByLabelText('Instagramの自販機')).getByRole('button',{name:'自販機を削除'}));
+ await f.waitFor(()=>assert.ok(f.calls.some(c=>c.path==='/machines/m2'&&c.method==='DELETE')));
+});
+
+test('a service becomes a product in the chosen machine with that SNS link kinds',async t=>{
  let rejectOnce=true;
  const services=[
   {service:'101',name:'日本人 Twitter フォロワー',type:'Default',category:'Twitter',rate:500,min:10,max:10000,refill:true,cancel:false,supported:true},
@@ -114,24 +164,29 @@ test('a service can be turned into a product and server errors are explained in 
  await f.user.click(f.screen.getByRole('button',{name:'サービスから追加'}));
  await f.screen.findByText(/日本人 Twitter フォロワー/);
  assert.equal(f.screen.queryByText(/カスタムコメント/),null,'unsupported services are hidden by default');
- await f.user.type(f.screen.getByLabelText('検索'),'いいね');
+ await f.user.clear(f.screen.getByLabelText('検索'));await f.user.type(f.screen.getByLabelText('検索'),'いいね');
  assert.equal(f.screen.queryByText(/日本人 Twitter フォロワー/),null);
  await f.user.clear(f.screen.getByLabelText('検索'));await f.user.type(f.screen.getByLabelText('検索'),'フォロワー');
  await f.user.click(f.screen.getByRole('button',{name:'商品化'}));
  const dialog=await f.screen.findByRole('dialog',{name:'商品を追加'});
  assert.ok(f.within(dialog).getByText(/販売 ¥650\/1000/));
+ assert.equal(f.within(dialog).getByLabelText('入力させるURL').value,'x_profile');
  await f.user.click(f.within(dialog).getByRole('button',{name:'この内容で追加'}));
  await f.waitFor(()=>assert.equal(f.errors.length,1));
  assert.match(f.errors[0].message,/最低利益率を下回ります/);
  assert.ok(f.screen.getByRole('dialog',{name:'商品を追加'}),'the form stays open after a rejected save');
- await f.user.click(f.within(f.screen.getByRole('dialog',{name:'商品を追加'})).getByRole('button',{name:'この内容で追加'}));
+ const open=f.screen.getByRole('dialog',{name:'商品を追加'});
+ await f.user.selectOptions(f.within(open).getByLabelText('追加先の自販機'),'m2');
+ assert.equal(f.within(open).getByLabelText('入力させるURL').value,'instagram_profile','link kind follows the target SNS');
+ assert.deepEqual([...f.within(open).getByLabelText('入力させるURL').options].map(o=>o.value),['instagram_profile','instagram_post','url']);
+ await f.user.click(f.within(open).getByRole('button',{name:'この内容で追加'}));
  await f.waitFor(()=>assert.equal(f.notices.length,1));
  const created=f.calls.filter(c=>c.path==='/products'&&c.method==='POST').at(-1).body;
  assert.equal(created.service_id,'101');
- assert.equal(created.link_kind,'x_profile');
+ assert.equal(created.machine_id,'m2');
+ assert.equal(created.link_kind,'instagram_profile');
  assert.equal(created.price_percent,130);
  assert.equal('fee_jpy' in created,false);
- assert.equal(created.markup_percent,undefined);
  assert.equal(created.emoji,null);
 });
 

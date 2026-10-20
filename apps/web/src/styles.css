@@ -4360,3 +4360,6 @@ body.dsm-touch-reordering .discord-category {
 .smm-table th { color: #7f8ba6; font-weight: 600; white-space: nowrap; }
 .smm-table td:nth-child(3), .smm-table td:nth-child(4) { white-space: nowrap; }
 .smm-create { margin-top: 14px; }
+.smm-panel-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.smm-panel-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border: 1px solid #263149; border-radius: 8px; font-size: 12px; }
+.smm-machine h4 { margin: 16px 0 6px; font-size: 12px; color: #a9b5ce; }
