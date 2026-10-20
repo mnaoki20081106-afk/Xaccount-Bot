@@ -16,8 +16,7 @@ type Product={
   service_id:string;
   service_name:string;
   service_category:string;
-  markup_percent:number;
-  fee_jpy:number;
+  price_percent:number;
   min_qty:number;
   max_qty:number;
   link_kind:LinkKind;
@@ -115,6 +114,7 @@ const LINK_KIND_LABEL:Record<LinkKind,string>={
 
 const ERROR_JA:Record<string,string>={
   SERVICE_NOT_FOUND:"LuckyPanelにそのサービスIDが見つかりません。サービス一覧を再取得してください。",
+  PRICE_PERCENT_INVALID:"販売価格は原価の101%以上(101〜1000)で指定してください。",
   MARGIN_BELOW_FLOOR:"この価格設定では最低利益率を下回ります。上乗せ率か手数料を上げてください。",
   TOO_MANY_ACTIVE_PRODUCTS:"同時に販売できる商品は25件までです。不要な商品を非公開にしてください。",
   LUCKYPANEL_SERVICES_UNAVAILABLE:"LuckyPanelのサービス一覧を取得できませんでした。APIキーと接続を確認してください。",
@@ -160,14 +160,14 @@ function postable(channels:Channel[]){
 
 type ProductDraft={
   name:string;description:string;emoji:string;
-  markup_percent:number;fee_jpy:number;min_qty:number;max_qty:number;
+  price_percent:number;min_qty:number;max_qty:number;
   link_kind:LinkKind;active:boolean;
 };
 
 function draftFrom(product:Product):ProductDraft{
   return {
     name:product.name,description:product.description,emoji:product.emoji??"",
-    markup_percent:product.markup_percent,fee_jpy:product.fee_jpy,
+    price_percent:product.price_percent,
     min_qty:product.min_qty,max_qty:product.max_qty,
     link_kind:product.link_kind,active:product.active===1
   };
@@ -481,7 +481,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
                   <strong>{product.emoji?product.emoji+" ":""}{product.name}{product.active===1?"":"(非公開)"}</strong>
                   <span>
                     サービスID {product.service_id} / 1000件 {yen(product.per1000)}
-                    {cost!==null&&<> (原価 {yen(cost)})</>}
+                    {cost!==null&&<> (原価 {yen(cost)} / {product.price_percent}%)</>}
                     {" "}/ 数量 {product.bounds?`${product.bounds.min.toLocaleString("ja-JP")}〜${product.bounds.max.toLocaleString("ja-JP")}`:"—"}
                     {" "}/ 販売 {product.sales_count}件
                   </span>
@@ -492,8 +492,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
                       <div className="form-grid two">
                         <label className="field"><span>商品名</span><input maxLength={80} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} /></label>
                         <label className="field"><span>絵文字</span><input maxLength={8} value={draft.emoji} onChange={e=>setDraft({...draft,emoji:e.target.value})} /></label>
-                        <label className="field"><span>上乗せ率(%)</span><input type="number" min={0} value={draft.markup_percent} onChange={e=>setDraft({...draft,markup_percent:Number(e.target.value)})} /></label>
-                        <label className="field"><span>固定手数料(円/注文)</span><input type="number" min={0} value={draft.fee_jpy} onChange={e=>setDraft({...draft,fee_jpy:Number(e.target.value)})} /></label>
+                        <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={draft.price_percent} onChange={e=>setDraft({...draft,price_percent:Number(e.target.value)})} /></label>
                         <label className="field"><span>最小数量</span><input type="number" min={1} value={draft.min_qty} onChange={e=>setDraft({...draft,min_qty:Number(e.target.value)})} /></label>
                         <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={draft.max_qty} onChange={e=>setDraft({...draft,max_qty:Number(e.target.value)})} /></label>
                         <label className="field"><span>入力させるURL</span>
@@ -559,7 +558,7 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
                       service,
                       draft:{
                         name:service.name.slice(0,80),description:"",emoji:"",
-                        markup_percent:30,fee_jpy:0,min_qty:service.min||1,max_qty:0,
+                        price_percent:130,min_qty:service.min||1,max_qty:0,
                         link_kind:guessLinkKind(service),active:true
                       }
                     })}>商品化</button></td>
@@ -572,12 +571,11 @@ export default function FollowBombManager({guildId,channels,onNotice,onError}:{
           {creating&&(
             <div className="serverless-note smm-create" role="dialog" aria-label="商品を追加">
               <strong>「{creating.service.name}」を商品にする</strong>
-              <span>原価 {yen(creating.service.rate)}/1000 → 販売 {yen(Math.ceil(creating.service.rate*(1+creating.draft.markup_percent/100)))}/1000(手数料別)</span>
+              <span>原価 {yen(creating.service.rate)}/1000 → 販売 {yen(Math.ceil(creating.service.rate*creating.draft.price_percent/100))}/1000</span>
               <div className="form-grid two">
                 <label className="field"><span>商品名</span><input maxLength={80} value={creating.draft.name} onChange={e=>setCreating({...creating,draft:{...creating.draft,name:e.target.value}})} /></label>
                 <label className="field"><span>絵文字</span><input maxLength={8} value={creating.draft.emoji} onChange={e=>setCreating({...creating,draft:{...creating.draft,emoji:e.target.value}})} /></label>
-                <label className="field"><span>上乗せ率(%)</span><input type="number" min={0} value={creating.draft.markup_percent} onChange={e=>setCreating({...creating,draft:{...creating.draft,markup_percent:Number(e.target.value)}})} /></label>
-                <label className="field"><span>固定手数料(円/注文)</span><input type="number" min={0} value={creating.draft.fee_jpy} onChange={e=>setCreating({...creating,draft:{...creating.draft,fee_jpy:Number(e.target.value)}})} /></label>
+                <label className="field"><span>販売価格(原価の何%か・101以上)</span><input type="number" min={101} max={1000} value={creating.draft.price_percent} onChange={e=>setCreating({...creating,draft:{...creating.draft,price_percent:Number(e.target.value)}})} /></label>
                 <label className="field"><span>最小数量</span><input type="number" min={1} value={creating.draft.min_qty} onChange={e=>setCreating({...creating,draft:{...creating.draft,min_qty:Number(e.target.value)}})} /></label>
                 <label className="field"><span>最大数量(0で仕入れ先の上限)</span><input type="number" min={0} value={creating.draft.max_qty} onChange={e=>setCreating({...creating,draft:{...creating.draft,max_qty:Number(e.target.value)}})} /></label>
                 <label className="field"><span>入力させるURL</span>

@@ -51,7 +51,7 @@ const baseOverview=(overrides={})=>({
  balance:{ok:true,balance:100000,currency:'JPY',currencyOk:true},
  payment:{paypay:true,kyash:false},
  settings:{panel_title:'フォロ爆 自販機',panel_description:'説明',panel_color:5793266,panel_image_url:null,public_log_channel_id:null,private_log_channel_id:null,paused:0,min_margin_percent:0,max_open_orders_per_user:5,min_supplier_balance_jpy:0},
- products:[{id:'p1',name:'X Followers',description:'',emoji:null,service_id:'101',service_name:'X Followers',service_category:'X',markup_percent:30,fee_jpy:0,min_qty:10,max_qty:0,link_kind:'x_profile',active:1,sales_count:3,live:{found:true,type:'Default',rate:500,min:10,max:10000,refill:true,cancel:false,supported:true},per1000:650,bounds:{min:10,max:10000}}],
+ products:[{id:'p1',name:'X Followers',description:'',emoji:null,service_id:'101',service_name:'X Followers',service_category:'X',markup_percent:30,fee_jpy:0,price_percent:130,min_qty:10,max_qty:0,link_kind:'x_profile',active:1,sales_count:3,live:{found:true,type:'Default',rate:500,min:10,max:10000,refill:true,cancel:false,supported:true},per1000:650,bounds:{min:10,max:10000}}],
  panels:[],
  summary:{byStatus:{hold:{count:1,amount:650}},refundRequired:{count:2,amount:1300}},
  servicesCachedAt:1,
@@ -129,7 +129,9 @@ test('a service can be turned into a product and server errors are explained in 
  const created=f.calls.filter(c=>c.path==='/products'&&c.method==='POST').at(-1).body;
  assert.equal(created.service_id,'101');
  assert.equal(created.link_kind,'x_profile');
- assert.equal(created.markup_percent,30);
+ assert.equal(created.price_percent,130);
+ assert.equal('fee_jpy' in created,false);
+ assert.equal(created.markup_percent,undefined);
  assert.equal(created.emoji,null);
 });
 

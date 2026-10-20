@@ -246,7 +246,7 @@ XUTILITY_BRIDGE_SECRET=<Xaccount-Bot側と同じ値>
 
 ## フォロ爆タブ
 
-管理サイトの **フォロ爆** タブから、Discord-Shiire経由でLuckyPanel(SMMパネル)のサービスを無在庫販売できます。サービス一覧から商品化、上乗せ率・手数料・数量の設定、Discordパネル設置、注文の確認・返金管理まで行えます。
+管理サイトの **フォロ爆** タブから、Discord-Shiire経由でLuckyPanel(SMMパネル)のサービスを無在庫販売できます。サービス一覧から商品化、販売価格(原価の%・101%以上)・数量の設定、Discordパネル設置、注文の確認・返金管理まで行えます。
 
 - 支払いはPayPayマネーのみ。既存の「仕入れbot自販機」と同じ受取処理を共用するため、決済資格情報は複製されません。
 - 必要な設定は Discord-Shiire 側の `LUCKYPANEL_API_KEY` のみです(`SHIIRE_BRIDGE_SECRET` / `SHIIRE_API_BASE_URL` は既存設定を共用)。
