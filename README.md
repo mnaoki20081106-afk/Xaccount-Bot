@@ -242,3 +242,12 @@ XUTILITY_BRIDGE_SECRET=<Xaccount-Bot側と同じ値>
 パネル投稿自体はXaccount-BotではなくX-Utility BOTが行います。Xaccount-BotはHMAC-SHA256署名付き内部APIで設置先だけを指示します。
 
 2FAのBase32シークレットはXaccount-Botへ送信されず、X-Utilityでも保存されません。Discordモーダルで受け取ったそのリクエスト内だけでTOTPを生成し、本人限定のEphemeralメッセージで返します。
+
+
+## フォロ爆タブ
+
+管理サイトの **フォロ爆** タブから、Discord-Shiire経由でLuckyPanel(SMMパネル)のサービスを無在庫販売できます。サービス一覧から商品化、上乗せ率・手数料・数量の設定、Discordパネル設置、注文の確認・返金管理まで行えます。
+
+- 支払いはPayPayマネーのみ。既存の「仕入れbot自販機」と同じ受取処理を共用するため、決済資格情報は複製されません。
+- 必要な設定は Discord-Shiire 側の `LUCKYPANEL_API_KEY` のみです(`SHIIRE_BRIDGE_SECRET` / `SHIIRE_API_BASE_URL` は既存設定を共用)。
+- 詳細・安全設計は Discord-Shiire の README を参照してください。

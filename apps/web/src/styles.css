@@ -4353,3 +4353,10 @@ body.dsm-touch-reordering .discord-category {
     flex: 1 1 130px;
   }
 }
+
+.smm-table-wrap { overflow-x: auto; margin-top: 8px; border: 1px solid #263149; border-radius: 10px; }
+.smm-table { width: 100%; border-collapse: collapse; font-size: 11px; color: #c4cee3; }
+.smm-table th, .smm-table td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid #1c2538; }
+.smm-table th { color: #7f8ba6; font-weight: 600; white-space: nowrap; }
+.smm-table td:nth-child(3), .smm-table td:nth-child(4) { white-space: nowrap; }
+.smm-create { margin-top: 14px; }

@@ -5,6 +5,7 @@ import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import ShiireOperationsCenter from "./ShiireOperationsCenter";
 import XUtilityManager from "./XUtilityManager";
+import FollowBombManager from "./FollowBombManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
@@ -157,7 +158,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "utility" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "followbomb" | "utility" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -805,6 +806,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-followbomb"
+                role="tab"
+                aria-controls="admin-panel-followbomb"
+                aria-selected={activeView === "followbomb"}
+                className={activeView === "followbomb" ? "active" : ""}
+                onClick={() => setActiveView("followbomb")}
+              >
+                フォロ爆
+              </button>
+              <button
+                type="button"
                 id="admin-tab-utility"
                 role="tab"
                 aria-controls="admin-panel-utility"
@@ -1329,6 +1341,24 @@ export default function App() {
                       guildId={selectedId!}
                       channels={meta.channels}
                       roles={meta.roles}
+                      onNotice={flash}
+                      onError={fail}
+                    />
+                  )}
+                </section>
+
+                <section
+                  id="admin-panel-followbomb"
+                  className="admin-tab-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-tab-followbomb"
+                  hidden={activeView !== "followbomb"}
+                >
+                  {activeView === "followbomb" && (
+                    <FollowBombManager
+                      key={"FollowBombManager:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
                       onNotice={flash}
                       onError={fail}
                     />
