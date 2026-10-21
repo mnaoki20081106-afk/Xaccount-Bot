@@ -89,6 +89,7 @@ import {
   handleShiireDashboardProxy,
   handleShiireServiceBridge
 } from "./shiire-bridge";
+import { handleGeneratorBridge } from "./generator-bridge";
 import {
   clearXUtilitySearchCredential,
   getXUtilitySearchCredentialStatus,
@@ -3506,6 +3507,8 @@ export default {
         if(shiireServiceResponse) return shiireServiceResponse;
         const shiireDashboardResponse=await handleShiireDashboardProxy(request,env,url);
         if(shiireDashboardResponse) return shiireDashboardResponse;
+        const generatorBridgeResponse=await handleGeneratorBridge(request,env,url);
+        if(generatorBridgeResponse) return generatorBridgeResponse;
         const backupResponse=await handleBackupApi(request,env,url);
         if(backupResponse) return backupResponse;
         const isVendingRoute=

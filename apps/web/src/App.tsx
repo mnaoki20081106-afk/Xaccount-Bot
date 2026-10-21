@@ -5,6 +5,7 @@ import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
 import ShiireOperationsCenter from "./ShiireOperationsCenter";
 import XUtilityManager from "./XUtilityManager";
+import XGeneratorManager from "./XGeneratorManager";
 import FollowBombManager from "./FollowBombManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
@@ -159,7 +160,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "followbomb" | "utility" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "followbomb" | "utility" | "generator" | "backup">("server");
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -838,6 +839,17 @@ export default function App() {
               >
                 バックアップ管理
               </button>
+              <button
+                type="button"
+                id="admin-tab-generator"
+                role="tab"
+                aria-controls="admin-panel-generator"
+                aria-selected={activeView === "generator"}
+                className={activeView === "generator" ? "active" : ""}
+                onClick={() => setActiveView("generator")}
+              >
+                垢生成
+              </button>
             </nav>
 
             {settings && (
@@ -1421,6 +1433,23 @@ export default function App() {
               onNotice={flash}
               onError={fail}
               />
+            </section>
+
+            <section
+              id="admin-panel-generator"
+              className="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="admin-tab-generator"
+              hidden={activeView !== "generator"}
+            >
+              {activeView === "generator" && selectedId && (
+                <XGeneratorManager
+                  key={"XGeneratorManager:"+selectedId}
+                  guildId={selectedId}
+                  onNotice={flash}
+                  onError={fail}
+                />
+              )}
             </section>
           </>
         )}

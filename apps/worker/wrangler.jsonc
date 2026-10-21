@@ -40,6 +40,7 @@
   },
   "vars": {
     "WEB_ORIGIN": "https://mnaoki20081106-afk.github.io",
-    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Xaccount-Bot/"
+    "WEB_PUBLIC_URL": "https://mnaoki20081106-afk.github.io/Xaccount-Bot/",
+    "GENERATOR_API_BASE_URL": ""
   }
 }
