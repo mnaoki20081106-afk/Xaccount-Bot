@@ -1901,6 +1901,78 @@ function verificationHtmlResponse(
   );
 }
 
+function preAuthConsentHtmlResponse(
+  mainOAuthUrl:string,
+  auths:ExternalAuthRow[]
+):Response{
+  const botListItems=auths.map(a=>{
+    const safe=escapeHtmlText(a.name);
+    return `<li><span class="bot-name">${safe}</span></li>`;
+  }).join("");
+  const externalUrlsJson=JSON.stringify(auths.map(a=>a.url));
+  const mainUrlAttr=escapeHtmlAttr(mainOAuthUrl);
+  const html=`<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>認証 — 全Botを一括認証</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#070b14;color:#eef3ff;padding:24px;margin:0;display:flex;align-items:center;min-height:100vh}
+main{max-width:520px;margin:auto;background:#10172a;border:1px solid #202943;border-radius:20px;padding:28px;width:100%}
+h1{margin:0 0 16px;font-size:1.2rem}
+.notice{background:#1e2d4a;border:1px solid #2d4a7a;border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:.9rem;line-height:1.7}
+.notice strong{color:#60a5fa}
+ul{list-style:none;padding:0;margin:0 0 22px}
+li{padding:8px 0;border-bottom:1px solid #1a2540;display:flex;align-items:center;gap:8px}
+li:last-child{border-bottom:none}
+li::before{content:"🤖";font-size:.9rem}
+.bot-name{font-weight:600}
+.btn{display:block;width:100%;padding:15px;background:#5865f2;color:#fff;border:none;border-radius:10px;font-size:1rem;font-weight:700;cursor:pointer}
+.btn:hover{background:#4752c4}
+.btn:disabled{background:#374151;cursor:not-allowed;opacity:.7}
+.hint{color:#94a3b8;font-size:.8rem;margin-top:12px;line-height:1.5}
+</style>
+<body>
+<main>
+  <h1>🔐 認証の確認</h1>
+  <div class="notice">
+    <strong>⚠️ このボタン1回で以下の全Botへの認証が行われます</strong><br>
+    下のボタンを押すと：<br>
+    ・ メインBotの認証（現在のタブ）<br>
+    ・ 以下 <strong>${escapeHtmlText(String(auths.length))} 個</strong> の追加Botの認証（新しいタブで同時に開く）<br>
+    が同時に開始されます。各Botの認証画面で「認証する」を押してください。
+  </div>
+  <ul>${botListItems}</ul>
+  <button class="btn" id="start-btn">全Botを一括認証する</button>
+  <p class="hint">ポップアップがブロックされた場合は、アドレスバーの許可を押してください。</p>
+</main>
+<script>
+(function(){
+  var externalUrls=${externalUrlsJson};
+  var mainUrl=${JSON.stringify(mainOAuthUrl)};
+  document.getElementById('start-btn').addEventListener('click',function(e){
+    e.preventDefault();
+    this.disabled=true;
+    externalUrls.forEach(function(u,i){
+      setTimeout(function(){window.open(u,'_blank','noopener,noreferrer');},i*80);
+    });
+    setTimeout(function(){location.href=mainUrl;},externalUrls.length*80+50);
+  });
+})();
+</script>
+</body>`;
+  return new Response(html,{
+    status:200,
+    headers:{
+      "Content-Type":"text/html; charset=utf-8",
+      "Cache-Control":"no-store",
+      "Referrer-Policy":"no-referrer",
+      "X-Content-Type-Options":"nosniff",
+      "Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+    }
+  });
+}
+
 function batchConsentHtmlResponse(
   roleName:string,
   auths:ExternalAuthRow[]
@@ -2055,7 +2127,10 @@ async function grantVerifiedRoleAfterOAuth(
 export async function handleRecoveryOAuth(
   request:Request,env:Env,url:URL
 ):Promise<Response|null>{
-  if(url.pathname==="/auth/verification/start"&&request.method==="GET"){
+  if(
+    (url.pathname==="/auth/verification/start"||url.pathname==="/auth/recovery/start")
+    &&request.method==="GET"
+  ){
     const guildId=String(url.searchParams.get("guild_id")??"");
     if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
     await ensureSchema(env);
@@ -2066,23 +2141,12 @@ export async function handleRecoveryOAuth(
     await botJson(env,"/guilds/"+guildId);
     const state=randomToken(24);
     await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
-    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state,false),302);
-  }
-
-  if(url.pathname==="/auth/recovery/start"&&request.method==="GET"){
-    // Backward compatibility for already-posted recovery panels:
-    // route them through the same verification + recovery registration flow.
-    const guildId=String(url.searchParams.get("guild_id")??"");
-    if(!/^\d+$/.test(guildId)) throw new BackupHttpError(400,"サーバーIDが不正です");
-    await ensureSchema(env);
-    const settings=await getGuildSettings(env,guildId);
-    if(!settings.verifiedRoleId){
-      throw new BackupHttpError(409,"認証ロールが設定されていません。管理者に確認してください");
+    const mainOAuthUrl=recoveryAuthorizeUrl(env,url.origin,state,false);
+    const externalAuths=await listExternalAuths(env,guildId);
+    if(externalAuths.length===0){
+      return Response.redirect(mainOAuthUrl,302);
     }
-    await botJson(env,"/guilds/"+guildId);
-    const state=randomToken(24);
-    await putRecoveryOAuthState(env,state,guildId,{purpose:"verification"});
-    return Response.redirect(recoveryAuthorizeUrl(env,url.origin,state,false),302);
+    return preAuthConsentHtmlResponse(mainOAuthUrl,externalAuths);
   }
 
   if(url.pathname==="/auth/discord/callback"&&request.method==="GET"){
