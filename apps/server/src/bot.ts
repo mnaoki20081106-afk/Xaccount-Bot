@@ -485,26 +485,22 @@ async function completeVerification(interaction: Interaction): Promise<void> {
   challenges.delete(challengeId);
 
   const externals = await listExternalAuths(interaction.guild.id).catch(() => []);
-  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
-  const usable = externals.filter((item) => /^https?:\/\//i.test(item.url)).slice(0, 25);
-  for (let i = 0; i < usable.length; i += 5) {
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        usable.slice(i, i + 5).map((item) =>
-          new ButtonBuilder()
-            .setStyle(ButtonStyle.Link)
-            .setLabel(item.name.slice(0, 80))
-            .setURL(item.url)
-        )
-      )
-    );
-  }
+  const hasExternal = externals.some((item) => /^https?:\/\//i.test(item.url));
   await interaction.reply({
     ephemeral: true,
-    content: rows.length
-      ? "認証が完了しました。続けて下のボタンから他Botの認証も完了してください。"
+    content: hasExternal
+      ? "認証が完了しました。下のボタンを1回押すと、他Botの認証もまとめて開きます。"
       : "認証が完了しました。",
-    components: rows
+    components: hasExternal
+      ? [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel("他Botもまとめて認証")
+              .setURL(`${env.API_PUBLIC_URL.replace(/\/$/, "")}/bulk-auth/${interaction.guild.id}`)
+          )
+        ]
+      : []
   });
 }
 

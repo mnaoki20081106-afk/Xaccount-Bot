@@ -404,6 +404,37 @@ app.delete("/api/guilds/:guildId/channels/:channelId", async (request) => {
   return { ok: true };
 });
 
+const escapeHtml = (v: string) =>
+  v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+app.get("/bulk-auth/:guildId", async (request, reply) => {
+  const { guildId } = z.object({ guildId: z.string().regex(/^\d+$/) }).parse(request.params);
+  const items = (await listExternalAuths(guildId)).filter((i) => /^https?:\/\//i.test(i.url));
+  const links = items
+    .map((i) => `<li><a href="${escapeHtml(i.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(i.name)}</a></li>`)
+    .join("");
+  const urls = JSON.stringify(items.map((i) => i.url)).replace(/</g, "\\u003c");
+  reply.header("content-type", "text/html; charset=utf-8");
+  reply.header("cache-control", "no-store");
+  return `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>まとめて認証</title>
+<body style="font-family:system-ui;max-width:520px;margin:40px auto;padding:0 16px;background:#111;color:#eee">
+<h1>他Botをまとめて認証</h1>
+<p>${items.length}件の認証ページを開きます。</p>
+<button id="go" style="font-size:18px;padding:14px 28px;border-radius:8px;border:0;background:#5865f2;color:#fff;cursor:pointer"${items.length ? "" : " disabled"}>まとめて認証を開始</button>
+<p id="msg"></p>
+<p>開かなかったものは個別に開いてください:</p><ul>${links}</ul>
+<script>
+const urls=${urls};
+document.getElementById("go").onclick=()=>{
+  let blocked=0;
+  for(const u of urls){ if(!window.open(u,"_blank","noopener")) blocked++; }
+  document.getElementById("msg").textContent = blocked
+    ? blocked+"件がポップアップブロックで開けませんでした。ブラウザのポップアップを許可して再度押すか、下のリンクから開いてください。"
+    : "すべて開きました。各タブで承認してください。";
+};
+</script></body></html>`;
+});
+
 app.get("/api/guilds/:guildId/external-auths", async (request) => {
   const { guildId } = z.object({ guildId: z.string() }).parse(request.params);
   await requireGuildAccess(request, guildId);
