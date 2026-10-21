@@ -21,6 +21,9 @@ import {
   listBotGuildCache,
   listKnownGuildIds,
   listPendingPayments,
+  listExternalAuths,
+  insertExternalAuth,
+  deleteExternalAuth,
   listProducts,
   markDelivered,
   putOAuthState,
@@ -3141,6 +3144,39 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     if(!product||product.guild_id!==productPanel[1]!||!product.active) throw new HttpError(404,"商品が見つかりません");
     const {channelId}=await bodyObject<{channelId:string}>(request);
     await publishProductPanel(env,productPanel[1]!,channelId,product);
+    return json(env,{ok:true});
+  }
+
+  const externalAuthsMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/external-auths$/);
+  if(externalAuthsMatch){
+    const guildId=externalAuthsMatch[1]!;
+    if(request.method==="GET"){
+      await requireGuild(request,env,guildId);
+      return json(env,await listExternalAuths(env,guildId));
+    }
+    if(request.method==="POST"){
+      await requireGuild(request,env,guildId);
+      const input=await bodyObject<{name?:unknown;url?:unknown}>(request);
+      const name=String(input.name??"").trim();
+      const rawUrl=String(input.url??"").trim();
+      if(!name||name.length>80) throw new HttpError(400,"名前を入力してください（80文字以内）");
+      if(!/^https:\/\/discord\.com\/oauth2\/authorize\?/.test(rawUrl)){
+        throw new HttpError(400,"Discord OAuthのURLを入力してください（https://discord.com/oauth2/authorize?...）");
+      }
+      const id=randomId();
+      await insertExternalAuth(env,{id,guild_id:guildId,name,url:rawUrl,created_at:Date.now()});
+      return json(env,{ok:true,id},201);
+    }
+    throw new HttpError(405,"Method Not Allowed");
+  }
+
+  const externalAuthItemMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/external-auths\/([^/]+)$/);
+  if(externalAuthItemMatch&&request.method==="DELETE"){
+    const guildId=externalAuthItemMatch[1]!;
+    await requireGuild(request,env,guildId);
+    if(!(await deleteExternalAuth(env,externalAuthItemMatch[2]!,guildId))){
+      throw new HttpError(404,"見つかりません");
+    }
     return json(env,{ok:true});
   }
 

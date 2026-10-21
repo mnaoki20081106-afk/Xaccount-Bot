@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '6');
 
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id TEXT PRIMARY KEY,
@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS bot_guild_membership (
   seen_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_guild_membership_seen_idx ON bot_guild_membership(seen_at);
+
+CREATE TABLE IF NOT EXISTS external_auths (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS external_auths_guild_idx ON external_auths(guild_id);
 `;
 
 const schemaInitializations = new WeakMap<D1Database, Promise<void>>();
@@ -127,8 +136,8 @@ export async function ensureSchema(env: Env): Promise<void> {
       await env.DB.batch([
         ...statements.map(sql => env.DB.prepare(sql)),
         env.DB.prepare(`
-          INSERT INTO meta(key, value) VALUES ('schema_version', '5')
-          ON CONFLICT(key) DO UPDATE SET value='5'
+          INSERT INTO meta(key, value) VALUES ('schema_version', '6')
+          ON CONFLICT(key) DO UPDATE SET value='6'
         `)
       ]);
     })();
@@ -533,4 +542,32 @@ export async function setAuditCursor(env:Env,guildId:string,lastEntryId:string):
       last_entry_id=excluded.last_entry_id,
       updated_at=excluded.updated_at
   `).bind(guildId,lastEntryId,Date.now()).run();
+}
+
+export type ExternalAuthRow = {
+  id: string;
+  guild_id: string;
+  name: string;
+  url: string;
+  created_at: number;
+};
+
+export async function listExternalAuths(env:Env,guildId:string): Promise<ExternalAuthRow[]> {
+  const result = await env.DB.prepare(
+    "SELECT id,guild_id,name,url,created_at FROM external_auths WHERE guild_id=? ORDER BY created_at ASC"
+  ).bind(guildId).all<ExternalAuthRow>();
+  return result.results ?? [];
+}
+
+export async function insertExternalAuth(env:Env,row:ExternalAuthRow): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO external_auths(id,guild_id,name,url,created_at) VALUES (?,?,?,?,?)"
+  ).bind(row.id,row.guild_id,row.name,row.url,row.created_at).run();
+}
+
+export async function deleteExternalAuth(env:Env,id:string,guildId:string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    "DELETE FROM external_auths WHERE id=? AND guild_id=?"
+  ).bind(id,guildId).run();
+  return (result.meta?.changes ?? 0) > 0;
 }
