@@ -24,6 +24,7 @@ import {
 } from "discord.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { env } from "./config.js";
+import { listExternalAuths } from "./external-auth.js";
 import { decrypt as decryptLink, encrypt } from "./crypto.js";
 import {
   claimPaymentLink,
@@ -482,7 +483,29 @@ async function completeVerification(interaction: Interaction): Promise<void> {
   const member = await interaction.guild.members.fetch(interaction.user.id);
   await member.roles.add(role, "Discord Server Manager verification");
   challenges.delete(challengeId);
-  await interaction.reply({ ephemeral: true, content: "認証が完了しました。" });
+
+  const externals = await listExternalAuths(interaction.guild.id).catch(() => []);
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  const usable = externals.filter((item) => /^https?:\/\//i.test(item.url)).slice(0, 25);
+  for (let i = 0; i < usable.length; i += 5) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        usable.slice(i, i + 5).map((item) =>
+          new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel(item.name.slice(0, 80))
+            .setURL(item.url)
+        )
+      )
+    );
+  }
+  await interaction.reply({
+    ephemeral: true,
+    content: rows.length
+      ? "認証が完了しました。続けて下のボタンから他Botの認証も完了してください。"
+      : "認証が完了しました。",
+    components: rows
+  });
 }
 
 async function createTicket(interaction: Interaction): Promise<void> {
