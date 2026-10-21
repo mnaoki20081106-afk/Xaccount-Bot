@@ -419,19 +419,30 @@ app.get("/bulk-auth/:guildId", async (request, reply) => {
   return `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>まとめて認証</title>
 <body style="font-family:system-ui;max-width:520px;margin:40px auto;padding:0 16px;background:#111;color:#eee">
 <h1>他Botをまとめて認証</h1>
-<p>${items.length}件の認証ページを開きます。</p>
+<p>${items.length}件を順番に開きます。各画面で「認証」を押すと自動で次へ進みます。</p>
 <button id="go" style="font-size:18px;padding:14px 28px;border-radius:8px;border:0;background:#5865f2;color:#fff;cursor:pointer"${items.length ? "" : " disabled"}>まとめて認証を開始</button>
-<p id="msg"></p>
-<p>開かなかったものは個別に開いてください:</p><ul>${links}</ul>
+<p id="msg"></p><ol id="list">${items.map((i) => `<li data-n="1">${escapeHtml(i.name)} <span>待機中</span></li>`).join("")}</ol>
+<button id="skip" hidden style="padding:8px 16px;border-radius:6px;border:0;background:#444;color:#eee;cursor:pointer">この項目を完了して次へ</button>
+<p>うまく進まない場合は個別に開けます:</p><ul>${links}</ul>
 <script>
 const urls=${urls};
-document.getElementById("go").onclick=()=>{
-  let blocked=0;
-  for(const u of urls){ if(!window.open(u,"_blank","noopener")) blocked++; }
-  document.getElementById("msg").textContent = blocked
-    ? blocked+"件がポップアップブロックで開けませんでした。ブラウザのポップアップを許可して再度押すか、下のリンクから開いてください。"
-    : "すべて開きました。各タブで承認してください。";
-};
+const rows=[...document.querySelectorAll("#list li span")];
+const msg=document.getElementById("msg"), skip=document.getElementById("skip"), go=document.getElementById("go");
+let i=-1, win=null, timer=null;
+function next(){
+  clearInterval(timer);
+  if(i>=0) rows[i].textContent="完了";
+  i++;
+  if(i>=urls.length){ msg.textContent="すべて完了しました。"; skip.hidden=true; return; }
+  rows[i].textContent="認証中...";
+  win=window.open(urls[i],"dsm_bulk_auth","width=520,height=760");
+  if(!win){ msg.textContent="ポップアップがブロックされました。許可してもう一度押してください。"; rows[i].textContent="待機中"; i--; go.disabled=false; return; }
+  msg.textContent=(i+1)+"/"+urls.length+" 件目: 画面の指示に従って認証し、終わったらウィンドウを閉じてください。";
+  skip.hidden=false;
+  timer=setInterval(()=>{ if(win.closed) next(); },500);
+}
+go.onclick=()=>{ go.disabled=true; next(); };
+skip.onclick=()=>{ try{win&&win.close();}catch(e){} next(); };
 </script></body></html>`;
 });
 
