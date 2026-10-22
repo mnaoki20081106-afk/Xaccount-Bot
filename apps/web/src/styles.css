@@ -4440,3 +4440,16 @@ body.dsm-touch-reordering .discord-category {
     flex-direction: column;
   }
 }
+
+/* トグル/フィルターのボタン列（PC・スマホ切替、絞り込みタブなど）は
+   スマホでも横並びのまま折り返す。保存・削除のような単発の操作ボタンは
+   従来通り縦に積んで押しやすい全幅のまま変えない。 */
+@media (max-width: 760px) {
+  .button-row.wrap-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .button-row.wrap-row > * {
+    flex: 1 1 110px;
+  }
+}

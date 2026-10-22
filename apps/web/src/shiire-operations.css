@@ -151,3 +151,30 @@
 
 .discord-panel-description pre{margin:8px 0 0;padding:12px;border:1px solid #4a4b55;border-radius:8px;background:#343541;white-space:pre-wrap;overflow-wrap:anywhere}
 .discord-panel-description pre code{padding:0;background:transparent;border-radius:0;font-size:inherit;white-space:pre-wrap}
+
+/* 運用状況カードの上部: "緊急停止"/"更新" は実際に押せるボタン、
+   その下の帯（テスト運転・自動仕入れ・資金・更新時刻）はただの状態表示。
+   どちらもピル型だと見分けがつかないため、状態表示側はボタンに見えない
+   プレーンテキストに変える。ボタン側(.shiire-hero-actions button)は
+   styles.css の .primary/.secondary/.danger のまま触っていない。 */
+.shiire-safety-strip{
+  row-gap:6px;
+  column-gap:0;
+}
+.shiire-safety-strip span{
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:#8796b2;
+  font-size:10px;
+  font-weight:700;
+}
+.shiire-safety-strip span:not(:first-child)::before{
+  content:"・";
+  margin:0 8px;
+  color:#3c4a66;
+  font-weight:400;
+}
+.shiire-safety-strip .safe{color:#94e5b3}
+.shiire-safety-strip .live{color:#f1a2aa}

@@ -20,7 +20,7 @@ export default function ShiirePanelPreview({machine,products,onTitle,onDescripti
   const embed=payload.embeds[0];
   return <section className="shiire-panel-studio" aria-label="自販機パネルのプレビュー">
     <div className="section-head"><div><h3>パネルを見ながら編集</h3><p>タイトル・説明・商品を選んで編集できます。変更後は保存して反映してください。</p></div>
-      <div className="button-row" aria-label="プレビュー幅"><button type="button" className="secondary" aria-pressed={viewOnly} onClick={()=>{setEditing(null);setViewOnly(value=>!value);}}>{viewOnly?"編集に戻る":"表示のみ"}</button><button type="button" className="secondary" aria-pressed={!mobile} onClick={()=>setMobile(false)}>PC</button><button type="button" className="secondary" aria-pressed={mobile} onClick={()=>setMobile(true)}>スマホ</button></div>
+      <div className="button-row wrap-row" aria-label="プレビュー幅"><button type="button" className="secondary" aria-pressed={viewOnly} onClick={()=>{setEditing(null);setViewOnly(value=>!value);}}>{viewOnly?"編集に戻る":"表示のみ"}</button><button type="button" className="secondary" aria-pressed={!mobile} onClick={()=>setMobile(false)}>PC</button><button type="button" className="secondary" aria-pressed={mobile} onClick={()=>setMobile(true)}>スマホ</button></div>
     </div>
     <div className={"discord-panel-preview"+(mobile?" is-mobile":"")} data-testid="discord-panel-preview">
       <div className="discord-panel-embed" style={{borderLeftColor:"#"+embed.color.toString(16).padStart(6,"0")}}>

@@ -171,7 +171,7 @@ export default function PanelOverview({
         </article>
       </div>
 
-      <div className="button-row panel-overview-filter" role="tablist" aria-label="Botで絞り込み">
+      <div className="button-row wrap-row panel-overview-filter" role="tablist" aria-label="Botで絞り込み">
         {(["all","自販機Bot","仕入れBot"] as const).map(value=>(
           <button
             key={value}
