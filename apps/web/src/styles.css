@@ -4453,3 +4453,26 @@ body.dsm-touch-reordering .discord-category {
     flex: 1 1 110px;
   }
 }
+
+/* 垢生成管理タブ: 他の管理画面（仕入れbot運用状況など）と同じカード積み
+   レイアウトに揃える。インラインstyleをやめ、既存のデザインシステム
+   （.card / .section-head / .metric-grid / .status-pill / .form-grid /
+   .button-row / .toggle-row / .smm-table）だけで組む。 */
+.x-generator-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.x-generator-manager > .card {
+  padding: 24px;
+}
+.x-generator-manager details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  color: #cbd7ec;
+  font-size: 13px;
+  font-weight: 700;
+}
+.x-generator-manager details[open] > summary {
+  margin-bottom: 10px;
+}

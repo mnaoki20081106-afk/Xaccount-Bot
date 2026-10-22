@@ -51,6 +51,38 @@ type AccountRow = {
 
 type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push";
 
+const STATUS_LABEL: Record<string, string> = {
+  clean: "CLEAN",
+  warming: "WARMING",
+  created: "CREATED",
+  soft_shadow: "SOFT SHADOW",
+  hard_shadow: "HARD SHADOW",
+  locked: "LOCKED",
+  suspended: "SUSPENDED",
+  sold: "SOLD"
+};
+
+const STATUS_TONE: Record<string, "good" | "warn" | "bad" | ""> = {
+  clean: "good",
+  warming: "warn",
+  created: "",
+  soft_shadow: "warn",
+  hard_shadow: "bad",
+  locked: "bad",
+  suspended: "bad",
+  sold: ""
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const tone = STATUS_TONE[status] ?? "";
+  return (
+    <span className={`status-pill ${tone}`}>
+      <i />
+      {STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
+
 export default function XGeneratorManager({ guildId, onNotice, onError }: Props) {
   const [activeTab, setActiveTab] = useState<ActiveTab>("status");
 
@@ -67,7 +99,6 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [accountsFeedback, setAccountsFeedback] = useState<Feedback | null>(null);
 
   const [config, setConfig] = useState<ConfigData | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
   const [configFeedback, setConfigFeedback] = useState<Feedback | null>(null);
 
   const [genCount, setGenCount] = useState("3");
@@ -113,12 +144,10 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   }, [base, accountFilter]);
 
   const loadConfig = useCallback(() => {
-    setConfigLoading(true);
     setConfigFeedback(null);
     api<ConfigData>(base + "/config")
       .then(data => setConfig(data))
-      .catch(err => setConfigFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
-      .finally(() => setConfigLoading(false));
+      .catch(err => setConfigFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
   }, [base]);
 
   useEffect(() => {
@@ -185,334 +214,286 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
       .finally(() => setPushBusy(false));
   };
 
-  const statusBadge = (s: string) => {
-    const colors: Record<string, string> = {
-      clean: "#22c55e",
-      warming: "#f59e0b",
-      created: "#94a3b8",
-      soft_shadow: "#f97316",
-      hard_shadow: "#ef4444",
-      locked: "#dc2626",
-      suspended: "#7f1d1d",
-      sold: "#64748b"
-    };
-    return (
-      <span style={{
-        display: "inline-block",
-        padding: "1px 7px",
-        borderRadius: 9999,
-        fontSize: 11,
-        fontWeight: 600,
-        background: colors[s] ?? "#6b7280",
-        color: "#fff"
-      }}>{s}</span>
-    );
-  };
-
   const tabs: { key: ActiveTab; label: string }[] = [
     { key: "status", label: "ステータス" },
     { key: "inventory", label: "在庫" },
-    { key: "accounts", label: "アカウント一覧" },
+    { key: "accounts", label: "アカウント" },
     { key: "generate", label: "垢生成" },
     { key: "push", label: "自販機に追加" }
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>垢生成管理</h2>
+    <div className="x-generator-manager">
+      <section className="card">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">X ACCOUNT GENERATOR</span>
+            <h2>垢生成管理</h2>
+            <p className="muted">アカウント生成botの稼働状況・在庫・生成・自販機への追加をまとめて管理します。</p>
+          </div>
+        </div>
 
-      <nav style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border-color, #e2e8f0)", flexWrap: "wrap" }}>
-        {tabs.map(t => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setActiveTab(t.key)}
-            style={{
-              padding: "6px 14px",
-              border: "none",
-              borderBottom: activeTab === t.key ? "2px solid currentColor" : "2px solid transparent",
-              background: "transparent",
-              cursor: "pointer",
-              fontWeight: activeTab === t.key ? 600 : 400,
-              opacity: activeTab === t.key ? 1 : 0.6,
-              fontSize: 14
-            }}
-          >{t.label}</button>
-        ))}
-      </nav>
+        <nav className="vending-section-nav" aria-label="垢生成の管理メニュー">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              type="button"
+              aria-pressed={activeTab === t.key}
+              onClick={() => setActiveTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </section>
 
       {activeTab === "status" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button type="button" onClick={loadStatus} disabled={statusLoading} className="btn">
-              {statusLoading ? "読み込み中…" : "更新"}
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>ステータス</h3>
+              <p className="muted">現在保有しているアカウントの内訳と、生成ジョブの稼働状況です。</p>
+            </div>
+            <button type="button" className="secondary" onClick={loadStatus} disabled={statusLoading}>
+              {statusLoading ? "更新中…" : "更新"}
             </button>
           </div>
-          {statusFeedback && (
-            <p style={{ color: statusFeedback.kind === "error" ? "var(--error-color, #ef4444)" : "inherit" }}>
-              {statusFeedback.message}
-            </p>
-          )}
+          {statusFeedback && <div className="alert error">{statusFeedback.message}</div>}
           {status && (
             <>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div className="metric-grid">
                 {[
-                  { label: "合計", value: status.total, color: "#6366f1" },
-                  { label: "CLEAN", value: status.by_status["clean"] ?? 0, color: "#22c55e" },
-                  { label: "WARMING", value: status.by_status["warming"] ?? 0, color: "#f59e0b" },
-                  { label: "CREATED", value: status.by_status["created"] ?? 0, color: "#94a3b8" },
-                  { label: "SHADOW", value: (status.by_status["soft_shadow"] ?? 0) + (status.by_status["hard_shadow"] ?? 0), color: "#ef4444" },
-                  { label: "SOLD", value: status.by_status["sold"] ?? 0, color: "#64748b" }
+                  { label: "合計", value: status.total },
+                  { label: "CLEAN", value: status.by_status["clean"] ?? 0 },
+                  { label: "WARMING", value: status.by_status["warming"] ?? 0 },
+                  { label: "CREATED", value: status.by_status["created"] ?? 0 },
+                  { label: "SHADOW", value: (status.by_status["soft_shadow"] ?? 0) + (status.by_status["hard_shadow"] ?? 0) },
+                  { label: "SOLD", value: status.by_status["sold"] ?? 0 }
                 ].map(s => (
-                  <div key={s.label} style={{
-                    background: "var(--card-bg, #f8fafc)",
-                    border: "1px solid var(--border-color, #e2e8f0)",
-                    borderRadius: 8,
-                    padding: "12px 18px",
-                    minWidth: 80,
-                    textAlign: "center"
-                  }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
-                    <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{s.label}</div>
-                  </div>
+                  <article className="metric card" key={s.label}>
+                    <span>{s.label}</span>
+                    <strong>{s.value}</strong>
+                  </article>
                 ))}
               </div>
-              <div style={{
-                padding: "10px 14px",
-                borderRadius: 8,
-                background: status.orchestrator_running ? "rgba(34,197,94,0.1)" : "rgba(148,163,184,0.1)",
-                border: "1px solid " + (status.orchestrator_running ? "rgba(34,197,94,0.3)" : "rgba(148,163,184,0.3)"),
-                fontSize: 13
-              }}>
-                オーケストレーター:{" "}
-                <strong>{status.orchestrator_running ? "実行中 (目標: " + status.orchestrator_target + " 垢)" : "停止中"}</strong>
-              </div>
+              <span className={`status-pill ${status.orchestrator_running ? "good" : ""}`}>
+                <i />
+                オーケストレーター: {status.orchestrator_running ? `実行中（目標 ${status.orchestrator_target} 垢）` : "停止中"}
+              </span>
             </>
           )}
-        </div>
+        </section>
       )}
 
       {activeTab === "inventory" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <button type="button" onClick={loadInventory} disabled={inventoryLoading} className="btn">
-            {inventoryLoading ? "読み込み中…" : "更新"}
-          </button>
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>在庫</h3>
+              <p className="muted">状態ごとのアカウント件数です。</p>
+            </div>
+            <button type="button" className="secondary" onClick={loadInventory} disabled={inventoryLoading}>
+              {inventoryLoading ? "更新中…" : "更新"}
+            </button>
+          </div>
           {inventory && (
-            <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14 }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid var(--border-color, #e2e8f0)", textAlign: "left" }}>
-                  <th style={{ padding: "6px 10px" }}>ステータス</th>
-                  <th style={{ padding: "6px 10px", textAlign: "right" }}>件数</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(["clean","warming","created","soft_shadow","hard_shadow","locked","suspended","sold"] as const).map(s => (
-                  <tr key={s} style={{ borderBottom: "1px solid var(--border-color, #e2e8f0)" }}>
-                    <td style={{ padding: "6px 10px" }}>{statusBadge(s)}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>
-                      {inventory[s] ?? 0}
-                    </td>
+            <div className="smm-table-wrap">
+              <table className="smm-table">
+                <thead>
+                  <tr>
+                    <th>ステータス</th>
+                    <th>件数</th>
                   </tr>
-                ))}
-                <tr style={{ borderTop: "2px solid var(--border-color, #e2e8f0)", fontWeight: 700 }}>
-                  <td style={{ padding: "6px 10px" }}>合計</td>
-                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{inventory.total}</td>
-                </tr>
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(["clean", "warming", "created", "soft_shadow", "hard_shadow", "locked", "suspended", "sold"] as const).map(s => (
+                    <tr key={s}>
+                      <td><StatusBadge status={s} /></td>
+                      <td>{inventory[s] ?? 0}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td><strong>合計</strong></td>
+                    <td><strong>{inventory.total}</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           )}
-        </div>
+        </section>
       )}
 
       {activeTab === "accounts" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <select
-              value={accountFilter}
-              onChange={e => setAccountFilter(e.target.value)}
-              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13 }}
-            >
-              <option value="">全ステータス</option>
-              {["created","warming","clean","soft_shadow","hard_shadow","locked","suspended","sold"].map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <button type="button" onClick={loadAccounts} disabled={accountsLoading} className="btn">
-              {accountsLoading ? "読み込み中…" : "検索"}
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>アカウント一覧</h3>
+              <p className="muted">ステータスで絞り込んで確認できます。</p>
+            </div>
+          </div>
+          <div className="form-grid two">
+            <label className="field">
+              <span>ステータス</span>
+              <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
+                <option value="">全ステータス</option>
+                {["created", "warming", "clean", "soft_shadow", "hard_shadow", "locked", "suspended", "sold"].map(s => (
+                  <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="button-row">
+            <button type="button" className="primary" onClick={loadAccounts} disabled={accountsLoading}>
+              {accountsLoading ? "検索中…" : "検索"}
             </button>
           </div>
-          {accountsFeedback && (
-            <p style={{ color: "var(--error-color, #ef4444)" }}>{accountsFeedback.message}</p>
-          )}
+          {accountsFeedback && <div className="alert error">{accountsFeedback.message}</div>}
           {accounts.length > 0 && (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+            <div className="smm-table-wrap">
+              <table className="smm-table">
                 <thead>
-                  <tr style={{ borderBottom: "2px solid var(--border-color, #e2e8f0)", textAlign: "left" }}>
-                    <th style={{ padding: "5px 8px" }}>ID</th>
-                    <th style={{ padding: "5px 8px" }}>ユーザー名</th>
-                    <th style={{ padding: "5px 8px" }}>ステータス</th>
-                    <th style={{ padding: "5px 8px", textAlign: "right" }}>シャドウスコア</th>
-                    <th style={{ padding: "5px 8px" }}>作成日時</th>
-                    <th style={{ padding: "5px 8px" }}>最終操作</th>
+                  <tr>
+                    <th>ID</th>
+                    <th>ユーザー名</th>
+                    <th>ステータス</th>
+                    <th>シャドウスコア</th>
+                    <th>作成日時</th>
+                    <th>最終操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {accounts.map(a => (
-                    <tr key={a.id} style={{ borderBottom: "1px solid var(--border-color, #e2e8f0)" }}>
-                      <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{a.id}</td>
-                      <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{a.username}</td>
-                      <td style={{ padding: "5px 8px" }}>{statusBadge(a.status)}</td>
-                      <td style={{ padding: "5px 8px", textAlign: "right", fontFamily: "monospace" }}>
-                        {a.shadow_score.toFixed(2)}
-                      </td>
-                      <td style={{ padding: "5px 8px", fontSize: 11, opacity: 0.7 }}>
-                        {a.created_at ? new Date(a.created_at).toLocaleString("ja-JP") : "-"}
-                      </td>
-                      <td style={{ padding: "5px 8px", fontSize: 11, opacity: 0.7 }}>
-                        {a.last_action_at ? new Date(a.last_action_at).toLocaleString("ja-JP") : "-"}
-                      </td>
+                    <tr key={a.id}>
+                      <td>{a.id}</td>
+                      <td>{a.username}</td>
+                      <td><StatusBadge status={a.status} /></td>
+                      <td>{a.shadow_score.toFixed(2)}</td>
+                      <td>{a.created_at ? new Date(a.created_at).toLocaleString("ja-JP") : "—"}</td>
+                      <td>{a.last_action_at ? new Date(a.last_action_at).toLocaleString("ja-JP") : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          {accounts.length === 0 && !accountsLoading && (
-            <p style={{ opacity: 0.5, fontSize: 13 }}>「検索」を押してアカウントを表示してください。</p>
-          )}
-        </div>
+          {accounts.length === 0 && !accountsLoading && <p className="muted">「検索」を押してアカウントを表示してください。</p>}
+        </section>
       )}
 
       {activeTab === "generate" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>垢生成</h3>
+              <p className="muted">プロキシ・SMS・Captchaの設定に沿ってアカウントを生成します。</p>
+            </div>
+          </div>
+
           {config && (
-            <details open>
-              <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>現在の設定</summary>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, paddingLeft: 12 }}>
-                <div><strong>プロキシ:</strong> {config.proxy.provider} — {config.proxy.host}:{config.proxy.port} ({config.proxy.country})</div>
-                <div><strong>SMS:</strong> {config.sms.provider} — {config.sms.preferred_countries.join(", ")}</div>
-                <div><strong>Captcha:</strong> {config.captcha.provider}{config.captcha.provider_fallback ? " / " + config.captcha.provider_fallback : ""}</div>
-                <div><strong>上限:</strong> {config.factory.max_per_hour} 垢/時間、電話認証: {config.factory.use_phone ? "有効" : "無効"}</div>
-                <div><strong>ウォームアップ:</strong> {config.warmup.min_days_before_sale} 日以上 / {config.warmup.actions_per_day_soft} アクション/日</div>
+            <details>
+              <summary>現在の設定</summary>
+              <div className="list-stack">
+                <div className="serverless-note">
+                  <strong>プロキシ</strong>
+                  <span>{config.proxy.provider} — {config.proxy.host}:{config.proxy.port}（{config.proxy.country}）</span>
+                </div>
+                <div className="serverless-note">
+                  <strong>SMS</strong>
+                  <span>{config.sms.provider} — {config.sms.preferred_countries.join(", ")}</span>
+                </div>
+                <div className="serverless-note">
+                  <strong>Captcha</strong>
+                  <span>{config.captcha.provider}{config.captcha.provider_fallback ? " / " + config.captcha.provider_fallback : ""}</span>
+                </div>
+                <div className="serverless-note">
+                  <strong>生成上限</strong>
+                  <span>{config.factory.max_per_hour} 垢/時間 ・ 電話認証 {config.factory.use_phone ? "有効" : "無効"}</span>
+                </div>
+                <div className="serverless-note">
+                  <strong>ウォームアップ</strong>
+                  <span>{config.warmup.min_days_before_sale} 日以上 ・ {config.warmup.actions_per_day_soft} アクション/日</span>
+                </div>
               </div>
             </details>
           )}
-          {configFeedback && (
-            <p style={{ color: "var(--error-color, #ef4444)", fontSize: 13 }}>{configFeedback.message}</p>
-          )}
+          {configFeedback && <div className="alert error">{configFeedback.message}</div>}
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 380 }}>
-            <label style={{ fontSize: 14, fontWeight: 600 }}>垢生成</label>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <label style={{ fontSize: 13, minWidth: 60 }}>生成数</label>
-              <input
-                type="number"
-                value={genCount}
-                onChange={e => setGenCount(e.target.value)}
-                min={1} max={100}
-                style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13 }}
-              />
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <label style={{ fontSize: 13, minWidth: 60 }}>同時数</label>
-              <input
-                type="number"
-                value={genConcurrency}
-                onChange={e => setGenConcurrency(e.target.value)}
-                min={1} max={10}
-                style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13 }}
-              />
-            </div>
+          <div className="form-grid two">
+            <label className="field">
+              <span>生成数</span>
+              <input type="number" min={1} max={100} value={genCount} onChange={e => setGenCount(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>同時実行数</span>
+              <input type="number" min={1} max={10} value={genConcurrency} onChange={e => setGenConcurrency(e.target.value)} />
+            </label>
+          </div>
+          <div className="button-row">
             <button
               type="button"
+              className="primary"
               onClick={handleGenerate}
               disabled={genBusy || (status?.orchestrator_running ?? false)}
-              className="btn btn-primary"
-              style={{ alignSelf: "flex-start" }}
             >
               {genBusy ? "開始中…" : status?.orchestrator_running ? "実行中" : "垢生成を開始"}
             </button>
           </div>
           {genFeedback && (
-            <p style={{
-              color: genFeedback.kind === "error" ? "var(--error-color, #ef4444)" : "var(--success-color, #22c55e)",
-              fontSize: 13
-            }}>{genFeedback.message}</p>
+            <div className={genFeedback.kind === "error" ? "alert error" : "alert success"}>{genFeedback.message}</div>
           )}
-        </div>
+        </section>
       )}
 
       {activeTab === "push" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 440 }}>
-          <p style={{ fontSize: 13, opacity: 0.7, margin: 0 }}>
-            Generatorの CLEAN 垢を取り出し、Discord-Shiire の自販機サプライヤープールに追加します。
-          </p>
-
-          {[
-            { label: "サプライヤーID", value: pushSupplierId, set: setPushSupplierId, placeholder: "supplier_xxxx" },
-            { label: "SKU", value: pushSku, set: setPushSku, placeholder: "x_account_clean" }
-          ].map(f => (
-            <div key={f.label} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <label style={{ fontSize: 13, minWidth: 130 }}>{f.label}</label>
-              <input
-                type="text"
-                value={f.value}
-                onChange={e => f.set(e.target.value)}
-                placeholder={f.placeholder}
-                style={{ flex: 1, padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13, fontFamily: "monospace" }}
-              />
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>自販機に追加</h3>
+              <p className="muted">
+                CLEANなアカウントをジェネレーターから取り出し、仕入れbot（Discord-Shiire）の自販機サプライヤープールへ追加します。
+              </p>
             </div>
-          ))}
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label style={{ fontSize: 13, minWidth: 130 }}>件数</label>
-            <input
-              type="number"
-              value={pushCount}
-              onChange={e => setPushCount(e.target.value)}
-              min={1} max={200}
-              style={{ width: 80, padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13 }}
-            />
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label style={{ fontSize: 13, minWidth: 130 }}>最低ウォームアップ日数</label>
-            <input
-              type="number"
-              value={pushMinDays}
-              onChange={e => setPushMinDays(e.target.value)}
-              min={0}
-              style={{ width: 80, padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border-color, #e2e8f0)", fontSize: 13 }}
-            />
+          <div className="form-grid two">
+            <label className="field">
+              <span>サプライヤーID</span>
+              <input value={pushSupplierId} onChange={e => setPushSupplierId(e.target.value)} placeholder="supplier_xxxx" />
+            </label>
+            <label className="field">
+              <span>SKU</span>
+              <input value={pushSku} onChange={e => setPushSku(e.target.value)} placeholder="x_account_clean" />
+            </label>
+            <label className="field">
+              <span>件数</span>
+              <input type="number" min={1} max={200} value={pushCount} onChange={e => setPushCount(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>最低ウォームアップ日数</span>
+              <input type="number" min={0} value={pushMinDays} onChange={e => setPushMinDays(e.target.value)} />
+            </label>
           </div>
 
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={pushAllowSoft}
-              onChange={e => setPushAllowSoft(e.target.checked)}
-            />
-            SOFT_SHADOW も含める
+          <label className="toggle-row">
+            <span className="toggle-copy">
+              <strong>SOFT_SHADOWも含める</strong>
+              <small>CLEANだけで足りない場合に、軽いシャドウバン疑いのアカウントも対象にします。</small>
+            </span>
+            <span className={`switch ${pushAllowSoft ? "on" : ""}`}>
+              <input type="checkbox" checked={pushAllowSoft} onChange={e => setPushAllowSoft(e.target.checked)} />
+              <span />
+            </span>
           </label>
 
-          <button
-            type="button"
-            onClick={handlePush}
-            disabled={pushBusy}
-            className="btn btn-primary"
-            style={{ alignSelf: "flex-start" }}
-          >
-            {pushBusy ? "追加中…" : "自販機に追加"}
-          </button>
-
+          <div className="button-row">
+            <button type="button" className="primary" onClick={handlePush} disabled={pushBusy}>
+              {pushBusy ? "追加中…" : "自販機に追加"}
+            </button>
+          </div>
           {pushFeedback && (
-            <p style={{
-              color: pushFeedback.kind === "error" ? "var(--error-color, #ef4444)" : "var(--success-color, #22c55e)",
-              fontSize: 13
-            }}>{pushFeedback.message}</p>
+            <div className={pushFeedback.kind === "error" ? "alert error" : "alert success"}>{pushFeedback.message}</div>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
