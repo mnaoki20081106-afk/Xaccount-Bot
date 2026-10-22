@@ -312,15 +312,26 @@ export default function ShiireOperationsCenter({
   channels,
   roles,
   onNotice,
-  onError
+  onError,
+  focusMachineId
 }:{
   guildId:string;
   channels:Channel[];
   roles:Role[];
   onNotice:(message:string)=>void;
   onError:(reason:unknown)=>void;
+  // Set by the "パネル管理" overview when the operator jumps here to edit a
+  // specific machine. Applied once per value change, then left alone so the
+  // operator's own navigation afterwards is never overridden.
+  focusMachineId?:string|null;
 }){
   const [section,setSection]=useState<Section>("overview");
+  const focusedMachineRef=useRef<string|null>(null);
+  useEffect(()=>{
+    if(!focusMachineId||focusMachineId===focusedMachineRef.current) return;
+    focusedMachineRef.current=focusMachineId;
+    setSection("vending");
+  },[focusMachineId]);
   const [advanced,setAdvanced]=useState(false);
   const savedPurchase=useRef<Record<string,string>>({});
   const mainSection=["overview","vending","logs"].includes(section)?section:"budget";
@@ -2161,6 +2172,7 @@ export default function ShiireOperationsCenter({
           roles={roles}
           onNotice={onNotice}
           onError={onError}
+          focusMachineId={focusMachineId}
         />
       )}
 

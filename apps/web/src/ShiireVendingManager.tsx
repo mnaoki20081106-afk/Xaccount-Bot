@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_PANEL_COLOR, isPanelColor, PANEL_FORMAT_VERSION } from "./shiire-panel-payload";
 import { ApiError, api } from "./api";
 const ShiirePanelPreview=lazy(()=>import("./ShiirePanelPreview"));
@@ -144,14 +144,20 @@ export default function ShiireVendingManager({
   channels,
   roles,
   onNotice,
-  onError
+  onError,
+  focusMachineId
 }:{
   guildId:string;
   channels:Channel[];
   roles:Role[];
   onNotice:(message:string)=>void;
   onError:(reason:unknown)=>void;
+  // Set by the "パネル管理" overview when the operator jumps here to edit a
+  // specific machine. Applied once per value change, then left alone so the
+  // operator's own selection afterwards is never overridden.
+  focusMachineId?:string|null;
 }){
+  const focusedMachineRef=useRef<string|null>(null);
   const [status,setStatus]=useState<Status|null>(null);
   const [machines,setMachines]=useState<Machine[]>([]);
   const [sources,setSources]=useState<SourceProduct[]>([]);
@@ -250,6 +256,14 @@ export default function ShiireVendingManager({
   }
 
   useEffect(()=>{void load()},[guildId]);
+
+  useEffect(()=>{
+    if(!focusMachineId||focusMachineId===focusedMachineRef.current) return;
+    focusedMachineRef.current=focusMachineId;
+    setEditingProductId("");
+    setProductDrafts({});
+    void load(focusMachineId);
+  },[focusMachineId]);
 
   useEffect(()=>{
     applySelected(selected);

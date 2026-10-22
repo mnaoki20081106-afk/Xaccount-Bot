@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { botFetch, botJson } from "./discord";
 import { getDashboardSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
-import { recordPanelDeployment } from "./backup-db";
+import { listPanelDeployments, recordPanelDeployment } from "./backup-db";
 import { handleSupplyBridge } from "./supply-bridge";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, clearPaymentLink, createCoupon, createMachine, createVmProduct,
@@ -205,6 +205,36 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       if(!name||name.length>80) throw new VendingHttpError(400,"自販機名が不正です");
       return json(env,await createMachine(env,guildId,session.user_id,name),201);
     }
+  }
+
+  // Read-only overview for the "パネル管理" screen: every installed panel for this
+  // bot's vending machines, with its install channel and a stock/sales summary.
+  // This does not change any existing vending behavior, it only surfaces data
+  // that panel-install already records in panel_deployments.
+  const panelOverview=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/panels$/);
+  if(panelOverview&&request.method==="GET"){
+    const guildId=panelOverview[1]!,session=await requireGuild(request,env,guildId);
+    const [machines,deployments]=await Promise.all([
+      listMachines(env,guildId,session.user_id),
+      listPanelDeployments(env,guildId)
+    ]);
+    const vendingDeployments=deployments.filter(row=>row.kind==="vending");
+    const rows=await Promise.all(machines.map(async vm=>{
+      const products=await listVmProducts(env,vm.id);
+      const deployment=vendingDeployments.find(row=>row.object_id===vm.id)??null;
+      return {
+        id:vm.id,
+        name:vm.name,
+        channelId:deployment?.channel_id??null,
+        messageId:deployment?.message_id??null,
+        productCount:products.length,
+        productNames:products.map(product=>product.name),
+        totalStock:products.reduce((sum,product)=>sum+(product.infinite_stock?0:product.stock_count),0),
+        hasInfiniteStock:products.some(product=>product.infinite_stock===1),
+        totalSales:products.reduce((sum,product)=>sum+(product.sales_count||0),0)
+      };
+    }));
+    return json(env,rows);
   }
 
   const achievementRoom=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/achievement-room$/);

@@ -11,6 +11,7 @@ import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
 import ExternalAuthManager from "./ExternalAuthManager";
+import PanelOverview from "./PanelOverview";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -160,7 +161,9 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "vending" | "shiire" | "followbomb" | "utility" | "generator" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "panels" | "vending" | "shiire" | "followbomb" | "utility" | "generator" | "backup">("server");
+  const [focusVendingMachineId, setFocusVendingMachineId] = useState<string | null>(null);
+  const [focusShiireMachineId, setFocusShiireMachineId] = useState<string | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
   const loadSequence = useRef(0);
@@ -786,6 +789,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-panels"
+                role="tab"
+                aria-controls="admin-panel-panels"
+                aria-selected={activeView === "panels"}
+                className={activeView === "panels" ? "active" : ""}
+                onClick={() => setActiveView("panels")}
+              >
+                パネル管理
+              </button>
+              <button
+                type="button"
                 id="admin-tab-vending"
                 role="tab"
                 aria-controls="admin-panel-vending"
@@ -1328,6 +1342,31 @@ export default function App() {
                 </section>
 
                 <section
+                  id="admin-panel-panels"
+                  className="admin-tab-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-tab-panels"
+                  hidden={activeView !== "panels"}
+                >
+                  {activeView === "panels" && (
+                    <PanelOverview
+                      key={"PanelOverview:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      onError={fail}
+                      onEditVending={(machineId) => {
+                        setFocusVendingMachineId(machineId);
+                        setActiveView("vending");
+                      }}
+                      onEditShiire={(machineId) => {
+                        setFocusShiireMachineId(machineId);
+                        setActiveView("shiire");
+                      }}
+                    />
+                  )}
+                </section>
+
+                <section
                   id="admin-panel-vending"
                   className="admin-tab-panel"
                   role="tabpanel"
@@ -1341,6 +1380,7 @@ export default function App() {
                   roles={meta.roles}
                   onNotice={flash}
                   onError={fail}
+                  focusMachineId={focusVendingMachineId}
                   />
                 </section>
 
@@ -1359,6 +1399,7 @@ export default function App() {
                       roles={meta.roles}
                       onNotice={flash}
                       onError={fail}
+                      focusMachineId={focusShiireMachineId}
                     />
                   )}
                 </section>

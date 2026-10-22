@@ -68,6 +68,10 @@ type Props = {
   roles:Role[];
   onNotice:(message:string)=>void;
   onError:(reason:unknown)=>void;
+  // Set by the "パネル管理" overview when the operator jumps here to edit a
+  // specific machine. Applied once per value change, then left alone so the
+  // operator's own selection afterwards is never overridden.
+  focusMachineId?:string|null;
 };
 
 const emptyProduct = {
@@ -125,8 +129,9 @@ async function preparePanelImage(file:File):Promise<string>{
 }
 
 export default function VendingManager({
-  guildId, channels, roles, onNotice, onError
+  guildId, channels, roles, onNotice, onError, focusMachineId
 }:Props){
+  const focusedMachineRef=useRef<string|null>(null);
   const [activeSection,setActiveSection]=useState<"panel"|"products"|"settings"|"achievement">("panel");
   const [mobilePanelView,setMobilePanelView]=useState<"edit"|"preview">("edit");
   const productEditorRef=useRef<HTMLDivElement>(null);
@@ -334,6 +339,13 @@ export default function VendingManager({
       }catch(reason){ onError(reason); }
     })();
   },[guildId]);
+
+  useEffect(()=>{
+    if(!focusMachineId||focusMachineId===focusedMachineRef.current) return;
+    focusedMachineRef.current=focusMachineId;
+    setActiveSection("panel");
+    void loadMachines(focusMachineId).catch(onError);
+  },[focusMachineId]);
 
   async function createMachine(event:FormEvent){
     event.preventDefault();

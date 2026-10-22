@@ -4363,3 +4363,80 @@ body.dsm-touch-reordering .discord-category {
 .smm-panel-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .smm-panel-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border: 1px solid #263149; border-radius: 8px; font-size: 12px; }
 .smm-machine h4 { margin: 16px 0 6px; font-size: 12px; color: #a9b5ce; }
+
+/* パネル管理: 自販機Bot / 仕入れBotの両方の設置済みパネルをまとめて確認する一覧 */
+.panel-overview-filter {
+  margin-bottom: 14px;
+}
+
+.panel-overview-filter button[aria-pressed="true"] {
+  color: #e8ebff;
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, .18);
+}
+
+.panel-overview-list {
+  display: grid;
+  gap: 10px;
+}
+
+.panel-overview-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+}
+
+.panel-overview-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-overview-row-head strong {
+  font-size: 15px;
+}
+
+.panel-overview-bot-badge {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.panel-overview-bot-badge.vending {
+  color: #9db4ff;
+  background: rgba(88, 101, 242, .16);
+  border: 1px solid rgba(88, 101, 242, .35);
+}
+
+.panel-overview-bot-badge.shiire {
+  color: #8fe0b4;
+  background: rgba(59, 165, 110, .16);
+  border: 1px solid rgba(59, 165, 110, .35);
+}
+
+.panel-overview-unlisted {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #d8a8a8;
+  background: rgba(130, 60, 60, .18);
+  border: 1px solid rgba(130, 60, 60, .4);
+}
+
+.panel-overview-row-body {
+  display: grid;
+  gap: 4px;
+  color: #a9b5ce;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 700px) {
+  .panel-overview-filter {
+    flex-direction: column;
+  }
+}
