@@ -1220,6 +1220,17 @@ if (gesture) window.clearTimeout(gesture.timer);
 };
 }, []);
 useEffect(() => {
+// Mouse/desktop drag (native HTML5 DnD) needs the same page-scroll lock as touch
+// drag below. Without it, dragging a channel/category near the top or bottom of
+// the window triggers the browser's own autoscroll and the whole page scrolls
+// along with the drag instead of just the channel list.
+if (!dragging) return;
+document.body.classList.add("dsm-touch-reordering");
+return () => {
+document.body.classList.remove("dsm-touch-reordering");
+};
+}, [dragging]);
+useEffect(() => {
 if (!touchDraggingId) return;
 document.body.classList.add("dsm-touch-reordering");
 const handleMove = (event: TouchEvent) => {
