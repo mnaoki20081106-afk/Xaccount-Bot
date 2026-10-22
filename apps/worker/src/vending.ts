@@ -1042,4 +1042,4 @@ export async function vendingSweep(env:Env){
   }
 }
 
-export { VendingHttpError };
+export { VendingHttpError, requireGuild };

@@ -90,6 +90,7 @@ import {
   handleShiireServiceBridge
 } from "./shiire-bridge";
 import { handleGeneratorBridge } from "./generator-bridge";
+import { runGeneratorRestockSweep } from "./generator-restock";
 import {
   clearXUtilitySearchCredential,
   getXUtilitySearchCredentialStatus,
@@ -3565,5 +3566,6 @@ export default {
 
     keepRunning("botAccessGuardSweep scheduled task failed",botAccessGuardSweep(env));
     keepRunning("backupRestoreSweep scheduled task failed",backupRestoreSweep(env));
+    keepRunning("generatorRestockSweep scheduled task failed",runGeneratorRestockSweep(env));
   }
 } satisfies ExportedHandler<Env>;

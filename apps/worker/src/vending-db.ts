@@ -67,7 +67,10 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_achievement_rooms (guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,owner_id))",
 "CREATE TABLE IF NOT EXISTS vending_achievement_routes (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',count_display_enabled INTEGER NOT NULL DEFAULT 0,achievement_count INTEGER NOT NULL DEFAULT 0,base_channel_name TEXT,count_name_synced_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_achievement_routes_owner_idx ON vending_achievement_routes(guild_id,owner_id,created_at)",
-"CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)"
+"CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS vending_auto_restock (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,min_stock INTEGER NOT NULL,target_stock INTEGER NOT NULL,max_batch INTEGER NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,last_run_at INTEGER,last_added INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE UNIQUE INDEX IF NOT EXISTS vending_auto_restock_product_unique ON vending_auto_restock(product_id)",
+"CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)"
 ];
 
 let ready=false;

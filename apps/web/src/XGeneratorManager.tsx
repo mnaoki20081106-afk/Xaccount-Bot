@@ -49,7 +49,28 @@ type AccountRow = {
   notes: string | null;
 };
 
-type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push";
+type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock";
+
+type VendingMachineRow = { id: string; name: string };
+type VendingProductRow = { id: string; name: string; infinite_stock: number; stock_count: number };
+type VendingMachineDetail = VendingMachineRow & { products: VendingProductRow[] };
+
+type RestockRule = {
+  id: string;
+  vendingMachineId: string;
+  machineName: string | null;
+  productId: string;
+  productName: string | null;
+  minStock: number;
+  targetStock: number;
+  maxBatch: number;
+  enabled: boolean;
+  lastRunAt: number | null;
+  lastAdded: number;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
 
 const STATUS_LABEL: Record<string, string> = {
   clean: "CLEAN",
@@ -114,7 +135,20 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [pushBusy, setPushBusy] = useState(false);
   const [pushFeedback, setPushFeedback] = useState<Feedback | null>(null);
 
+  const [restockMachines, setRestockMachines] = useState<VendingMachineRow[]>([]);
+  const [restockMachineId, setRestockMachineId] = useState("");
+  const [restockMachineDetail, setRestockMachineDetail] = useState<VendingMachineDetail | null>(null);
+  const [restockProductId, setRestockProductId] = useState("");
+  const [restockMinStock, setRestockMinStock] = useState("5");
+  const [restockTargetStock, setRestockTargetStock] = useState("20");
+  const [restockMaxBatch, setRestockMaxBatch] = useState("10");
+  const [restockRules, setRestockRules] = useState<RestockRule[]>([]);
+  const [restockLoading, setRestockLoading] = useState(false);
+  const [restockBusy, setRestockBusy] = useState(false);
+  const [restockFeedback, setRestockFeedback] = useState<Feedback | null>(null);
+
   const base = "/api/guilds/" + guildId + "/generator";
+  const vendingBase = "/api/guilds/" + guildId + "/vending";
 
   const loadStatus = useCallback(() => {
     setStatusLoading(true);
@@ -150,12 +184,103 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
       .catch(err => setConfigFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
   }, [base]);
 
+  const loadRestockRules = useCallback(() => {
+    setRestockLoading(true);
+    api<RestockRule[]>(base + "/restock-rules")
+      .then(data => setRestockRules(data))
+      .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setRestockLoading(false));
+  }, [base]);
+
+  const loadRestockMachines = useCallback(() => {
+    api<VendingMachineRow[]>(vendingBase)
+      .then(data => setRestockMachines(data))
+      .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [vendingBase]);
+
   useEffect(() => {
     if (activeTab === "status") loadStatus();
     if (activeTab === "inventory") loadInventory();
     if (activeTab === "accounts") loadAccounts();
     if (activeTab === "generate") { loadStatus(); loadConfig(); }
+    if (activeTab === "restock") { loadRestockRules(); loadRestockMachines(); }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!restockMachineId) {
+      setRestockMachineDetail(null);
+      setRestockProductId("");
+      return;
+    }
+    api<VendingMachineDetail>(vendingBase + "/" + restockMachineId)
+      .then(data => {
+        setRestockMachineDetail(data);
+        setRestockProductId(data.products.find(p => !p.infinite_stock)?.id ?? "");
+      })
+      .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [restockMachineId, vendingBase]);
+
+  const handleCreateRestockRule = () => {
+    const minStock = parseInt(restockMinStock, 10);
+    const targetStock = parseInt(restockTargetStock, 10);
+    const maxBatch = parseInt(restockMaxBatch, 10);
+    if (!restockMachineId || !restockProductId) {
+      setRestockFeedback({ kind: "error", message: "自販機と商品を選択してください" });
+      return;
+    }
+    if (!Number.isInteger(minStock) || minStock < 0 || !Number.isInteger(targetStock) || targetStock < minStock || !Number.isInteger(maxBatch) || maxBatch < 1) {
+      setRestockFeedback({ kind: "error", message: "最低在庫・目標在庫・補充上限を正しく入力してください" });
+      return;
+    }
+    setRestockBusy(true);
+    setRestockFeedback(null);
+    api(base + "/restock-rules", {
+      method: "POST",
+      body: JSON.stringify({ vendingMachineId: restockMachineId, productId: restockProductId, minStock, targetStock, maxBatch }),
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(() => {
+        onNotice("自動補充ルールを作成しました");
+        loadRestockRules();
+      })
+      .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setRestockBusy(false));
+  };
+
+  const toggleRestockRule = (rule: RestockRule) => {
+    setRestockBusy(true);
+    api(base + "/restock-rules/" + rule.id, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !rule.enabled }),
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(() => loadRestockRules())
+      .catch(err => onError(err))
+      .finally(() => setRestockBusy(false));
+  };
+
+  const deleteRestockRule = (rule: RestockRule) => {
+    if (!confirm((rule.productName ?? rule.productId) + " の自動補充ルールを削除しますか？")) return;
+    setRestockBusy(true);
+    api(base + "/restock-rules/" + rule.id, { method: "DELETE" })
+      .then(() => {
+        onNotice("自動補充ルールを削除しました");
+        loadRestockRules();
+      })
+      .catch(err => onError(err))
+      .finally(() => setRestockBusy(false));
+  };
+
+  const runRestockNow = (rule: RestockRule) => {
+    setRestockBusy(true);
+    api<{ ok: boolean; added: number; stockAfter: number }>(base + "/restock-rules/" + rule.id + "/run-now", { method: "POST" })
+      .then(data => {
+        onNotice(data.added > 0 ? data.added + " 垢を補充しました（在庫 " + data.stockAfter + "）" : "在庫は十分です。補充は行われませんでした");
+        loadRestockRules();
+      })
+      .catch(err => onError(err))
+      .finally(() => setRestockBusy(false));
+  };
 
   const handleGenerate = () => {
     const count = parseInt(genCount, 10);
@@ -219,7 +344,8 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     { key: "inventory", label: "在庫" },
     { key: "accounts", label: "アカウント" },
     { key: "generate", label: "垢生成" },
-    { key: "push", label: "自販機に追加" }
+    { key: "push", label: "仕入れbotに追加" },
+    { key: "restock", label: "自動補充" }
   ];
 
   return (
@@ -448,9 +574,10 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
         <section className="card">
           <div className="section-head">
             <div>
-              <h3>自販機に追加</h3>
+              <h3>仕入れbotに追加</h3>
               <p className="muted">
-                CLEANなアカウントをジェネレーターから取り出し、仕入れbot（Discord-Shiire）の自販機サプライヤープールへ追加します。
+                CLEANなアカウントをジェネレーターから取り出し、仕入れbot（Discord-Shiire）のサプライヤープールへ一度だけ追加します。
+                自販機Botの商品を継続的に自動補充したい場合は「自動補充」タブを使ってください。
               </p>
             </div>
           </div>
@@ -494,6 +621,104 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             <div className={pushFeedback.kind === "error" ? "alert error" : "alert success"}>{pushFeedback.message}</div>
           )}
         </section>
+      )}
+
+      {activeTab === "restock" && (
+        <>
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h3>自動補充を設定</h3>
+                <p className="muted">
+                  すでに設置してある自販機Botの自販機・商品を選び、在庫が減ったら自動でジェネレーターから補充するルールを作ります。
+                  仕入れbot（Discord-Shiire）の自販機は、現時点ではこの自動補充に対応していません。
+                </p>
+              </div>
+            </div>
+
+            <div className="form-grid two">
+              <label className="field">
+                <span>自販機</span>
+                <select value={restockMachineId} onChange={e => setRestockMachineId(e.target.value)}>
+                  <option value="">選択してください</option>
+                  {restockMachines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>商品</span>
+                <select value={restockProductId} onChange={e => setRestockProductId(e.target.value)} disabled={!restockMachineDetail}>
+                  <option value="">選択してください</option>
+                  {(restockMachineDetail?.products ?? []).map(p => (
+                    <option key={p.id} value={p.id} disabled={Boolean(p.infinite_stock)}>
+                      {p.name}{p.infinite_stock ? "（無限在庫のため対象外）" : "（在庫 " + p.stock_count + "）"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>最低在庫数</span>
+                <input type="number" min={0} value={restockMinStock} onChange={e => setRestockMinStock(e.target.value)} />
+                <small>在庫がこの数を下回ったら補充します。</small>
+              </label>
+              <label className="field">
+                <span>目標在庫数</span>
+                <input type="number" min={0} value={restockTargetStock} onChange={e => setRestockTargetStock(e.target.value)} />
+                <small>この数まで補充します。</small>
+              </label>
+              <label className="field">
+                <span>1回あたりの補充上限</span>
+                <input type="number" min={1} max={200} value={restockMaxBatch} onChange={e => setRestockMaxBatch(e.target.value)} />
+                <small>1回の実行でジェネレーターから取り出す最大件数です。</small>
+              </label>
+            </div>
+            <div className="button-row">
+              <button type="button" className="primary" onClick={handleCreateRestockRule} disabled={restockBusy}>
+                {restockBusy ? "作成中…" : "自動補充ルールを作成"}
+              </button>
+            </div>
+            {restockFeedback && (
+              <div className={restockFeedback.kind === "error" ? "alert error" : "alert success"}>{restockFeedback.message}</div>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h3>設定済みの自動補充ルール</h3>
+                <p className="muted">1分ごとに在庫を確認し、最低在庫数を下回っていれば自動で補充します。</p>
+              </div>
+              <button type="button" className="secondary" onClick={loadRestockRules} disabled={restockLoading}>
+                {restockLoading ? "更新中…" : "更新"}
+              </button>
+            </div>
+            <div className="list-stack">
+              {restockRules.map(rule => (
+                <div className="serverless-note" key={rule.id}>
+                  <strong>{rule.machineName ?? rule.vendingMachineId} — {rule.productName ?? rule.productId}</strong>
+                  <span>
+                    最低 {rule.minStock} / 目標 {rule.targetStock} / 1回最大 {rule.maxBatch} ・
+                    {rule.enabled ? "有効" : "無効"} ・
+                    {rule.lastRunAt ? "最終確認 " + new Date(rule.lastRunAt).toLocaleString("ja-JP") : "未実行"}
+                    {rule.lastAdded > 0 ? "（前回 " + rule.lastAdded + " 垢補充）" : ""}
+                    {rule.lastError ? " ・ エラー: " + rule.lastError : ""}
+                  </span>
+                  <div className="button-row">
+                    <button type="button" className="secondary" onClick={() => runRestockNow(rule)} disabled={restockBusy}>
+                      今すぐ補充
+                    </button>
+                    <button type="button" className="secondary" onClick={() => toggleRestockRule(rule)} disabled={restockBusy}>
+                      {rule.enabled ? "無効にする" : "有効にする"}
+                    </button>
+                    <button type="button" className="danger" onClick={() => deleteRestockRule(rule)} disabled={restockBusy}>
+                      削除
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {restockRules.length === 0 && !restockLoading && <p className="muted">まだ自動補充ルールがありません。</p>}
+            </div>
+          </section>
+        </>
       )}
     </div>
   );
