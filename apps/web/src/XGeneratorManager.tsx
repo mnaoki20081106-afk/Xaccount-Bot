@@ -236,15 +236,6 @@ type PendingDelivery = {
 type PoolForm = { assignCount: string; warmupDays: string; minStock: string; targetStock: string; maxBatch: string };
 const DEFAULT_POOL_FORM: PoolForm = { assignCount: "5", warmupDays: "0", minStock: "5", targetStock: "20", maxBatch: "10" };
 
-const CLAIM_STATUS_LABEL: Record<string, string> = {
-  DELIVERED: "配布済み",
-  WAITING_STOCK: "在庫待ち",
-  DM_FAILED: "DM失敗",
-  DELIVERY_UNCERTAIN: "要確認",
-  CLAIMING: "処理中",
-  SENDING: "送信中",
-  ERROR: "エラー"
-};
 type VendingMachineRow = { id: string; name: string };
 // infinite_stock only exists on 自販機Bot products; 仕入れBot products are always finite.
 type VendingProductRow = { id: string; name: string; infinite_stock?: number; stock_count: number };
@@ -396,11 +387,6 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     invite: { ...DEFAULT_POOL_FORM },
     giveaway: { ...DEFAULT_POOL_FORM, minStock: "3", targetStock: "10", maxBatch: "5" }
   });
-  const [panelChannelId, setPanelChannelId] = useState("");
-  const [burstInput, setBurstInput] = useState("");
-  const [blockUserId, setBlockUserId] = useState("");
-  const [blockReason, setBlockReason] = useState("");
-
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
   const shiireVendingBase = "/api/guilds/" + guildId + "/shiire/vending";
@@ -602,7 +588,6 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     ])
       .then(([overview, invite, pend, rules]) => {
         setGiveaway(overview);
-        setBurstInput(String(overview.burstLimit));
         setInviteStock(invite.stockCount);
         setPending(pend.pending);
         setRestockRules(rules);
@@ -674,75 +659,6 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
       }),
       rule.enabled ? "自動補充を無効にしました" : "自動補充を有効にしました"
     );
-
-  const setGiveawayEnabled = (enabled: boolean) => {
-    if (enabled && !confirm("無料配布を開始します。パネルのボタンを押した人に、1人1個ずつ在庫のXアカウントが送られます。よろしいですか？")) return;
-    runPerksAction(
-      api(shiireBase + "/free-giveaway/settings", {
-        method: "POST",
-        body: JSON.stringify({ enabled }),
-        headers: { "Content-Type": "application/json" }
-      }),
-      enabled ? "無料配布を開始しました" : "無料配布を停止しました"
-    );
-  };
-
-  const saveBurstLimit = () => {
-    const limit = Number(burstInput);
-    if (!Number.isInteger(limit) || limit < 0 || limit > 1000) {
-      setPerksFeedback({ kind: "error", message: "配布上限は0〜1000の整数で入力してください（0で無効）" });
-      return;
-    }
-    runPerksAction(
-      api(shiireBase + "/free-giveaway/settings", {
-        method: "POST",
-        body: JSON.stringify({ burstLimit: limit }),
-        headers: { "Content-Type": "application/json" }
-      }),
-      "配布上限を保存しました"
-    );
-  };
-
-  const blockGiveawayUser = () => {
-    const userId = blockUserId.trim();
-    if (!/^\d{15,25}$/.test(userId)) {
-      setPerksFeedback({ kind: "error", message: "DiscordのユーザーID（数字17〜20桁ほど）を入力してください" });
-      return;
-    }
-    runPerksAction(
-      api(shiireBase + "/free-giveaway/blocklist", {
-        method: "POST",
-        body: JSON.stringify({ userId, reason: blockReason }),
-        headers: { "Content-Type": "application/json" }
-      }),
-      "受け取り禁止に追加しました"
-    );
-    setBlockUserId("");
-    setBlockReason("");
-  };
-
-  const unblockGiveawayUser = (userId: string) => {
-    if (!confirm("ユーザーID " + userId + " の受け取り禁止を解除しますか？")) return;
-    runPerksAction(
-      api(shiireBase + "/free-giveaway/blocklist/" + encodeURIComponent(userId), { method: "DELETE" }),
-      "受け取り禁止を解除しました"
-    );
-  };
-
-  const postGiveawayPanel = () => {
-    if (!panelChannelId) {
-      setPerksFeedback({ kind: "error", message: "パネルを設置するチャンネルを選んでください" });
-      return;
-    }
-    runPerksAction(
-      api(shiireBase + "/free-giveaway/panel", {
-        method: "POST",
-        body: JSON.stringify({ channelId: panelChannelId }),
-        headers: { "Content-Type": "application/json" }
-      }),
-      "無料配布のパネルを設置しました"
-    );
-  };
 
   const loadServerInfo = useCallback(() => {
     setServerLoading(true);
@@ -1722,7 +1638,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <div className="section-head">
                 <div>
                   <h3>招待キャンペーン</h3>
-                  <p className="muted">「◯人招待で垢プレゼント」の景品の在庫です。人数条件や目標在庫は「仕入れbot」タブの招待特典で設定します。</p>
+                  <p className="muted">「◯人招待で垢プレゼント」の景品の在庫です。有効化・人数条件・パネル設置は「アフィリエイト」タブで設定します。</p>
                 </div>
                 <button type="button" className="secondary" onClick={loadPerks} disabled={perksLoading}>
                   {perksLoading ? "更新中…" : "更新"}
@@ -1730,7 +1646,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               </div>
               {renderPool(
                 "invite", "招待キャンペーン",
-                "ここに入れた垢が先に景品として使われ、目標在庫に達している間は仕入れbotはこの分を新しく購入しません。",
+                "ここに入れた垢が先に景品として使われます。アフィリエイトタブで販売中の商品と在庫を共有するよう設定した場合は、その商品の在庫として入荷します。",
                 inviteStock
               )}
             </section>
@@ -1739,117 +1655,13 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <div className="section-head">
                 <div>
                   <h3>無料配布（1人1個）</h3>
-                  <p className="muted">Discordアカウントごとに1個、パネルのボタンを押した人にDMで無料のXアカウントを送ります。</p>
+                  <p className="muted">Discordアカウントごとに1個配る景品の在庫です。有効化・不正受け取り対策・パネル設置は「アフィリエイト」タブで設定します。</p>
                 </div>
               </div>
-              {giveaway && (
-                <>
-                  <label className="toggle-row">
-                    <span className="toggle-copy">
-                      <strong>無料配布を行う</strong>
-                      <small>{giveaway.enabled ? "ON: ボタンを押した人に配布しています" : "OFF: ボタンを押しても配布されません"}</small>
-                    </span>
-                    <span className={`switch ${giveaway.enabled ? "on" : ""}`}>
-                      <input type="checkbox" checked={giveaway.enabled} disabled={perksBusy} onChange={e => setGiveawayEnabled(e.target.checked)} />
-                      <span />
-                    </span>
-                  </label>
-
-                  <div className="serverless-note">
-                    <strong>受け取り状況</strong>
-                    <span>
-                      {Object.keys(CLAIM_STATUS_LABEL)
-                        .filter(key => (giveaway.claims[key] ?? 0) > 0)
-                        .map(key => CLAIM_STATUS_LABEL[key] + " " + giveaway.claims[key])
-                        .join(" ・ ") || "まだ誰も受け取っていません"}
-                    </span>
-                    {(giveaway.claims.DELIVERY_UNCERTAIN ?? 0) > 0 && (
-                      <span>「要確認」は送信結果が分からなかった人です。2個目は渡されません。本人に届いたか確認してください。</span>
-                    )}
-                  </div>
-
-                  <h4>不正受け取り対策</h4>
-                  <div className="serverless-note">
-                    <strong>自動で行っていること</strong>
-                    <span>
-                      Discordアカウント（ユーザーID）ごとに1個まで。サーバーを抜けて入り直しても増えません。
-                      メンバー認証（ルール同意）が済んでいない人、タイムアウト中の人、受け取り禁止の人には渡しません。
-                      連打しても確保されるのは1個だけで、すべての押下を記録しています。
-                    </span>
-                  </div>
-                  <div className="form-grid two">
-                    <label className="field">
-                      <span>{giveaway.burstWindowMinutes}分あたりの配布上限（0で無効）</span>
-                      <input type="number" min={0} max={1000} value={burstInput} onChange={e => setBurstInput(e.target.value)} />
-                      <small>この数を超えたら、しばらく待ってもらいます。サブ垢を大量に使った一斉受け取りを遅らせます。</small>
-                    </label>
-                  </div>
-                  <div className="button-row">
-                    <button type="button" className="secondary" onClick={saveBurstLimit} disabled={perksBusy}>配布上限を保存</button>
-                  </div>
-
-                  <div className="form-grid two">
-                    <label className="field">
-                      <span>受け取り禁止にするユーザーID</span>
-                      <input value={blockUserId} onChange={e => setBlockUserId(e.target.value)} placeholder="例: 123456789012345678" />
-                    </label>
-                    <label className="field">
-                      <span>理由（メモ）</span>
-                      <input value={blockReason} onChange={e => setBlockReason(e.target.value)} maxLength={200} />
-                    </label>
-                  </div>
-                  <div className="button-row">
-                    <button type="button" className="danger" onClick={blockGiveawayUser} disabled={perksBusy}>受け取り禁止に追加</button>
-                  </div>
-                  {giveaway.blocked.length > 0 && (
-                    <div className="list-stack">
-                      {giveaway.blocked.map(b => (
-                        <div className="serverless-note" key={b.user_id}>
-                          <strong>ユーザーID {b.user_id}</strong>
-                          <span>{b.reason ?? "（理由なし）"} ・ {new Date(b.created_at).toLocaleString("ja-JP")}</span>
-                          <div className="button-row">
-                            <button type="button" className="secondary" onClick={() => unblockGiveawayUser(b.user_id)} disabled={perksBusy}>解除</button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {renderPool("giveaway", "無料配布", "在庫が0になると、ボタンを押した人は「在庫切れ」と表示され、入荷後に同じボタンでもう一度受け取れます。", giveaway.stockCount)}
-
-                  <h4>パネルを設置</h4>
-                  <div className="form-grid two">
-                    <label className="field">
-                      <span>設置するチャンネル</span>
-                      <select value={panelChannelId} onChange={e => setPanelChannelId(e.target.value)}>
-                        <option value="">選択してください</option>
-                        {channels
-                          .filter(c => (c.type === undefined || c.type === "text" || c.type === "announcement") && c.botCanPost !== false)
-                          .map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="button-row">
-                    <button type="button" className="secondary" onClick={postGiveawayPanel} disabled={perksBusy}>パネルを設置</button>
-                  </div>
-
-                  {giveaway.recent.length > 0 && (
-                    <>
-                      <h4>最近の受け取り</h4>
-                      <div className="list-stack">
-                        {giveaway.recent.map(r => (
-                          <div className="serverless-note" key={r.user_id}>
-                            <strong>{CLAIM_STATUS_LABEL[r.status] ?? r.status} ・ ユーザーID {r.user_id}</strong>
-                            <span>
-                              {new Date(r.updated_at).toLocaleString("ja-JP")} ・ 押した回数 {r.attempts}{r.attempts >= 5 ? "（多い）" : ""}
-                              {r.error ? " ・ " + r.error : ""}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </>
+              {renderPool(
+                "giveaway", "無料配布",
+                "在庫が0になると、ボタンを押した人は「在庫切れ」と表示され、入荷後に同じボタンでもう一度受け取れます。アフィリエイトタブで販売中の商品と在庫を共有するよう設定した場合は、その商品の在庫として入荷します。",
+                giveaway?.stockCount ?? null
               )}
             </section>
           </>

@@ -6,7 +6,7 @@ import "./shiire-operations.css";
 
 type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
-type Section="overview"|"budget"|"funding"|"procurement"|"invite"|"inventory"|"vending"|"logs";
+type Section="overview"|"budget"|"funding"|"procurement"|"inventory"|"vending"|"logs";
 type Settled<T>={ok:true;data:T}|{ok:false;error:string};
 
 type Overview={
@@ -135,23 +135,6 @@ type DailyRestockDetail={
     NO_SHADOWBAN:{current:number;target:number;deficit:number};
   };
 };
-type InviteCampaignDetail={
-  settings:{
-    enabled:boolean;
-    guild_id:string;
-    invites_per_reward:number;
-    target_stock:number;
-  };
-  stock:{available:number;target:number;deficit:number};
-  runtime:{gateway_ready_at:number|null;last_event_at:number|null;last_error:string|null;updated_at:number|null};
-  attribution:{total:number;valid:number;ambiguous:number;unresolved:number};
-  progress:Array<any>;
-  rewards:Array<any>;
-  unresolvedRewards:number;
-  currentGuildId:string;
-  currentGuildSelected:boolean;
-};
-
 const budgetCategories=[
   {key:"NO_SHADOWBAN",label:"シャドウバンなし",tone:"shadow"},
   {key:"TOP_SEARCH",label:"検索上位",tone:"top"},
@@ -353,7 +336,6 @@ export default function ShiireOperationsCenter({
   const [procurementBudget,setProcurementBudget]=useState<ProcurementBudgetDetail|null>(null);
   const [budgetError,setBudgetError]=useState("");
   const [dailyRestock,setDailyRestock]=useState<DailyRestockDetail|null>(null);
-  const [inviteCampaign,setInviteCampaign]=useState<InviteCampaignDetail|null>(null);
   const [payPayObservation,setPayPayObservation]=useState(0);
   const [usdJpyObservation,setUsdJpyObservation]=useState(0);
   const [controlBusy,setControlBusy]=useState(false);
@@ -561,12 +543,6 @@ export default function ShiireOperationsCenter({
         setOrders(nextOrders);
         setHstora(nextHstora);
         applyProcurementControls(nextSettings);
-      }else if(target==="invite"){
-        setInviteCampaign(await load<InviteCampaignDetail>(
-          `/api/guilds/${guildId}/shiire/invite-campaign`,
-          {},
-          20_000
-        ));
       }else if(target==="inventory"){
         const [nextInventory,nextRestock]=await Promise.all([
           load<InventoryDetail>(
@@ -616,7 +592,6 @@ export default function ShiireOperationsCenter({
     setProcurementBudget(null);
     setBudgetError("");
     setDailyRestock(null);
-    setInviteCampaign(null);
     setPayPayObservation(0);
     setUsdJpyObservation(0);
     setSection("overview");
@@ -922,71 +897,6 @@ export default function ShiireOperationsCenter({
     }
   }
 
-  async function saveInviteCampaign(){
-    if(!inviteCampaign) return;
-    if(
-      !inviteCampaign.currentGuildSelected&&
-      inviteCampaign.settings.guild_id&&
-      !confirm("招待キャンペーンの対象を現在選択中のサーバーへ切り替えますか？")
-    ) return;
-    setControlBusy(true);
-    try{
-      const next=await api<InviteCampaignDetail>(
-        `/api/guilds/${guildId}/shiire/invite-campaign/settings`,
-        {
-          method:"POST",
-          body:JSON.stringify({
-            enabled:inviteCampaign.settings.enabled,
-            invitesPerReward:Number(inviteCampaign.settings.invites_per_reward),
-            targetStock:Number(inviteCampaign.settings.target_stock)
-          })
-        },
-        25_000
-      );
-      setInviteCampaign(next);
-      onNotice("招待キャンペーン設定を保存しました");
-      await loadOverview(false);
-    }catch(reason){
-      onError(reason);
-    }finally{
-      setControlBusy(false);
-    }
-  }
-
-  async function seedInviteCampaign(){
-    setControlBusy(true);
-    try{
-      const next=await api<InviteCampaignDetail>(
-        `/api/guilds/${guildId}/shiire/invite-campaign/seed`,
-        {method:"POST",body:"{}"},
-        25_000
-      );
-      setInviteCampaign(next);
-      onNotice("Discord招待状態を再同期しました");
-    }catch(reason){
-      onError(reason);
-    }finally{
-      setControlBusy(false);
-    }
-  }
-
-  async function retryInviteReward(id:string){
-    setControlBusy(true);
-    try{
-      const next=await api<InviteCampaignDetail>(
-        `/api/guilds/${guildId}/shiire/invite-campaign/rewards/${encodeURIComponent(id)}/retry`,
-        {method:"POST",body:"{}"},
-        25_000
-      );
-      setInviteCampaign(next);
-      onNotice("招待報酬の配布を再試行しました");
-    }catch(reason){
-      onError(reason);
-    }finally{
-      setControlBusy(false);
-    }
-  }
-
   async function updateAutomation(
     patch:{
       dry_run?:boolean;
@@ -1153,7 +1063,7 @@ export default function ShiireOperationsCenter({
         <summary>通常は変更不要の設定</summary>
         <p>招待特典や購入先の品質条件など、必要な場合だけ変更してください。</p>
         <label className="field"><span>変更する設定</span><select value={section} disabled={controlBusy} onChange={event=>setSection(event.target.value as Section)}>
-          <option value="budget">普段の仕入れ設定</option><option value="procurement">詳しい購入条件・購入履歴</option><option value="funding">資金の補充方法・運転制限</option><option value="invite">招待特典</option><option value="inventory">在庫の詳しい内訳</option>
+          <option value="budget">普段の仕入れ設定</option><option value="procurement">詳しい購入条件・購入履歴</option><option value="funding">資金の補充方法・運転制限</option><option value="inventory">在庫の詳しい内訳</option>
         </select></label>
       </details>}
 
@@ -1977,142 +1887,6 @@ export default function ShiireOperationsCenter({
             <OrderList rows={orders?.orders??overview?.recentOrders??[]} />
           </section>
           </details>
-        </>
-      )}
-
-      {section==="invite"&&(
-        <>
-          {detailBusy&&!inviteCampaign&&<div className="progress"><span /></div>}
-          {inviteCampaign?<>
-            {!inviteCampaign.currentGuildSelected&&inviteCampaign.settings.guild_id&&(
-              <section className="card shiire-callout warn">
-                <strong>現在の招待キャンペーンは別サーバーに設定されています</strong>
-                <span>
-                  この画面で保存すると、招待キャンペーンの対象を現在選択中のサーバーへ切り替えます。
-                </span>
-              </section>
-            )}
-            <section className="shiire-kpi-grid">
-              <article className="card shiire-kpi accent">
-                <span>キャンペーン在庫</span>
-                <strong>{num(inviteCampaign.stock.available,0)} / {num(inviteCampaign.stock.target,0)}</strong>
-                <small>不足 {num(inviteCampaign.stock.deficit,0)}個</small>
-              </article>
-              <article className="card shiire-kpi">
-                <span>招待条件</span>
-                <strong>{num(inviteCampaign.settings.invites_per_reward,0)}人 / 1垢</strong>
-                <small>Discord標準招待URL</small>
-              </article>
-              <article className="card shiire-kpi">
-                <span>未解決報酬</span>
-                <strong>{num(inviteCampaign.unresolvedRewards,0)}</strong>
-                <small>待機 / 再試行対象を含む</small>
-              </article>
-              <article className="card shiire-kpi">
-                <span>Gateway</span>
-                <strong>{inviteCampaign.runtime.gateway_ready_at?"接続済み":"未接続"}</strong>
-                <small>{when(inviteCampaign.runtime.gateway_ready_at)}</small>
-              </article>
-            </section>
-
-            <section className="card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">INVITE CAMPAIGN</span>
-                  <h2>招待キャンペーン設定</h2>
-                  <p>
-                    ユーザーはDiscord標準の招待URLを使います。設定人数ごとにキャンペーン専用在庫から1垢をDM配布します。
-                  </p>
-                </div>
-                <div className="shiire-control-buttons">
-                  <button className="primary" disabled={controlBusy} onClick={()=>void saveInviteCampaign()}>
-                    設定を保存
-                  </button>
-                  <button className="secondary" disabled={controlBusy} onClick={()=>void seedInviteCampaign()}>
-                    招待状態を再同期
-                  </button>
-                </div>
-              </div>
-
-              <label className="shiire-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={inviteCampaign.settings.enabled}
-                  onChange={event=>setInviteCampaign({
-                    ...inviteCampaign,
-                    settings:{...inviteCampaign.settings,enabled:event.target.checked}
-                  })}
-                />
-                <span>
-                  <strong>招待キャンペーンを有効にする</strong>
-                  <small>現在選択中のDiscordサーバーを対象にします。</small>
-                </span>
-              </label>
-
-              <div className="form-grid two">
-                <FundingInput
-                  label="何人招待ごとに1垢"
-                  value={inviteCampaign.settings.invites_per_reward}
-                  step={1}
-                  onChange={value=>setInviteCampaign({
-                    ...inviteCampaign,
-                    settings:{...inviteCampaign.settings,invites_per_reward:value}
-                  })}
-                />
-                <FundingInput
-                  label="招待キャンペーン恒常在庫"
-                  value={inviteCampaign.settings.target_stock}
-                  step={1}
-                  onChange={value=>setInviteCampaign({
-                    ...inviteCampaign,
-                    settings:{...inviteCampaign.settings,target_stock:value}
-                  })}
-                />
-              </div>
-            </section>
-
-            <section className="two-col">
-              <article className="card">
-                <span className="eyebrow">INVITE PROGRESS</span>
-                <h2>招待実績</h2>
-                {(inviteCampaign.progress??[]).length===0
-                  ?<div className="shiire-empty">まだ招待実績はありません。</div>
-                  :(inviteCampaign.progress??[]).slice(0,40).map((row:any)=>(
-                    <div className="shiire-event" key={row.inviter_user_id}>
-                      <strong>{row.inviter_user_id}</strong>
-                      <span>
-                        有効 {num(row.valid_invites,0)}人 / 対象外 {num(row.excluded_invites,0)}人 /
-                        報酬 {num(row.rewards_earned,0)}
-                      </span>
-                    </div>
-                  ))
-                }
-              </article>
-              <article className="card">
-                <span className="eyebrow">REWARDS</span>
-                <h2>報酬履歴</h2>
-                {(inviteCampaign.rewards??[]).length===0
-                  ?<div className="shiire-empty">まだ報酬履歴はありません。</div>
-                  :(inviteCampaign.rewards??[]).slice(0,40).map((row:any)=>{
-                    const retryable=["WAITING_STOCK","DM_FAILED","ERROR"].includes(String(row.status));
-                    return <div className="shiire-event" key={row.id}>
-                      <strong>{row.inviter_user_id} / #{num(row.ordinal,0)}</strong>
-                      <span>{String(row.status??"—")}{row.error?" / "+String(row.error):""}</span>
-                      {retryable&&(
-                        <button
-                          className="secondary"
-                          disabled={controlBusy}
-                          onClick={()=>void retryInviteReward(String(row.id))}
-                        >
-                          配布を再試行
-                        </button>
-                      )}
-                    </div>;
-                  })
-                }
-              </article>
-            </section>
-          </>:<div className="shiire-empty">招待キャンペーン情報を読み込んでいます。</div>}
         </>
       )}
 

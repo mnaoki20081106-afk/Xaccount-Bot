@@ -24,11 +24,20 @@ test("main dashboard exposes daily 18:00 restock controls",()=>{
   assert.match(source,/検索上位の在庫目標/);
 });
 
-test("main dashboard exposes invite campaign controls",()=>{
-  assert.match(source,/招待キャンペーン設定/);
-  assert.match(source,/\/shiire\/invite-campaign\/settings/);
-  assert.match(source,/\/shiire\/invite-campaign\/seed/);
-  assert.match(source,/invite-campaign\/rewards/);
+test("the affiliate tab exposes invite campaign and free giveaway controls, with a shared-stock product picker",()=>{
+  const affiliateSource=readFileSync(
+    new URL("../src/AffiliateManager.tsx",import.meta.url),
+    "utf8"
+  );
+  assert.match(affiliateSource,/招待キャンペーン/);
+  assert.match(affiliateSource,/\/invite-campaign\/settings/);
+  assert.match(affiliateSource,/\/invite-campaign\/seed/);
+  assert.match(affiliateSource,/invite-campaign\/rewards/);
+  assert.match(affiliateSource,/無料配布/);
+  assert.match(affiliateSource,/\/free-giveaway\/settings/);
+  assert.match(affiliateSource,/\/free-giveaway\/blocklist/);
+  assert.match(affiliateSource,/\/free-giveaway\/panel/);
+  assert.match(affiliateSource,/\/affiliate\/" \+ kind \+ "\/product/);
 });
 
 test("main dashboard exposes editable procurement policy and safety controls",()=>{

@@ -6,6 +6,7 @@ import VendingManager from "./VendingManager";
 import ShiireOperationsCenter from "./ShiireOperationsCenter";
 import XUtilityManager from "./XUtilityManager";
 import XGeneratorManager from "./XGeneratorManager";
+import AffiliateManager from "./AffiliateManager";
 import FollowBombManager from "./FollowBombManager";
 import BackupManager from "./BackupManager";
 import MemberActivityManager from "./MemberActivityManager";
@@ -161,7 +162,7 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "panels" | "vending" | "shiire" | "followbomb" | "utility" | "generator" | "backup">("server");
+  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "panels" | "vending" | "shiire" | "affiliate" | "followbomb" | "utility" | "generator" | "backup">("server");
   const [focusVendingMachineId, setFocusVendingMachineId] = useState<string | null>(null);
   const [focusShiireMachineId, setFocusShiireMachineId] = useState<string | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
@@ -822,6 +823,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                id="admin-tab-affiliate"
+                role="tab"
+                aria-controls="admin-panel-affiliate"
+                aria-selected={activeView === "affiliate"}
+                className={activeView === "affiliate" ? "active" : ""}
+                onClick={() => setActiveView("affiliate")}
+              >
+                アフィリエイト
+              </button>
+              <button
+                type="button"
                 id="admin-tab-followbomb"
                 role="tab"
                 aria-controls="admin-panel-followbomb"
@@ -1400,6 +1412,24 @@ export default function App() {
                       onNotice={flash}
                       onError={fail}
                       focusMachineId={focusShiireMachineId}
+                    />
+                  )}
+                </section>
+
+                <section
+                  id="admin-panel-affiliate"
+                  className="admin-tab-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-tab-affiliate"
+                  hidden={activeView !== "affiliate"}
+                >
+                  {activeView === "affiliate" && (
+                    <AffiliateManager
+                      key={"AffiliateManager:"+selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      onNotice={flash}
+                      onError={fail}
                     />
                   )}
                 </section>

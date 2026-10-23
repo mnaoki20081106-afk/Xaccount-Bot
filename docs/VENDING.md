@@ -134,15 +134,21 @@ adapter rather than bundling that Python package.
 ## Invite-campaign and free-giveaway stock
 
 「垢生成」タブの「招待・無料配布」で、Discord-Shiireの2つの在庫プールにジェネレーターの垢を入れる。
+有効化・人数条件・不正受け取り対策・パネル設置は、Xaccount-Bot管理画面の「アフィリエイト」タブ
+（`apps/web/src/AffiliateManager.tsx`、Discord-Shiireの `/affiliate*` ブリッジ）で行う。
 
 - 招待キャンペーン: 「◯人招待で垢プレゼント」の景品プール。
 - 無料配布: Discordアカウントごとに1個。パネルのボタンで配る（Discord-Shiire側の機能。
-  初期状態はOFFで、この画面から開始・停止とパネル設置ができる）。
+  初期状態はOFF）。
+- どちらも、既に設置済みの自販機の商品1つを選んで在庫を共有させることができる（Discord-Shiire
+  `/affiliate/{invite|giveaway}/product` に `productId` をPOST。`null`で専用在庫に戻す）。
+  共有先を選ぶと、「今すぐ割り当てる」も自動補充も、その商品の在庫にそのまま入荷する。
 - 「今すぐ割り当てる」(`POST /api/guilds/:id/generator/assign`) は、取り出した垢を暗号化して
   `generator_pending_deliveries` に保管してから納品する。納品に失敗しても垢は残り、毎分の
   スイープが再納品する（ジェネレーターのpopは垢を即SOLD扱いにするため）。
 - 自動補充ルールは `targetSystem` に `invite` / `giveaway` を指定できる（機械・商品の指定は不要で、
-  プール名が識別子）。
+  プール名が識別子。共有先が選ばれていれば、その商品に入荷する）。
 - Discord-Shiire側のブリッジ: `generator/pools/{invite-campaign|free-giveaway}/stock`,
-  `free-giveaway`, `free-giveaway/settings`, `free-giveaway/panel`。先にDiscord-Shiireを
+  `free-giveaway`, `free-giveaway/settings`, `free-giveaway/panel`, `affiliate`,
+  `affiliate/{invite|giveaway}/product`。先にDiscord-Shiireを
   デプロイしてから、こちらをデプロイする。
