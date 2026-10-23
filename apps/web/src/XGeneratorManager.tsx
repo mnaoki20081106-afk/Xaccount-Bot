@@ -49,7 +49,86 @@ type AccountRow = {
   notes: string | null;
 };
 
-type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock";
+type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "proxy" | "server";
+
+type ProxySessionRow = {
+  session_id: string;
+  state: "ready" | "cooling" | "circuit_open" | "full";
+  account_count: number;
+  max_accounts: number;
+  assigned_accounts: number;
+  consecutive_failures: number;
+  cooldown_until: string | null;
+  circuit_open_until: string | null;
+  last_signup_at: string | null;
+  last_exit_ip: string | null;
+};
+
+type ProxyData = {
+  config: { provider: string; host: string; port: number; country: string; sticky_ttl_minutes: number; max_accounts_per_ip: number };
+  summary: { total_sessions: number; cooling: number; circuit_open: number; ready: number };
+  sessions: ProxySessionRow[];
+  health_check: {
+    running: boolean;
+    started_at: number | null;
+    finished_at: number | null;
+    result: { checked?: number; healthy?: number; unhealthy?: number; error?: string } | null;
+  };
+};
+
+type ServerInfo = {
+  hostname: string;
+  platform: string;
+  python: string;
+  cpu_count: number | null;
+  load_average: number[] | null;
+  memory: { total: number; available: number; used: number } | null;
+  disk: { total: number; used: number; free: number } | null;
+  host_uptime_seconds: number | null;
+  api_uptime_seconds: number;
+  db_size_bytes: number | null;
+  log_size_bytes: number | null;
+  orchestrator_running: boolean;
+};
+
+function formatBytes(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return size.toFixed(unit === 0 ? 0 : 1) + " " + units[unit];
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return days + "日 " + hours + "時間";
+  if (hours > 0) return hours + "時間 " + minutes + "分";
+  return minutes + "分";
+}
+
+function formatPercent(used: number, total: number): string {
+  return total > 0 ? Math.round((used / total) * 100) + "%" : "—";
+}
+
+const PROXY_STATE_LABEL: Record<ProxySessionRow["state"], string> = {
+  ready: "利用可能",
+  cooling: "クーリング中",
+  circuit_open: "遮断中",
+  full: "上限到達"
+};
+const PROXY_STATE_TONE: Record<ProxySessionRow["state"], "good" | "warn" | "bad"> = {
+  ready: "good",
+  cooling: "warn",
+  circuit_open: "bad",
+  full: "warn"
+};
 
 type RestockSystem = "vending" | "shiire";
 type VendingMachineRow = { id: string; name: string };
@@ -154,6 +233,14 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [restockBusy, setRestockBusy] = useState(false);
   const [restockFeedback, setRestockFeedback] = useState<Feedback | null>(null);
 
+  const [proxy, setProxy] = useState<ProxyData | null>(null);
+  const [proxyLoading, setProxyLoading] = useState(false);
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxyFeedback, setProxyFeedback] = useState<Feedback | null>(null);
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
+  const [serverLoading, setServerLoading] = useState(false);
+  const [serverFeedback, setServerFeedback] = useState<Feedback | null>(null);
+
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
   const shiireVendingBase = "/api/guilds/" + guildId + "/shiire/vending";
@@ -207,12 +294,77 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
       .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
   }, [restockSystem, vendingBase, shiireVendingBase]);
 
+  const loadProxy = useCallback(() => {
+    setProxyLoading(true);
+    api<ProxyData>(base + "/proxy")
+      .then(data => { setProxy(data); setProxyFeedback(null); })
+      .catch(err => setProxyFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setProxyLoading(false));
+  }, [base]);
+
+  const loadServerInfo = useCallback(() => {
+    setServerLoading(true);
+    api<ServerInfo>(base + "/server")
+      .then(data => { setServerInfo(data); setServerFeedback(null); })
+      .catch(err => setServerFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setServerLoading(false));
+  }, [base]);
+
+  const runProxyAction = (request: Promise<unknown>, successMessage: string) => {
+    setProxyBusy(true);
+    setProxyFeedback(null);
+    request
+      .then(() => { onNotice(successMessage); loadProxy(); })
+      .catch(err => setProxyFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setProxyBusy(false));
+  };
+
+  const startProxyHealthCheck = () =>
+    runProxyAction(api(base + "/proxy/health-check", { method: "POST" }), "プロキシのヘルスチェックを開始しました");
+
+  const resetProxyCircuit = (row: ProxySessionRow) =>
+    runProxyAction(
+      api(base + "/proxy/sessions/" + row.session_id + "/reset", {
+        method: "POST",
+        body: JSON.stringify({ circuit: true, cooldown: false }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      "遮断を解除しました"
+    );
+
+  const resetProxyCooldown = (row: ProxySessionRow) => {
+    if (!confirm("セッション " + row.session_id + " のクーリング（再利用待ち）を解除します。\n割当数も0に戻り、すぐ再利用されます。よろしいですか？")) return;
+    runProxyAction(
+      api(base + "/proxy/sessions/" + row.session_id + "/reset", {
+        method: "POST",
+        body: JSON.stringify({ circuit: true, cooldown: true }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      "クーリングを解除しました"
+    );
+  };
+
+  const deleteProxySession = (row: ProxySessionRow) => {
+    if (!confirm("セッション " + row.session_id + " を削除しますか？（垢が紐付いていない未使用のセッションです）")) return;
+    runProxyAction(api(base + "/proxy/sessions/" + row.session_id, { method: "DELETE" }), "セッションを削除しました");
+  };
+
+  // ヘルスチェック中は3秒ごとに状態を取り直し、終わったら自然に止まる。
+  const proxyHealthRunning = proxy?.health_check.running ?? false;
+  useEffect(() => {
+    if (activeTab !== "proxy" || !proxyHealthRunning) return;
+    const timer = window.setTimeout(loadProxy, 3000);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, proxyHealthRunning, proxy, loadProxy]);
+
   useEffect(() => {
     if (activeTab === "status") loadStatus();
     if (activeTab === "inventory") loadInventory();
     if (activeTab === "accounts") loadAccounts();
     if (activeTab === "generate") { loadStatus(); loadConfig(); }
     if (activeTab === "restock") loadRestockRules();
+    if (activeTab === "proxy") loadProxy();
+    if (activeTab === "server") loadServerInfo();
   }, [activeTab]);
 
   useEffect(() => {
@@ -368,7 +520,9 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     { key: "accounts", label: "アカウント" },
     { key: "generate", label: "垢生成" },
     { key: "push", label: "仕入れbotに追加" },
-    { key: "restock", label: "自動補充" }
+    { key: "restock", label: "自動補充" },
+    { key: "proxy", label: "プロキシ" },
+    { key: "server", label: "サーバー" }
   ];
 
   return (
@@ -758,6 +912,162 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             </div>
           </section>
         </>
+      )}
+      {activeTab === "proxy" && (
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>プロキシ</h3>
+              <p className="muted">
+                生成に使う住宅プロキシのセッション状況です。1つのIPに割り当てる垢数の上限に達したセッションは、一定期間クーリングして再利用します。
+              </p>
+            </div>
+            <button type="button" className="secondary" onClick={loadProxy} disabled={proxyLoading}>
+              {proxyLoading ? "更新中…" : "更新"}
+            </button>
+          </div>
+          {proxyFeedback && <div className="alert error">{proxyFeedback.message}</div>}
+          {proxy && (
+            <>
+              <div className="metric-grid">
+                <article className="metric card"><span>セッション数</span><strong>{proxy.summary.total_sessions}</strong></article>
+                <article className="metric card"><span>利用可能</span><strong>{proxy.summary.ready}</strong></article>
+                <article className="metric card"><span>クーリング中</span><strong>{proxy.summary.cooling}</strong></article>
+                <article className="metric card"><span>遮断中</span><strong>{proxy.summary.circuit_open}</strong></article>
+              </div>
+              <div className="serverless-note">
+                <strong>接続先</strong>
+                <span>
+                  {proxy.config.provider} — {proxy.config.host}:{proxy.config.port}
+                  （{proxy.config.country || "国指定なし"}）・1IPあたり最大 {proxy.config.max_accounts_per_ip} 垢
+                </span>
+                <span>プロキシ業者や認証情報の変更は、ジェネレーター側の設定ファイルで行います。</span>
+              </div>
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={startProxyHealthCheck}
+                  disabled={proxyBusy || proxy.health_check.running}
+                >
+                  {proxy.health_check.running ? "ヘルスチェック実行中…" : "全セッションのヘルスチェック"}
+                </button>
+              </div>
+              {proxy.health_check.result && !proxy.health_check.running && (
+                <div className={proxy.health_check.result.error ? "alert error" : "alert success"}>
+                  {proxy.health_check.result.error
+                    ? "ヘルスチェックに失敗しました: " + proxy.health_check.result.error
+                    : "前回のヘルスチェック: " + proxy.health_check.result.healthy + " / " + proxy.health_check.result.checked + " セッションが正常"}
+                  {proxy.health_check.finished_at ? "（" + new Date(proxy.health_check.finished_at * 1000).toLocaleString("ja-JP") + "）" : ""}
+                </div>
+              )}
+
+              <div className="list-stack">
+                {proxy.sessions.map(row => (
+                  <div className="serverless-note" key={row.session_id}>
+                    <div className="x-generator-row-head">
+                      <span className={`status-pill ${PROXY_STATE_TONE[row.state]}`}><i />{PROXY_STATE_LABEL[row.state]}</span>
+                      <strong>セッション {row.session_id}</strong>
+                    </div>
+                    <span>
+                      割当 {row.account_count}/{row.max_accounts} 垢 ・ 紐付き {row.assigned_accounts} 垢 ・
+                      出口IP {row.last_exit_ip ?? "未確認"}
+                      {row.last_signup_at ? " ・ 最終使用 " + new Date(row.last_signup_at).toLocaleString("ja-JP") : ""}
+                    </span>
+                    {row.state === "cooling" && row.cooldown_until && (
+                      <span>クーリング解除予定 {new Date(row.cooldown_until).toLocaleString("ja-JP")}</span>
+                    )}
+                    {row.state === "circuit_open" && row.circuit_open_until && (
+                      <span>連続失敗 {row.consecutive_failures} 回 ・ 自動再試行 {new Date(row.circuit_open_until).toLocaleString("ja-JP")}</span>
+                    )}
+                    <div className="button-row">
+                      {(row.state === "circuit_open" || row.consecutive_failures > 0) && (
+                        <button type="button" className="secondary" onClick={() => resetProxyCircuit(row)} disabled={proxyBusy}>
+                          遮断を解除
+                        </button>
+                      )}
+                      {(row.state === "cooling" || row.state === "full") && (
+                        <button type="button" className="danger" onClick={() => resetProxyCooldown(row)} disabled={proxyBusy}>
+                          クーリングを解除
+                        </button>
+                      )}
+                      {row.assigned_accounts === 0 && (
+                        <button type="button" className="danger" onClick={() => deleteProxySession(row)} disabled={proxyBusy}>
+                          削除
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {proxy.sessions.length === 0 && <p className="muted">まだセッションがありません。垢を生成すると自動で作られます。</p>}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {activeTab === "server" && (
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>サーバー</h3>
+              <p className="muted">ジェネレーターが動いているサーバー（VPS）の状態です。</p>
+            </div>
+            <button type="button" className="secondary" onClick={loadServerInfo} disabled={serverLoading}>
+              {serverLoading ? "更新中…" : "更新"}
+            </button>
+          </div>
+          {serverFeedback && <div className="alert error">{serverFeedback.message}</div>}
+          {serverInfo && (
+            <>
+              <div className="metric-grid">
+                <article className="metric card">
+                  <span>メモリ</span>
+                  <strong>{serverInfo.memory ? formatPercent(serverInfo.memory.used, serverInfo.memory.total) : "—"}</strong>
+                  <small>{serverInfo.memory ? formatBytes(serverInfo.memory.used) + " / " + formatBytes(serverInfo.memory.total) : "取得できません"}</small>
+                </article>
+                <article className="metric card">
+                  <span>ディスク</span>
+                  <strong>{serverInfo.disk ? formatPercent(serverInfo.disk.used, serverInfo.disk.total) : "—"}</strong>
+                  <small>{serverInfo.disk ? "空き " + formatBytes(serverInfo.disk.free) : "取得できません"}</small>
+                </article>
+                <article className="metric card">
+                  <span>CPU負荷（1分）</span>
+                  <strong>{serverInfo.load_average ? serverInfo.load_average[0]!.toFixed(2) : "—"}</strong>
+                  <small>{serverInfo.cpu_count ? serverInfo.cpu_count + " コア" : ""}</small>
+                </article>
+                <article className="metric card">
+                  <span>稼働時間</span>
+                  <strong>{formatDuration(serverInfo.host_uptime_seconds ?? serverInfo.api_uptime_seconds)}</strong>
+                  <small>{serverInfo.host_uptime_seconds !== null ? "サーバー全体" : "APIプロセス"}</small>
+                </article>
+              </div>
+              <div className="list-stack">
+                <div className="serverless-note">
+                  <strong>サーバー</strong>
+                  <span>{serverInfo.hostname} ・ {serverInfo.platform} ・ Python {serverInfo.python}</span>
+                </div>
+                <div className="serverless-note">
+                  <strong>ジェネレーターAPI</strong>
+                  <span>
+                    起動から {formatDuration(serverInfo.api_uptime_seconds)} ・ 垢生成ジョブ {serverInfo.orchestrator_running ? "実行中" : "停止中"}
+                  </span>
+                </div>
+                <div className="serverless-note">
+                  <strong>データ</strong>
+                  <span>データベース {formatBytes(serverInfo.db_size_bytes)} ・ ログ {formatBytes(serverInfo.log_size_bytes)}</span>
+                </div>
+                {serverInfo.load_average && (
+                  <div className="serverless-note">
+                    <strong>CPU負荷平均</strong>
+                    <span>1分 {serverInfo.load_average[0]!.toFixed(2)} ・ 5分 {serverInfo.load_average[1]!.toFixed(2)} ・ 15分 {serverInfo.load_average[2]!.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </section>
       )}
     </div>
   );

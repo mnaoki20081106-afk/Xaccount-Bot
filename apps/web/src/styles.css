@@ -4476,3 +4476,31 @@ body.dsm-touch-reordering .discord-category {
 .x-generator-manager details[open] > summary {
   margin-bottom: 10px;
 }
+
+/* 垢生成タブはタブ数が多いので、スマホでも横に潰れず折り返して全部見える
+   ようにする（横スクロールにしない）。 */
+.x-generator-manager .vending-section-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+}
+.x-generator-manager .alert {
+  margin-top: 12px;
+}
+/* .serverless-note は span を block・小文字にするので、行見出しのバッジは
+   元の .status-pill の見た目に戻す。 */
+.x-generator-manager .x-generator-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.x-generator-manager .x-generator-row-head .status-pill {
+  display: inline-flex;
+  margin-top: 0;
+  font-size: 11px;
+  line-height: 1.2;
+}
+.x-generator-manager .x-generator-row-head strong {
+  display: inline;
+  font-size: 13px;
+}

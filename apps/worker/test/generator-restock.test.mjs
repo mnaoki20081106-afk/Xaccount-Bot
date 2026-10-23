@@ -10,6 +10,8 @@ const shiireSecret = 'shiire-secret-longer-than-32-characters-x';
 async function runtime(t) {
   const state = {
     generatorCalls: 0,
+    generatorRequests: [],
+    generatorStubs: {},
     generatorPops: [],
     generatorOutOfStock: false,
     shiireStock: 0,
@@ -37,7 +39,13 @@ async function runtime(t) {
       if (url.hostname === 'generator.example') {
         state.generatorCalls++;
         assert.ok(request.headers.get('X-Generator-Signature'), 'generator calls must be signed');
-        if (url.pathname !== '/api/generator/pop') return Response.json({ok: true, path: url.pathname});
+        if (url.pathname !== '/api/generator/pop') {
+          const text = await request.text();
+          state.generatorRequests.push({method: request.method, path: url.pathname, body: text});
+          const stub = state.generatorStubs[request.method + ' ' + url.pathname];
+          if (stub) return Response.json(stub.body, {status: stub.status});
+          return Response.json({ok: true, path: url.pathname});
+        }
         const body = await request.json();
         state.generatorPops.push(body);
         if (state.generatorOutOfStock) return Response.json({detail: 'OUT_OF_STOCK'}, {status: 409});
@@ -222,7 +230,9 @@ test('every generator route requires a dashboard session and never reaches the g
   const base = `https://worker.example/api/guilds/${guildId}/generator`;
   const routes = [
     ['GET', '/status'], ['GET', '/inventory'], ['GET', '/accounts'], ['GET', '/config'],
-    ['POST', '/generate'], ['POST', '/push-to-shiire'], ['GET', '/restock-rules']
+    ['POST', '/generate'], ['POST', '/push-to-shiire'], ['GET', '/restock-rules'],
+    ['GET', '/proxy'], ['POST', '/proxy/health-check'], ['POST', '/proxy/sessions/abc123/reset'],
+    ['DELETE', '/proxy/sessions/abc123'], ['GET', '/server']
   ];
   for (const [method, path] of routes) {
     const body = method === 'POST' ? JSON.stringify({count: 1, supplierId: 's', sku: 'k'}) : undefined;
@@ -236,4 +246,49 @@ test('every generator route requires a dashboard session and never reaches the g
   const status = await call(`/api/guilds/${guildId}/generator/status`);
   assert.equal(status.status, 200);
   assert.equal(state.generatorCalls, 1);
+});
+
+test('proxy and server routes are forwarded with the right method, path and body', async t => {
+  const {state, call} = await runtime(t);
+  const base = `/api/guilds/${guildId}/generator`;
+
+  assert.equal((await call(base + '/proxy')).body.path, '/api/generator/proxy');
+  assert.equal((await call(base + '/server')).body.path, '/api/generator/server');
+  assert.equal((await call(base + '/proxy/health-check', 'POST')).status, 200);
+  assert.equal((await call(base + '/proxy/sessions/abc123/reset', 'POST', {circuit: false, cooldown: true})).status, 200);
+  assert.equal((await call(base + '/proxy/sessions/abc123', 'DELETE')).status, 200);
+
+  assert.deepEqual(state.generatorRequests.map(r => r.method + ' ' + r.path), [
+    'GET /api/generator/proxy',
+    'GET /api/generator/server',
+    'POST /api/generator/proxy/health-check',
+    'POST /api/generator/proxy/sessions/abc123/reset',
+    'DELETE /api/generator/proxy/sessions/abc123'
+  ]);
+  assert.deepEqual(JSON.parse(state.generatorRequests[3].body), {circuit: false, cooldown: true});
+});
+
+test('proxy session ids are validated before anything reaches the generator', async t => {
+  const {state, call} = await runtime(t);
+  const base = `/api/guilds/${guildId}/generator`;
+  for (const id of ['bad.id', 'a'.repeat(65), 'x%2Fy']) {
+    assert.equal((await call(base + '/proxy/sessions/' + id, 'DELETE')).status, 400, id);
+    assert.equal((await call(base + '/proxy/sessions/' + id + '/reset', 'POST', {circuit: true})).status, 400, id);
+  }
+  assert.equal(state.generatorRequests.length, 0);
+});
+
+test('generator refusals reach the dashboard, but a rejected signature does not look like a logout', async t => {
+  const {state, call} = await runtime(t);
+  const base = `/api/guilds/${guildId}/generator`;
+  state.generatorStubs['DELETE /api/generator/proxy/sessions/busy01'] = {status: 409, body: {detail: 'SESSION_IN_USE'}};
+  state.generatorStubs['GET /api/generator/proxy'] = {status: 401, body: {detail: 'INVALID_SIGNATURE'}};
+
+  const busy = await call(base + '/proxy/sessions/busy01', 'DELETE');
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, /SESSION_IN_USE/);
+
+  const rejected = await call(base + '/proxy');
+  assert.equal(rejected.status, 502, 'upstream 401 must not be forwarded as 401');
+  assert.match(rejected.body.error, /INVALID_SIGNATURE/);
 });

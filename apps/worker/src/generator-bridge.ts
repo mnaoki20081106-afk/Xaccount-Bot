@@ -168,6 +168,38 @@ export async function handleGeneratorBridge(
       });
     }
 
+    if (suffix === "/proxy" && request.method === "GET") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/proxy", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/proxy/health-check" && request.method === "POST") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/proxy/health-check", { method: "POST", body: "{}" });
+      return json(env, await generatorJson(resp));
+    }
+
+    const proxySession = suffix.match(/^\/proxy\/sessions\/([^/]+)(\/reset)?$/);
+    if (proxySession) {
+      const sessionId = proxySession[1]!;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) {
+        return json(env, { error: "INVALID_SESSION_ID" }, 400);
+      }
+      const path = "/api/generator/proxy/sessions/" + sessionId;
+      if (proxySession[2] === "/reset" && request.method === "POST") {
+        const resp = await signedGeneratorFetch(env, path + "/reset", { method: "POST", body: await request.text() || "{}" });
+        return json(env, await generatorJson(resp));
+      }
+      if (!proxySession[2] && request.method === "DELETE") {
+        const resp = await signedGeneratorFetch(env, path, { method: "DELETE" });
+        return json(env, await generatorJson(resp));
+      }
+    }
+
+    if (suffix === "/server" && request.method === "GET") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/server", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
     if (suffix === "/restock-rules" || suffix.startsWith("/restock-rules/")) {
       return await handleGeneratorRestockApi(request, env, guildId, suffix.slice("/restock-rules".length));
     }
@@ -178,6 +210,14 @@ export async function handleGeneratorBridge(
       return json(env, { error: error.message }, error.status);
     }
     const msg = error instanceof Error ? error.message : String(error);
+    // Pass genuine client-side refusals from the generator (bad id, conflict,
+    // not found) through as-is so the dashboard can show them. 401/403 are not
+    // passed: a rejected bridge signature must not look like an expired
+    // dashboard login (the dashboard signs the user out on 401).
+    const upstream = msg.match(/^GENERATOR_API_ERROR:.*\(HTTP (400|404|409|422)\)$/);
+    if (upstream) {
+      return json(env, { error: msg }, Number(upstream[1]));
+    }
     const status =
       msg.startsWith("GENERATOR_API_BASE_URL_NOT_CONFIGURED") ||
       msg.startsWith("GENERATOR_BRIDGE_SECRET_NOT_CONFIGURED") ||
