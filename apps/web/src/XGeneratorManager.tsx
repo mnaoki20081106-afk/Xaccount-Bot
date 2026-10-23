@@ -214,10 +214,13 @@ const TARGET_SYSTEM_LABEL: Record<string, string> = {
 
 type GiveawayOverview = {
   enabled: boolean;
+  burstLimit: number;
+  burstWindowMinutes: number;
+  blocked: Array<{ user_id: string; reason: string | null; created_at: number }>;
   stockCount: number;
   reservedCount: number;
   claims: Record<string, number>;
-  recent: Array<{ user_id: string; status: string; error: string | null; updated_at: number; delivered_at: number | null }>;
+  recent: Array<{ user_id: string; status: string; error: string | null; attempts: number; updated_at: number; delivered_at: number | null }>;
 };
 
 type PendingDelivery = {
@@ -394,6 +397,9 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     giveaway: { ...DEFAULT_POOL_FORM, minStock: "3", targetStock: "10", maxBatch: "5" }
   });
   const [panelChannelId, setPanelChannelId] = useState("");
+  const [burstInput, setBurstInput] = useState("");
+  const [blockUserId, setBlockUserId] = useState("");
+  const [blockReason, setBlockReason] = useState("");
 
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
@@ -596,6 +602,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     ])
       .then(([overview, invite, pend, rules]) => {
         setGiveaway(overview);
+        setBurstInput(String(overview.burstLimit));
         setInviteStock(invite.stockCount);
         setPending(pend.pending);
         setRestockRules(rules);
@@ -677,6 +684,48 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
         headers: { "Content-Type": "application/json" }
       }),
       enabled ? "無料配布を開始しました" : "無料配布を停止しました"
+    );
+  };
+
+  const saveBurstLimit = () => {
+    const limit = Number(burstInput);
+    if (!Number.isInteger(limit) || limit < 0 || limit > 1000) {
+      setPerksFeedback({ kind: "error", message: "配布上限は0〜1000の整数で入力してください（0で無効）" });
+      return;
+    }
+    runPerksAction(
+      api(shiireBase + "/free-giveaway/settings", {
+        method: "POST",
+        body: JSON.stringify({ burstLimit: limit }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      "配布上限を保存しました"
+    );
+  };
+
+  const blockGiveawayUser = () => {
+    const userId = blockUserId.trim();
+    if (!/^\d{15,25}$/.test(userId)) {
+      setPerksFeedback({ kind: "error", message: "DiscordのユーザーID（数字17〜20桁ほど）を入力してください" });
+      return;
+    }
+    runPerksAction(
+      api(shiireBase + "/free-giveaway/blocklist", {
+        method: "POST",
+        body: JSON.stringify({ userId, reason: blockReason }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      "受け取り禁止に追加しました"
+    );
+    setBlockUserId("");
+    setBlockReason("");
+  };
+
+  const unblockGiveawayUser = (userId: string) => {
+    if (!confirm("ユーザーID " + userId + " の受け取り禁止を解除しますか？")) return;
+    runPerksAction(
+      api(shiireBase + "/free-giveaway/blocklist/" + encodeURIComponent(userId), { method: "DELETE" }),
+      "受け取り禁止を解除しました"
     );
   };
 
@@ -1719,6 +1768,53 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
                     )}
                   </div>
 
+                  <h4>不正受け取り対策</h4>
+                  <div className="serverless-note">
+                    <strong>自動で行っていること</strong>
+                    <span>
+                      Discordアカウント（ユーザーID）ごとに1個まで。サーバーを抜けて入り直しても増えません。
+                      メンバー認証（ルール同意）が済んでいない人、タイムアウト中の人、受け取り禁止の人には渡しません。
+                      連打しても確保されるのは1個だけで、すべての押下を記録しています。
+                    </span>
+                  </div>
+                  <div className="form-grid two">
+                    <label className="field">
+                      <span>{giveaway.burstWindowMinutes}分あたりの配布上限（0で無効）</span>
+                      <input type="number" min={0} max={1000} value={burstInput} onChange={e => setBurstInput(e.target.value)} />
+                      <small>この数を超えたら、しばらく待ってもらいます。サブ垢を大量に使った一斉受け取りを遅らせます。</small>
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="secondary" onClick={saveBurstLimit} disabled={perksBusy}>配布上限を保存</button>
+                  </div>
+
+                  <div className="form-grid two">
+                    <label className="field">
+                      <span>受け取り禁止にするユーザーID</span>
+                      <input value={blockUserId} onChange={e => setBlockUserId(e.target.value)} placeholder="例: 123456789012345678" />
+                    </label>
+                    <label className="field">
+                      <span>理由（メモ）</span>
+                      <input value={blockReason} onChange={e => setBlockReason(e.target.value)} maxLength={200} />
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="danger" onClick={blockGiveawayUser} disabled={perksBusy}>受け取り禁止に追加</button>
+                  </div>
+                  {giveaway.blocked.length > 0 && (
+                    <div className="list-stack">
+                      {giveaway.blocked.map(b => (
+                        <div className="serverless-note" key={b.user_id}>
+                          <strong>ユーザーID {b.user_id}</strong>
+                          <span>{b.reason ?? "（理由なし）"} ・ {new Date(b.created_at).toLocaleString("ja-JP")}</span>
+                          <div className="button-row">
+                            <button type="button" className="secondary" onClick={() => unblockGiveawayUser(b.user_id)} disabled={perksBusy}>解除</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {renderPool("giveaway", "無料配布", "在庫が0になると、ボタンを押した人は「在庫切れ」と表示され、入荷後に同じボタンでもう一度受け取れます。", giveaway.stockCount)}
 
                   <h4>パネルを設置</h4>
@@ -1744,7 +1840,10 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
                         {giveaway.recent.map(r => (
                           <div className="serverless-note" key={r.user_id}>
                             <strong>{CLAIM_STATUS_LABEL[r.status] ?? r.status} ・ ユーザーID {r.user_id}</strong>
-                            <span>{new Date(r.updated_at).toLocaleString("ja-JP")}{r.error ? " ・ " + r.error : ""}</span>
+                            <span>
+                              {new Date(r.updated_at).toLocaleString("ja-JP")} ・ 押した回数 {r.attempts}{r.attempts >= 5 ? "（多い）" : ""}
+                              {r.error ? " ・ " + r.error : ""}
+                            </span>
                           </div>
                         ))}
                       </div>
