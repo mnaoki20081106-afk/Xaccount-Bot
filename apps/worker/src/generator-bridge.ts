@@ -195,6 +195,57 @@ export async function handleGeneratorBridge(
       }
     }
 
+    if (suffix === "/costs" && request.method === "GET") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/costs", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/expenses" && (request.method === "GET" || request.method === "POST")) {
+      const resp = request.method === "POST"
+        ? await signedGeneratorFetch(env, "/api/generator/expenses", { method: "POST", body: await request.text() || "{}" })
+        : await signedGeneratorFetch(env, "/api/generator/expenses", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    const expense = suffix.match(/^\/expenses\/([^/]+)$/);
+    if (expense && request.method === "DELETE") {
+      if (!/^\d{1,12}$/.test(expense[1]!)) {
+        return json(env, { error: "INVALID_EXPENSE_ID" }, 400);
+      }
+      const resp = await signedGeneratorFetch(env, "/api/generator/expenses/" + expense[1], { method: "DELETE" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/vps-contract" && (request.method === "GET" || request.method === "PUT")) {
+      const resp = request.method === "PUT"
+        ? await signedGeneratorFetch(env, "/api/generator/vps-contract", { method: "PUT", body: await request.text() || "{}" })
+        : await signedGeneratorFetch(env, "/api/generator/vps-contract", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/logs" && request.method === "GET") {
+      // Forward only the two supported, validated parameters.
+      const query = new URLSearchParams();
+      const lines = url.searchParams.get("lines");
+      const level = url.searchParams.get("level");
+      if (lines !== null) {
+        if (!/^\d{1,3}$/.test(lines)) return json(env, { error: "INVALID_LINES" }, 400);
+        query.set("lines", lines);
+      }
+      if (level) {
+        if (!/^[A-Za-z]{1,10}$/.test(level)) return json(env, { error: "INVALID_LEVEL" }, 400);
+        query.set("level", level);
+      }
+      const qs = query.toString();
+      const resp = await signedGeneratorFetch(env, "/api/generator/logs" + (qs ? "?" + qs : ""), { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/generate/stop" && request.method === "POST") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/generate/stop", { method: "POST", body: "{}" });
+      return json(env, await generatorJson(resp));
+    }
+
     if (suffix === "/server" && request.method === "GET") {
       const resp = await signedGeneratorFetch(env, "/api/generator/server", { method: "GET" });
       return json(env, await generatorJson(resp));

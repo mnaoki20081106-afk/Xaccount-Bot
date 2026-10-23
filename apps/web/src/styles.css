@@ -4504,3 +4504,43 @@ body.dsm-touch-reordering .discord-category {
   display: inline;
   font-size: 13px;
 }
+
+/* 単価の見出しカード（ステータス・コストタブ共通） */
+.x-generator-unit-cost {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 14px;
+}
+.x-generator-unit-cost .metric strong {
+  font-size: 26px;
+}
+@media (max-width: 480px) {
+  .x-generator-unit-cost {
+    grid-template-columns: 1fr;
+  }
+}
+/* ログは固定幅フォントで、長い行は折り返さず横スクロールにする */
+.x-generator-log {
+  margin: 10px 0 0;
+  padding: 12px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid #1c2538;
+  border-radius: 10px;
+  background: #080d18;
+  color: #b7c3dc;
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+/* 期間ごとのカードは入れ子になるので、スマホでも2列のまま小さく並べる */
+.x-generator-unit-cost.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.x-generator-unit-cost.compact .metric {
+  padding: 12px 14px;
+}
+.x-generator-unit-cost.compact .metric strong {
+  font-size: 20px;
+}

@@ -41,7 +41,7 @@ async function runtime(t) {
         assert.ok(request.headers.get('X-Generator-Signature'), 'generator calls must be signed');
         if (url.pathname !== '/api/generator/pop') {
           const text = await request.text();
-          state.generatorRequests.push({method: request.method, path: url.pathname, body: text});
+          state.generatorRequests.push({method: request.method, path: url.pathname, search: url.search, body: text});
           const stub = state.generatorStubs[request.method + ' ' + url.pathname];
           if (stub) return Response.json(stub.body, {status: stub.status});
           return Response.json({ok: true, path: url.pathname});
@@ -232,7 +232,9 @@ test('every generator route requires a dashboard session and never reaches the g
     ['GET', '/status'], ['GET', '/inventory'], ['GET', '/accounts'], ['GET', '/config'],
     ['POST', '/generate'], ['POST', '/push-to-shiire'], ['GET', '/restock-rules'],
     ['GET', '/proxy'], ['POST', '/proxy/health-check'], ['POST', '/proxy/sessions/abc123/reset'],
-    ['DELETE', '/proxy/sessions/abc123'], ['GET', '/server']
+    ['DELETE', '/proxy/sessions/abc123'], ['GET', '/server'],
+    ['GET', '/costs'], ['GET', '/expenses'], ['POST', '/expenses'], ['DELETE', '/expenses/1'],
+    ['GET', '/vps-contract'], ['PUT', '/vps-contract'], ['GET', '/logs'], ['POST', '/generate/stop']
   ];
   for (const [method, path] of routes) {
     const body = method === 'POST' ? JSON.stringify({count: 1, supplierId: 's', sku: 'k'}) : undefined;
@@ -291,4 +293,40 @@ test('generator refusals reach the dashboard, but a rejected signature does not 
   const rejected = await call(base + '/proxy');
   assert.equal(rejected.status, 502, 'upstream 401 must not be forwarded as 401');
   assert.match(rejected.body.error, /INVALID_SIGNATURE/);
+});
+
+test('cost, ledger, contract, log and stop routes are forwarded; ids and log queries are validated', async t => {
+  const {state, call} = await runtime(t);
+  const base = `/api/guilds/${guildId}/generator`;
+
+  assert.equal((await call(base + '/costs')).body.path, '/api/generator/costs');
+  assert.equal((await call(base + '/expenses')).body.path, '/api/generator/expenses');
+  const expense = {category: 'proxy', amount: 20, currency: 'USD', rate_to_jpy: 150, quantity: 10};
+  assert.equal((await call(base + '/expenses', 'POST', expense)).status, 200);
+  assert.equal((await call(base + '/expenses/42', 'DELETE')).status, 200);
+  assert.equal((await call(base + '/vps-contract')).body.path, '/api/generator/vps-contract');
+  assert.equal((await call(base + '/vps-contract', 'PUT', {monthly_fee_jpy: 3000})).status, 200);
+  assert.equal((await call(base + '/logs?lines=50&level=error&evil=1')).status, 200);
+  assert.equal((await call(base + '/generate/stop', 'POST')).status, 200);
+
+  assert.deepEqual(state.generatorRequests.map(r => r.method + ' ' + r.path), [
+    'GET /api/generator/costs',
+    'GET /api/generator/expenses',
+    'POST /api/generator/expenses',
+    'DELETE /api/generator/expenses/42',
+    'GET /api/generator/vps-contract',
+    'PUT /api/generator/vps-contract',
+    'GET /api/generator/logs',
+    'POST /api/generator/generate/stop'
+  ]);
+  assert.equal(state.generatorRequests[6].search, '?lines=50&level=error', 'only the supported log parameters are forwarded');
+  assert.deepEqual(JSON.parse(state.generatorRequests[2].body), expense);
+  assert.deepEqual(JSON.parse(state.generatorRequests[5].body), {monthly_fee_jpy: 3000});
+
+  const before = state.generatorRequests.length;
+  assert.equal((await call(base + '/expenses/abc', 'DELETE')).status, 400);
+  assert.equal((await call(base + '/expenses/1%2F..', 'DELETE')).status, 400);
+  assert.equal((await call(base + '/logs?lines=abc')).status, 400);
+  assert.equal((await call(base + '/logs?level=x;y')).status, 400);
+  assert.equal(state.generatorRequests.length, before, 'invalid input must never reach the generator');
 });

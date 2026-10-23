@@ -49,7 +49,78 @@ type AccountRow = {
   notes: string | null;
 };
 
-type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "proxy" | "server";
+type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "proxy" | "server" | "cost";
+
+type CostWindow = {
+  key: string;
+  label: string;
+  costs: { proxy: number; sms: number; captcha: number; email: number; other: number; vps: number; total: number };
+  accounts: { created: number; alive: number; ready: number; failed: number };
+  yield_rate: number | null;
+  unit_cost: { per_alive: number | null; per_ready: number | null; per_created: number | null };
+  unit_breakdown: Record<string, number | null> | null;
+};
+
+type VpsContract = {
+  configured: boolean;
+  label: string;
+  provider: string;
+  monthly_fee_jpy: number;
+  billing_day: number | null;
+  started_at: string | null;
+  note: string | null;
+  next_due: string | null;
+};
+
+type CostData = {
+  generated_at: string;
+  windows: CostWindow[];
+  proxy: { payments: number; total_paid_jpy: number; total_gb: number; avg_jpy_per_gb: number | null; last_paid_at: string | null };
+  vps: VpsContract;
+};
+
+type ExpenseRow = {
+  id: number;
+  category: string;
+  description: string;
+  amount_jpy: number;
+  currency: string;
+  amount_original: number;
+  rate_to_jpy: number;
+  quantity: number | null;
+  unit: string | null;
+  paid_at: string;
+  note: string | null;
+};
+
+const EXPENSE_CATEGORY_LABEL: Record<string, string> = {
+  proxy: "プロキシ（通信量）",
+  sms: "SMS認証",
+  captcha: "Captcha",
+  email: "メール",
+  other: "その他"
+};
+
+const COST_PART_LABEL: Record<string, string> = {
+  proxy: "プロキシ",
+  sms: "SMS",
+  captcha: "Captcha",
+  email: "メール",
+  other: "その他",
+  vps: "VPS"
+};
+
+function formatYen(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return "¥" + Math.round(value).toLocaleString("ja-JP");
+}
+
+function todayIso(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return now.getFullYear() + "-" + month + "-" + day;
+}
 
 type ProxySessionRow = {
   session_id: string;
@@ -241,6 +312,37 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [serverLoading, setServerLoading] = useState(false);
   const [serverFeedback, setServerFeedback] = useState<Feedback | null>(null);
 
+  const [costs, setCosts] = useState<CostData | null>(null);
+  const [costsLoading, setCostsLoading] = useState(false);
+  const [costsFeedback, setCostsFeedback] = useState<Feedback | null>(null);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [expenseCategory, setExpenseCategory] = useState("proxy");
+  const [expenseDescription, setExpenseDescription] = useState("");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseCurrency, setExpenseCurrency] = useState("JPY");
+  const [expenseRate, setExpenseRate] = useState("");
+  const [expenseQuantity, setExpenseQuantity] = useState("");
+  const [expensePaidAt, setExpensePaidAt] = useState(todayIso());
+  const [expenseNote, setExpenseNote] = useState("");
+  const [expenseBusy, setExpenseBusy] = useState(false);
+  const [expenseFeedback, setExpenseFeedback] = useState<Feedback | null>(null);
+
+  const [vpsLabel, setVpsLabel] = useState("");
+  const [vpsProvider, setVpsProvider] = useState("");
+  const [vpsFee, setVpsFee] = useState("");
+  const [vpsBillingDay, setVpsBillingDay] = useState("");
+  const [vpsStartedAt, setVpsStartedAt] = useState("");
+  const [vpsNote, setVpsNote] = useState("");
+  const [vpsBusy, setVpsBusy] = useState(false);
+  const [vpsFeedback, setVpsFeedback] = useState<Feedback | null>(null);
+
+  const [logLines, setLogLines] = useState<string[] | null>(null);
+  const [logAvailable, setLogAvailable] = useState(true);
+  const [logLevel, setLogLevel] = useState("");
+  const [logLoading, setLogLoading] = useState(false);
+  const [logFeedback, setLogFeedback] = useState<Feedback | null>(null);
+  const [stopBusy, setStopBusy] = useState(false);
+
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
   const shiireVendingBase = "/api/guilds/" + guildId + "/shiire/vending";
@@ -301,6 +403,134 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
       .catch(err => setProxyFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
       .finally(() => setProxyLoading(false));
   }, [base]);
+
+  const loadCosts = useCallback(() => {
+    setCostsLoading(true);
+    api<CostData>(base + "/costs")
+      .then(data => { setCosts(data); setCostsFeedback(null); })
+      .catch(err => setCostsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setCostsLoading(false));
+  }, [base]);
+
+  const loadExpenses = useCallback(() => {
+    api<{ expenses: ExpenseRow[] }>(base + "/expenses")
+      .then(data => setExpenses(data.expenses))
+      .catch(err => setCostsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [base]);
+
+  const loadVpsContract = useCallback(() => {
+    api<VpsContract>(base + "/vps-contract")
+      .then(data => {
+        setVpsLabel(data.label);
+        setVpsProvider(data.provider);
+        setVpsFee(data.configured ? String(data.monthly_fee_jpy) : "");
+        setVpsBillingDay(data.billing_day ? String(data.billing_day) : "");
+        setVpsStartedAt(data.started_at ?? "");
+        setVpsNote(data.note ?? "");
+      })
+      .catch(err => setVpsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [base]);
+
+  const loadLogs = useCallback((level: string) => {
+    setLogLoading(true);
+    const qs = "?lines=200" + (level ? "&level=" + encodeURIComponent(level) : "");
+    api<{ available: boolean; lines: string[] }>(base + "/logs" + qs)
+      .then(data => { setLogLines(data.lines); setLogAvailable(data.available); setLogFeedback(null); })
+      .catch(err => setLogFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setLogLoading(false));
+  }, [base]);
+
+  const handleAddExpense = () => {
+    const amount = Number(expenseAmount);
+    const quantity = expenseQuantity.trim() === "" ? null : Number(expenseQuantity);
+    if (!(amount > 0)) {
+      setExpenseFeedback({ kind: "error", message: "金額を入力してください" });
+      return;
+    }
+    if (expenseCurrency !== "JPY" && !(Number(expenseRate) > 0)) {
+      setExpenseFeedback({ kind: "error", message: "円以外の通貨は、円への換算レートを入力してください" });
+      return;
+    }
+    if (quantity !== null && !(quantity > 0)) {
+      setExpenseFeedback({ kind: "error", message: "数量は0より大きい値で入力してください" });
+      return;
+    }
+    setExpenseBusy(true);
+    setExpenseFeedback(null);
+    api(base + "/expenses", {
+      method: "POST",
+      body: JSON.stringify({
+        category: expenseCategory,
+        description: expenseDescription,
+        amount,
+        currency: expenseCurrency,
+        rate_to_jpy: expenseCurrency === "JPY" ? null : Number(expenseRate),
+        quantity,
+        paid_at: expensePaidAt || null,
+        note: expenseNote || null
+      }),
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(() => {
+        onNotice("支払いを記録しました");
+        setExpenseDescription("");
+        setExpenseAmount("");
+        setExpenseQuantity("");
+        setExpenseNote("");
+        loadCosts();
+        loadExpenses();
+      })
+      .catch(err => setExpenseFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setExpenseBusy(false));
+  };
+
+  const deleteExpense = (row: ExpenseRow) => {
+    if (!confirm(row.paid_at + " の " + formatYen(row.amount_jpy) + "（" + (EXPENSE_CATEGORY_LABEL[row.category] ?? row.category) + "）の記録を削除しますか？")) return;
+    setExpenseBusy(true);
+    api(base + "/expenses/" + row.id, { method: "DELETE" })
+      .then(() => { onNotice("支払いの記録を削除しました"); loadCosts(); loadExpenses(); })
+      .catch(err => setExpenseFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setExpenseBusy(false));
+  };
+
+  const saveVpsContract = () => {
+    const fee = Number(vpsFee || 0);
+    const day = vpsBillingDay.trim() === "" ? null : Number(vpsBillingDay);
+    if (!(fee >= 0)) {
+      setVpsFeedback({ kind: "error", message: "月額は0以上で入力してください" });
+      return;
+    }
+    if (day !== null && !(Number.isInteger(day) && day >= 1 && day <= 31)) {
+      setVpsFeedback({ kind: "error", message: "支払日は1〜31で入力してください" });
+      return;
+    }
+    setVpsBusy(true);
+    setVpsFeedback(null);
+    api<VpsContract>(base + "/vps-contract", {
+      method: "PUT",
+      body: JSON.stringify({
+        label: vpsLabel,
+        provider: vpsProvider,
+        monthly_fee_jpy: fee,
+        billing_day: day,
+        started_at: vpsStartedAt || null,
+        note: vpsNote || null
+      }),
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(() => { onNotice("VPS契約を保存しました"); loadCosts(); })
+      .catch(err => setVpsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setVpsBusy(false));
+  };
+
+  const stopGeneration = () => {
+    if (!confirm("実行中の垢生成を停止します。作成途中の垢は残りません。よろしいですか？")) return;
+    setStopBusy(true);
+    api(base + "/generate/stop", { method: "POST" })
+      .then(() => { onNotice("垢生成の停止を要求しました"); window.setTimeout(loadStatus, 1500); })
+      .catch(err => setGenFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setStopBusy(false));
+  };
 
   const loadServerInfo = useCallback(() => {
     setServerLoading(true);
@@ -364,7 +594,9 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     if (activeTab === "generate") { loadStatus(); loadConfig(); }
     if (activeTab === "restock") loadRestockRules();
     if (activeTab === "proxy") loadProxy();
-    if (activeTab === "server") loadServerInfo();
+    if (activeTab === "server") { loadServerInfo(); loadVpsContract(); loadLogs(logLevel); }
+    if (activeTab === "cost") { loadCosts(); loadExpenses(); }
+    if (activeTab === "status") loadCosts();
   }, [activeTab]);
 
   useEffect(() => {
@@ -522,6 +754,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     { key: "push", label: "仕入れbotに追加" },
     { key: "restock", label: "自動補充" },
     { key: "proxy", label: "プロキシ" },
+    { key: "cost", label: "コスト・支払い" },
     { key: "server", label: "サーバー" }
   ];
 
@@ -562,6 +795,23 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             </button>
           </div>
           {statusFeedback && <div className="alert error">{statusFeedback.message}</div>}
+          {costs && (() => {
+            const win = costs.windows.find(w => w.key === "30d") ?? costs.windows[0];
+            return win ? (
+              <div className="x-generator-unit-cost">
+                <article className="metric card">
+                  <span>垢1つの単価（見込み・直近30日）</span>
+                  <strong>{formatYen(win.unit_cost.per_alive)}</strong>
+                  <small>生きている垢 {win.accounts.alive} 件あたり ・ 総コスト {formatYen(win.costs.total)}</small>
+                </article>
+                <article className="metric card">
+                  <span>完成垢の単価（実績・直近30日）</span>
+                  <strong>{formatYen(win.unit_cost.per_ready)}</strong>
+                  <small>販売可能になった垢 {win.accounts.ready} 件あたり</small>
+                </article>
+              </div>
+            ) : null;
+          })()}
           {status && (
             <>
               <div className="metric-grid">
@@ -740,6 +990,11 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             >
               {genBusy ? "開始中…" : status?.orchestrator_running ? "実行中" : "垢生成を開始"}
             </button>
+            {status?.orchestrator_running && (
+              <button type="button" className="danger" onClick={stopGeneration} disabled={stopBusy}>
+                {stopBusy ? "停止中…" : "生成を停止"}
+              </button>
+            )}
           </div>
           {genFeedback && (
             <div className={genFeedback.kind === "error" ? "alert error" : "alert success"}>{genFeedback.message}</div>
@@ -1068,6 +1323,248 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             </>
           )}
         </section>
+      )}
+
+      {activeTab === "server" && (
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>VPS契約</h3>
+              <p className="muted">契約しているサーバー（1台）の料金です。月額は日割りにして、垢の単価に自動で含めます。</p>
+            </div>
+          </div>
+          <div className="form-grid two">
+            <label className="field">
+              <span>名前</span>
+              <input value={vpsLabel} onChange={e => setVpsLabel(e.target.value)} placeholder="例: ジェネレーター用VPS" maxLength={100} />
+            </label>
+            <label className="field">
+              <span>契約先</span>
+              <input value={vpsProvider} onChange={e => setVpsProvider(e.target.value)} placeholder="例: ConoHa" maxLength={100} />
+            </label>
+            <label className="field">
+              <span>月額（円）</span>
+              <input type="number" min={0} value={vpsFee} onChange={e => setVpsFee(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>支払日（毎月）</span>
+              <input type="number" min={1} max={31} value={vpsBillingDay} onChange={e => setVpsBillingDay(e.target.value)} placeholder="例: 25" />
+              <small>月末より大きい日は、その月の末日として扱います。</small>
+            </label>
+            <label className="field">
+              <span>契約開始日</span>
+              <input type="date" value={vpsStartedAt} onChange={e => setVpsStartedAt(e.target.value)} />
+              <small>この日より前の分は単価に含めません。</small>
+            </label>
+            <label className="field">
+              <span>メモ</span>
+              <input value={vpsNote} onChange={e => setVpsNote(e.target.value)} maxLength={500} />
+            </label>
+          </div>
+          <div className="button-row">
+            <button type="button" className="primary" onClick={saveVpsContract} disabled={vpsBusy}>
+              {vpsBusy ? "保存中…" : "VPS契約を保存"}
+            </button>
+          </div>
+          {costs?.vps.next_due && (
+            <div className="serverless-note">
+              <strong>次の支払日</strong>
+              <span>{costs.vps.next_due}（月額 {formatYen(costs.vps.monthly_fee_jpy)}）</span>
+            </div>
+          )}
+          {vpsFeedback && <div className={vpsFeedback.kind === "error" ? "alert error" : "alert success"}>{vpsFeedback.message}</div>}
+        </section>
+      )}
+
+      {activeTab === "server" && (
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>ログ</h3>
+              <p className="muted">ジェネレーターの最新のログ（最大200行）です。パスワードやトークンは自動で伏せています。</p>
+            </div>
+            <button type="button" className="secondary" onClick={() => loadLogs(logLevel)} disabled={logLoading}>
+              {logLoading ? "更新中…" : "更新"}
+            </button>
+          </div>
+          <div className="form-grid two">
+            <label className="field">
+              <span>表示するレベル</span>
+              <select value={logLevel} onChange={e => { setLogLevel(e.target.value); loadLogs(e.target.value); }}>
+                <option value="">すべて</option>
+                <option value="ERROR">エラーのみ</option>
+                <option value="WARNING">警告のみ</option>
+                <option value="INFO">情報のみ</option>
+              </select>
+            </label>
+          </div>
+          {logFeedback && <div className="alert error">{logFeedback.message}</div>}
+          {!logAvailable && <p className="muted">ログファイルがまだありません。</p>}
+          {logAvailable && logLines && (
+            <pre className="x-generator-log" aria-label="ジェネレーターのログ">
+              {logLines.length ? logLines.join("\n") : "該当するログはありません。"}
+            </pre>
+          )}
+        </section>
+      )}
+      {activeTab === "cost" && (
+        <>
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h3>垢の単価</h3>
+                <p className="muted">
+                  支払いの記録とVPS料金（日割り）を、作った垢の数で割って常に計算します。
+                  「見込み」はBANされていない垢あたり、「実績」は販売可能になった垢あたりです。
+                </p>
+              </div>
+              <button type="button" className="secondary" onClick={() => { loadCosts(); loadExpenses(); }} disabled={costsLoading}>
+                {costsLoading ? "更新中…" : "更新"}
+              </button>
+            </div>
+            {costsFeedback && <div className="alert error">{costsFeedback.message}</div>}
+            {costs && (
+              <div className="list-stack">
+                {costs.windows.map(win => (
+                  <div className="serverless-note" key={win.key}>
+                    <strong>{win.label}</strong>
+                    <div className="x-generator-unit-cost compact">
+                      <article className="metric card">
+                        <span>見込み単価</span>
+                        <strong>{formatYen(win.unit_cost.per_alive)}</strong>
+                        <small>生きている垢 {win.accounts.alive} 件</small>
+                      </article>
+                      <article className="metric card">
+                        <span>実績単価</span>
+                        <strong>{formatYen(win.unit_cost.per_ready)}</strong>
+                        <small>販売可能な垢 {win.accounts.ready} 件</small>
+                      </article>
+                    </div>
+                    <span>
+                      総コスト {formatYen(win.costs.total)} ・ 作成 {win.accounts.created} 件 ・ BAN・凍結 {win.accounts.failed} 件
+                      {win.yield_rate !== null ? " ・ 生存率 " + Math.round(win.yield_rate * 100) + "%" : ""}
+                    </span>
+                    <span>
+                      {Object.keys(COST_PART_LABEL)
+                        .map(key => COST_PART_LABEL[key] + " " + formatYen(win.costs[key as keyof CostWindow["costs"]]))
+                        .join(" ・ ")}
+                    </span>
+                    {win.unit_breakdown && (
+                      <span>
+                        1垢あたりの内訳:{" "}
+                        {Object.keys(COST_PART_LABEL)
+                          .filter(key => (win.unit_breakdown?.[key] ?? 0) > 0)
+                          .map(key => COST_PART_LABEL[key] + " " + formatYen(win.unit_breakdown?.[key]))
+                          .join(" ・ ") || "—"}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                <p className="muted">
+                  プロキシは通信量のチャージ額を、チャージした日に計上します。まとめてチャージした直後は一時的に高く出るので、
+                  普段は「累計」と見比べてください。
+                </p>
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h3>支払いを記録</h3>
+                <p className="muted">プロキシの通信量チャージ、SMS・Captchaの購入などを記録します。VPSは「サーバー」タブの契約で自動計上されるので、ここには入れないでください。</p>
+              </div>
+            </div>
+            <div className="form-grid two">
+              <label className="field">
+                <span>種類</span>
+                <select value={expenseCategory} onChange={e => setExpenseCategory(e.target.value)}>
+                  {Object.keys(EXPENSE_CATEGORY_LABEL).map(key => (
+                    <option key={key} value={key}>{EXPENSE_CATEGORY_LABEL[key]}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>内容</span>
+                <input value={expenseDescription} onChange={e => setExpenseDescription(e.target.value)} placeholder="例: 10GBチャージ" maxLength={200} />
+              </label>
+              <label className="field">
+                <span>金額</span>
+                <input type="number" min={0} step="any" value={expenseAmount} onChange={e => setExpenseAmount(e.target.value)} />
+              </label>
+              <label className="field">
+                <span>通貨</span>
+                <select value={expenseCurrency} onChange={e => setExpenseCurrency(e.target.value)}>
+                  <option value="JPY">円（JPY）</option>
+                  <option value="USD">米ドル（USD）</option>
+                  <option value="EUR">ユーロ（EUR）</option>
+                </select>
+              </label>
+              {expenseCurrency !== "JPY" && (
+                <label className="field">
+                  <span>換算レート（1{expenseCurrency} = 何円）</span>
+                  <input type="number" min={0} step="any" value={expenseRate} onChange={e => setExpenseRate(e.target.value)} placeholder="例: 150" />
+                  <small>支払い時点のレートを入力してください。</small>
+                </label>
+              )}
+              {expenseCategory === "proxy" && (
+                <label className="field">
+                  <span>購入した通信量（GB）</span>
+                  <input type="number" min={0} step="any" value={expenseQuantity} onChange={e => setExpenseQuantity(e.target.value)} />
+                  <small>入力すると平均の円/GBを計算できます。</small>
+                </label>
+              )}
+              <label className="field">
+                <span>支払日</span>
+                <input type="date" value={expensePaidAt} onChange={e => setExpensePaidAt(e.target.value)} />
+              </label>
+              <label className="field">
+                <span>メモ</span>
+                <input value={expenseNote} onChange={e => setExpenseNote(e.target.value)} maxLength={500} />
+              </label>
+            </div>
+            <div className="button-row">
+              <button type="button" className="primary" onClick={handleAddExpense} disabled={expenseBusy}>
+                {expenseBusy ? "記録中…" : "支払いを記録"}
+              </button>
+            </div>
+            {expenseFeedback && (
+              <div className={expenseFeedback.kind === "error" ? "alert error" : "alert success"}>{expenseFeedback.message}</div>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h3>支払い履歴</h3>
+                {costs && costs.proxy.payments > 0 && (
+                  <p className="muted">
+                    プロキシ: 累計 {formatYen(costs.proxy.total_paid_jpy)}（{costs.proxy.payments}回）
+                    {costs.proxy.total_gb > 0 ? " ・ " + costs.proxy.total_gb + "GB ・ 平均 " + formatYen(costs.proxy.avg_jpy_per_gb) + "/GB" : ""}
+                    {costs.proxy.last_paid_at ? " ・ 最終 " + costs.proxy.last_paid_at : ""}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="list-stack">
+              {expenses.map(row => (
+                <div className="serverless-note" key={row.id}>
+                  <strong>{row.paid_at} ・ {EXPENSE_CATEGORY_LABEL[row.category] ?? row.category} ・ {formatYen(row.amount_jpy)}</strong>
+                  <span>
+                    {row.description || "（内容なし）"}
+                    {row.currency !== "JPY" ? " ・ " + row.amount_original + " " + row.currency + "（1" + row.currency + "=" + row.rate_to_jpy + "円）" : ""}
+                    {row.quantity ? " ・ " + row.quantity + (row.unit ?? "") : ""}
+                    {row.note ? " ・ " + row.note : ""}
+                  </span>
+                  <div className="button-row">
+                    <button type="button" className="danger" onClick={() => deleteExpense(row)} disabled={expenseBusy}>削除</button>
+                  </div>
+                </div>
+              ))}
+              {expenses.length === 0 && <p className="muted">まだ支払いの記録がありません。</p>}
+            </div>
+          </section>
+        </>
       )}
     </div>
   );
