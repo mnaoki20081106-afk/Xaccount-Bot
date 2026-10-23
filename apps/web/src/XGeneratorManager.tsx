@@ -1154,7 +1154,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <input value={pushSku} onChange={e => setPushSku(e.target.value)} placeholder="x_account_clean" />
             </label>
             <label className="field">
-              <span>件数</span>
+              <span>追加する件数</span>
               <input type="number" min={1} max={200} value={pushCount} onChange={e => setPushCount(e.target.value)} />
             </label>
             <label className="field">
@@ -1555,7 +1555,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <h4>ジェネレーターの垢を割り当てる</h4>
               <div className="form-grid two">
                 <label className="field">
-                  <span>件数</span>
+                  <span>今すぐ割り当てる件数</span>
                   <input type="number" min={1} max={200} value={form.assignCount} onChange={e => updatePoolForm(system, { assignCount: e.target.value })} />
                 </label>
                 <label className="field">
