@@ -613,7 +613,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     const form = poolForms[system];
     const count = parseInt(form.assignCount, 10);
     if (!Number.isInteger(count) || count < 1 || count > 200) {
-      setPerksFeedback({ kind: "error", message: "件数は1〜200で指定してください" });
+      setPerksFeedback({ kind: "error", message: "在庫追加数は1〜200で指定してください" });
       return;
     }
     runPerksAction(
@@ -844,7 +844,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
   const handlePush = () => {
     const count = parseInt(pushCount, 10);
     if (!Number.isInteger(count) || count < 1 || count > 200) {
-      setPushFeedback({ kind: "error", message: "件数は 1〜200 で指定してください" });
+      setPushFeedback({ kind: "error", message: "在庫追加数は 1〜200 で指定してください" });
       return;
     }
     if (!pushSupplierId.trim() || !pushSku.trim()) {
@@ -1154,7 +1154,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <input value={pushSku} onChange={e => setPushSku(e.target.value)} placeholder="x_account_clean" />
             </label>
             <label className="field">
-              <span>追加する件数</span>
+              <span>在庫追加数</span>
               <input type="number" min={1} max={200} value={pushCount} onChange={e => setPushCount(e.target.value)} />
             </label>
             <label className="field">
@@ -1555,7 +1555,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
               <h4>ジェネレーターの垢を割り当てる</h4>
               <div className="form-grid two">
                 <label className="field">
-                  <span>今すぐ割り当てる件数</span>
+                  <span>在庫追加数</span>
                   <input type="number" min={1} max={200} value={form.assignCount} onChange={e => updatePoolForm(system, { assignCount: e.target.value })} />
                 </label>
                 <label className="field">
