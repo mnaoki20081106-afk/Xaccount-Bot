@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { randomId, json } from "./utils";
 import { signedGeneratorFetch, generatorJson, popGeneratorAccounts } from "./generator-client";
 import { handleGeneratorRestockApi } from "./generator-restock";
-import { VendingHttpError } from "./vending";
+import { VendingHttpError, requireGuild } from "./vending";
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 
@@ -81,6 +81,11 @@ export async function handleGeneratorBridge(
   const suffix = guildMatch[2] ?? "";
 
   try {
+    // Every generator route moves money (generation costs, popped accounts)
+    // or exposes inventory, so all of them require a dashboard session for a
+    // guild the bot is in — the same check the vending routes use.
+    await requireGuild(request, env, guildId);
+
     if (suffix === "/status" && request.method === "GET") {
       const resp = await signedGeneratorFetch(env, "/api/generator/status", { method: "GET" });
       const data = await generatorJson(resp);

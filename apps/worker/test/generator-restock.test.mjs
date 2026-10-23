@@ -9,6 +9,7 @@ const shiireSecret = 'shiire-secret-longer-than-32-characters-x';
 
 async function runtime(t) {
   const state = {
+    generatorCalls: 0,
     generatorPops: [],
     generatorOutOfStock: false,
     shiireStock: 0,
@@ -34,8 +35,9 @@ async function runtime(t) {
     outboundService: async request => {
       const url = new URL(request.url);
       if (url.hostname === 'generator.example') {
+        state.generatorCalls++;
         assert.ok(request.headers.get('X-Generator-Signature'), 'generator calls must be signed');
-        assert.equal(url.pathname, '/api/generator/pop');
+        if (url.pathname !== '/api/generator/pop') return Response.json({ok: true, path: url.pathname});
         const body = await request.json();
         state.generatorPops.push(body);
         if (state.generatorOutOfStock) return Response.json({detail: 'OUT_OF_STOCK'}, {status: 409});
@@ -213,4 +215,25 @@ test('仕入れBot product is restocked through the signed bridge and survives a
   await sweep();
   assert.equal(state.generatorPops.length, 1);
   assert.equal((await call(rulesPath + '/' + rule.id, 'DELETE')).status, 200);
+});
+
+test('every generator route requires a dashboard session and never reaches the generator without one', async t => {
+  const {mf, state, call} = await runtime(t);
+  const base = `https://worker.example/api/guilds/${guildId}/generator`;
+  const routes = [
+    ['GET', '/status'], ['GET', '/inventory'], ['GET', '/accounts'], ['GET', '/config'],
+    ['POST', '/generate'], ['POST', '/push-to-shiire'], ['GET', '/restock-rules']
+  ];
+  for (const [method, path] of routes) {
+    const body = method === 'POST' ? JSON.stringify({count: 1, supplierId: 's', sku: 'k'}) : undefined;
+    const anonymous = await mf.dispatchFetch(base + path, {method, body, headers: {'Content-Type': 'application/json'}});
+    assert.equal(anonymous.status, 401, method + ' ' + path + ' must refuse requests without a session');
+    const forged = await mf.dispatchFetch(base + path, {method, body, headers: {'Content-Type': 'application/json', Authorization: 'Bearer not-a-real-token'}});
+    assert.equal(forged.status, 401, method + ' ' + path + ' must refuse an unknown token');
+  }
+  assert.equal(state.generatorCalls, 0, 'no unauthenticated request may reach the generator');
+  // With a session the same proxy routes work.
+  const status = await call(`/api/guilds/${guildId}/generator/status`);
+  assert.equal(status.status, 200);
+  assert.equal(state.generatorCalls, 1);
 });

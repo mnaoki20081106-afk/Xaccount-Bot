@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { randomId, json, encrypt, decrypt } from "./utils";
-import { requireGuild, VendingHttpError } from "./vending";
+import { VendingHttpError } from "./vending";
 import {
   ensureVendingSchema,
   getMachine,
@@ -299,8 +299,8 @@ export async function handleGeneratorRestockApi(
   guildId: string,
   suffix: string
 ): Promise<Response> {
+  // Authentication happens once in handleGeneratorBridge before dispatching here.
   await ensureVendingSchema(env);
-  await requireGuild(request, env, guildId);
 
   if (suffix === "" && request.method === "GET") {
     const rules = await listRules(env, guildId);
