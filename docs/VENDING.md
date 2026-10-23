@@ -111,3 +111,22 @@ adapter rather than bundling that Python package.
 - `apps/worker/src/vending-payments.ts` — PayPay/Kyash adapters
 - `apps/worker/src/vending.ts` — Web API + Discord interaction purchase flow
 - `apps/web/src/VendingManager.tsx` — Web dashboard
+
+## Automatic restock from the account generator
+
+「垢生成」タブの「自動補充」から、設置済みの自販機の商品ごとに、在庫が減ったら
+ジェネレーターの垢を自動で補充するルールを作れます（1商品につき1ルール）。
+
+- 対象: 自販機Bot（このWorkerの `vending_products`）と、仕入れBot
+  （Discord-Shiireの自販機商品）の両方。
+- ルール: 最低在庫数を下回ったら、目標在庫数まで、1回あたり最大件数を上限に補充。
+  最低ウォームアップ日数で垢の古さも指定できる。
+- 実行: 毎分のCron（`runGeneratorRestockSweep`）と、画面の「今すぐ補充」。
+- 仕入れBot側は署名付きブリッジ
+  `GET/POST /bridge/main/guilds/:guild/generator/products/:productId/stock`
+  を使う（Discord-Shiire側に同エンドポイントのデプロイが必要）。
+- ジェネレーターの `pop` は取り出した垢を即座にSOLD扱いにするため、取り出し後に納品
+  できなかった垢はルール行に暗号化して保持し、次回の実行で先に納品する。保持中の
+  ルールは削除できない。
+- 主なファイル: `apps/worker/src/generator-restock.ts`,
+  `apps/worker/src/generator-client.ts`, `apps/web/src/XGeneratorManager.tsx`

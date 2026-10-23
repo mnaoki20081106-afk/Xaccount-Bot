@@ -84,7 +84,7 @@ async function sign(
     .join("");
 }
 
-async function signedShiireFetch(
+export async function signedShiireFetch(
   env:Env,
   path:string,
   init:RequestInit={}

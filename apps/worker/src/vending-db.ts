@@ -68,7 +68,7 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_achievement_routes (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,machine_ids_json TEXT NOT NULL DEFAULT '[]',count_display_enabled INTEGER NOT NULL DEFAULT 0,achievement_count INTEGER NOT NULL DEFAULT 0,base_channel_name TEXT,count_name_synced_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_achievement_routes_owner_idx ON vending_achievement_routes(guild_id,owner_id,created_at)",
 "CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)",
-"CREATE TABLE IF NOT EXISTS vending_auto_restock (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,min_stock INTEGER NOT NULL,target_stock INTEGER NOT NULL,max_batch INTEGER NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,last_run_at INTEGER,last_added INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS vending_auto_restock (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL DEFAULT 'vending',vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,min_stock INTEGER NOT NULL,target_stock INTEGER NOT NULL,max_batch INTEGER NOT NULL,min_warmup_days INTEGER NOT NULL DEFAULT 0,enabled INTEGER NOT NULL DEFAULT 1,pending_enc TEXT,last_run_at INTEGER,last_added INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_auto_restock_product_unique ON vending_auto_restock(product_id)",
 "CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)"
 ];
@@ -114,6 +114,25 @@ export async function ensureVendingSchema(env:Env){
   if(!achievementRouteColumnNames.has("count_name_synced_at")){
     await env.DB.prepare(
       "ALTER TABLE vending_achievement_routes ADD COLUMN count_name_synced_at INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+
+  const restockColumnNames=new Set((await env.DB.prepare(
+    "PRAGMA table_info(vending_auto_restock)"
+  ).all<{name:string}>()).results.map(column=>column.name));
+  if(!restockColumnNames.has("target_system")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_auto_restock ADD COLUMN target_system TEXT NOT NULL DEFAULT 'vending'"
+    ).run();
+  }
+  if(!restockColumnNames.has("min_warmup_days")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_auto_restock ADD COLUMN min_warmup_days INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+  if(!restockColumnNames.has("pending_enc")){
+    await env.DB.prepare(
+      "ALTER TABLE vending_auto_restock ADD COLUMN pending_enc TEXT"
     ).run();
   }
 

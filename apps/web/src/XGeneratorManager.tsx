@@ -51,12 +51,15 @@ type AccountRow = {
 
 type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock";
 
+type RestockSystem = "vending" | "shiire";
 type VendingMachineRow = { id: string; name: string };
-type VendingProductRow = { id: string; name: string; infinite_stock: number; stock_count: number };
+// infinite_stock only exists on 自販機Bot products; 仕入れBot products are always finite.
+type VendingProductRow = { id: string; name: string; infinite_stock?: number; stock_count: number };
 type VendingMachineDetail = VendingMachineRow & { products: VendingProductRow[] };
 
 type RestockRule = {
   id: string;
+  targetSystem: RestockSystem;
   vendingMachineId: string;
   machineName: string | null;
   productId: string;
@@ -64,7 +67,9 @@ type RestockRule = {
   minStock: number;
   targetStock: number;
   maxBatch: number;
+  minWarmupDays: number;
   enabled: boolean;
+  pendingDelivery: boolean;
   lastRunAt: number | null;
   lastAdded: number;
   lastError: string | null;
@@ -135,7 +140,9 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [pushBusy, setPushBusy] = useState(false);
   const [pushFeedback, setPushFeedback] = useState<Feedback | null>(null);
 
-  const [restockMachines, setRestockMachines] = useState<VendingMachineRow[]>([]);
+  const [restockSystem, setRestockSystem] = useState<RestockSystem>("vending");
+  const [restockWarmupDays, setRestockWarmupDays] = useState("0");
+  const [restockMachines, setRestockMachines] = useState<VendingMachineDetail[]>([]);
   const [restockMachineId, setRestockMachineId] = useState("");
   const [restockMachineDetail, setRestockMachineDetail] = useState<VendingMachineDetail | null>(null);
   const [restockProductId, setRestockProductId] = useState("");
@@ -149,6 +156,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
 
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
+  const shiireVendingBase = "/api/guilds/" + guildId + "/shiire/vending";
 
   const loadStatus = useCallback(() => {
     setStatusLoading(true);
@@ -193,23 +201,37 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   }, [base]);
 
   const loadRestockMachines = useCallback(() => {
-    api<VendingMachineRow[]>(vendingBase)
+    // 仕入れBotの一覧は商品込みで返ってくる。自販機Botは一覧に商品が無いので、選択後に詳細を取得する。
+    api<VendingMachineDetail[]>(restockSystem === "shiire" ? shiireVendingBase : vendingBase)
       .then(data => setRestockMachines(data))
       .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
-  }, [vendingBase]);
+  }, [restockSystem, vendingBase, shiireVendingBase]);
 
   useEffect(() => {
     if (activeTab === "status") loadStatus();
     if (activeTab === "inventory") loadInventory();
     if (activeTab === "accounts") loadAccounts();
     if (activeTab === "generate") { loadStatus(); loadConfig(); }
-    if (activeTab === "restock") { loadRestockRules(); loadRestockMachines(); }
+    if (activeTab === "restock") loadRestockRules();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "restock") return;
+    setRestockMachines([]);
+    setRestockMachineId("");
+    loadRestockMachines();
+  }, [activeTab, restockSystem]);
 
   useEffect(() => {
     if (!restockMachineId) {
       setRestockMachineDetail(null);
       setRestockProductId("");
+      return;
+    }
+    if (restockSystem === "shiire") {
+      const detail = restockMachines.find(m => m.id === restockMachineId) ?? null;
+      setRestockMachineDetail(detail);
+      setRestockProductId(detail?.products[0]?.id ?? "");
       return;
     }
     api<VendingMachineDetail>(vendingBase + "/" + restockMachineId)
@@ -218,12 +240,13 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
         setRestockProductId(data.products.find(p => !p.infinite_stock)?.id ?? "");
       })
       .catch(err => setRestockFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
-  }, [restockMachineId, vendingBase]);
+  }, [restockMachineId, restockSystem, restockMachines, vendingBase]);
 
   const handleCreateRestockRule = () => {
     const minStock = parseInt(restockMinStock, 10);
     const targetStock = parseInt(restockTargetStock, 10);
     const maxBatch = parseInt(restockMaxBatch, 10);
+    const minWarmupDays = parseInt(restockWarmupDays, 10) || 0;
     if (!restockMachineId || !restockProductId) {
       setRestockFeedback({ kind: "error", message: "自販機と商品を選択してください" });
       return;
@@ -236,7 +259,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     setRestockFeedback(null);
     api(base + "/restock-rules", {
       method: "POST",
-      body: JSON.stringify({ vendingMachineId: restockMachineId, productId: restockProductId, minStock, targetStock, maxBatch }),
+      body: JSON.stringify({ targetSystem: restockSystem, vendingMachineId: restockMachineId, productId: restockProductId, minStock, targetStock, maxBatch, minWarmupDays }),
       headers: { "Content-Type": "application/json" }
     })
       .then(() => {
@@ -630,13 +653,20 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
               <div>
                 <h3>自動補充を設定</h3>
                 <p className="muted">
-                  すでに設置してある自販機Botの自販機・商品を選び、在庫が減ったら自動でジェネレーターから補充するルールを作ります。
-                  仕入れbot（Discord-Shiire）の自販機は、現時点ではこの自動補充に対応していません。
+                  すでに設置してある自販機・商品を選び、在庫が減ったら自動でジェネレーターから補充するルールを作ります。
+                  自販機Botと仕入れBotのどちらの自販機にも設定できます。
                 </p>
               </div>
             </div>
 
             <div className="form-grid two">
+              <label className="field">
+                <span>対象のBot</span>
+                <select value={restockSystem} onChange={e => setRestockSystem(e.target.value as RestockSystem)}>
+                  <option value="vending">自販機Bot（自分で作る自販機）</option>
+                  <option value="shiire">仕入れBot（仕入れ連動の自販機）</option>
+                </select>
+              </label>
               <label className="field">
                 <span>自販機</span>
                 <select value={restockMachineId} onChange={e => setRestockMachineId(e.target.value)}>
@@ -670,6 +700,11 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
                 <input type="number" min={1} max={200} value={restockMaxBatch} onChange={e => setRestockMaxBatch(e.target.value)} />
                 <small>1回の実行でジェネレーターから取り出す最大件数です。</small>
               </label>
+              <label className="field">
+                <span>最低ウォームアップ日数</span>
+                <input type="number" min={0} max={365} value={restockWarmupDays} onChange={e => setRestockWarmupDays(e.target.value)} />
+                <small>作成からこの日数以上たった垢だけを補充します。0なら制限しません。</small>
+              </label>
             </div>
             <div className="button-row">
               <button type="button" className="primary" onClick={handleCreateRestockRule} disabled={restockBusy}>
@@ -694,9 +729,13 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
             <div className="list-stack">
               {restockRules.map(rule => (
                 <div className="serverless-note" key={rule.id}>
-                  <strong>{rule.machineName ?? rule.vendingMachineId} — {rule.productName ?? rule.productId}</strong>
+                  <strong>
+                    [{rule.targetSystem === "shiire" ? "仕入れBot" : "自販機Bot"}] {rule.machineName ?? rule.vendingMachineId} — {rule.productName ?? rule.productId}
+                  </strong>
                   <span>
-                    最低 {rule.minStock} / 目標 {rule.targetStock} / 1回最大 {rule.maxBatch} ・
+                    最低 {rule.minStock} / 目標 {rule.targetStock} / 1回最大 {rule.maxBatch}
+                    {rule.minWarmupDays > 0 ? " / ウォームアップ " + rule.minWarmupDays + "日以上" : ""} ・
+                    {rule.pendingDelivery ? "納品待ちの垢あり（次回の確認で再納品します） ・" : ""}
                     {rule.enabled ? "有効" : "無効"} ・
                     {rule.lastRunAt ? "最終確認 " + new Date(rule.lastRunAt).toLocaleString("ja-JP") : "未実行"}
                     {rule.lastAdded > 0 ? "（前回 " + rule.lastAdded + " 垢補充）" : ""}
