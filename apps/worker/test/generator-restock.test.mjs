@@ -15,6 +15,8 @@ async function runtime(t) {
     generatorPops: [],
     generatorOutOfStock: false,
     shiireStock: 0,
+    pools: {'invite-campaign': 0, 'free-giveaway': 0},
+    poolAdds: [],
     shiireAdds: [],
     shiireFailAdd: false,
     nextAccount: 1
@@ -71,6 +73,16 @@ async function runtime(t) {
           state.shiireAdds.push(body.items);
           state.shiireStock += body.items.length;
           return Response.json({ok: true, submitted: body.items.length, added: body.items.length, stockCount: state.shiireStock});
+        }
+        const poolMatch = url.pathname.match(new RegExp('^' + base + '/generator/pools/([^/]+)/stock$'));
+        if (poolMatch && Object.hasOwn(state.pools, poolMatch[1])) {
+          const pool = poolMatch[1];
+          if (request.method === 'GET') return Response.json({pool, stockCount: state.pools[pool]});
+          const body = await request.json();
+          if (state.shiireFailAdd) return Response.json({message: 'fixture failure'}, {status: 500});
+          state.poolAdds.push({pool, items: body.items});
+          state.pools[pool] += body.items.length;
+          return Response.json({ok: true, submitted: body.items.length, added: body.items.length, stockCount: state.pools[pool]});
         }
         return Response.json({message: 'NOT_FOUND'}, {status: 404});
       }
@@ -233,7 +245,7 @@ test('every generator route requires a dashboard session and never reaches the g
     ['POST', '/generate'], ['POST', '/push-to-shiire'], ['GET', '/restock-rules'],
     ['GET', '/proxy'], ['POST', '/proxy/health-check'], ['POST', '/proxy/sessions/abc123/reset'],
     ['DELETE', '/proxy/sessions/abc123'], ['GET', '/server'],
-    ['GET', '/costs'], ['GET', '/expenses'], ['POST', '/expenses'], ['DELETE', '/expenses/1'],
+    ['GET', '/assign'], ['POST', '/assign'], ['GET', '/costs'], ['GET', '/expenses'], ['POST', '/expenses'], ['DELETE', '/expenses/1'],
     ['GET', '/vps-contract'], ['PUT', '/vps-contract'], ['GET', '/logs'], ['POST', '/generate/stop']
   ];
   for (const [method, path] of routes) {
@@ -329,4 +341,83 @@ test('cost, ledger, contract, log and stop routes are forwarded; ids and log que
   assert.equal((await call(base + '/logs?lines=abc')).status, 400);
   assert.equal((await call(base + '/logs?level=x;y')).status, 400);
   assert.equal(state.generatorRequests.length, before, 'invalid input must never reach the generator');
+});
+
+test('rules for the invite-campaign and giveaway pools top them up independently', async t => {
+  const {state, call, sweep} = await runtime(t);
+
+  const invite = await call(rulesPath, 'POST', {targetSystem: 'invite', minStock: 2, targetStock: 5, maxBatch: 3,
+    vendingMachineId: 'ignored', productId: 'ignored'});
+  assert.equal(invite.status, 201, JSON.stringify(invite.body));
+  assert.equal(invite.body.machineName, '招待キャンペーン');
+  assert.equal(invite.body.productId, 'invite-campaign', 'the pool name is the identity, whatever the client sent');
+  assert.equal((await call(rulesPath, 'POST', {targetSystem: 'invite', minStock: 1, targetStock: 2, maxBatch: 1})).status, 409);
+  const giveaway = await call(rulesPath, 'POST', {targetSystem: 'giveaway', minStock: 1, targetStock: 2, maxBatch: 2});
+  assert.equal(giveaway.status, 201, JSON.stringify(giveaway.body));
+  assert.equal(giveaway.body.machineName, '無料配布');
+
+  await sweep();
+  assert.equal(state.pools['invite-campaign'], 3, 'min(target - stock, maxBatch)');
+  assert.equal(state.pools['free-giveaway'], 2);
+  assert.equal(state.generatorPops.length, 2);
+  await sweep();
+  assert.equal(state.generatorPops.length, 2, 'pools at or above the minimum are left alone');
+
+  const names = (await call(rulesPath)).body.map(r => r.targetSystem + ':' + r.productName).sort();
+  assert.deepEqual(names, ['giveaway:在庫プール', 'invite:在庫プール']);
+});
+
+test('manual assignment puts generator accounts into a pool and validates input', async t => {
+  const {state, call} = await runtime(t);
+  const assign = `/api/guilds/${guildId}/generator/assign`;
+
+  const ok = await call(assign, 'POST', {targetSystem: 'giveaway', count: 4, minWarmupDays: 1});
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.deepEqual(ok.body, {ok: true, popped: 4, added: 4});
+  assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 1, allow_soft_shadow: false});
+  assert.equal(state.pools['free-giveaway'], 4);
+  assert.equal(state.poolAdds[0].items[0], 'user1:pw1|user1@mail.test|auth_token=tok1');
+  assert.deepEqual((await call(assign)).body, {pending: []});
+
+  for (const payload of [
+    {targetSystem: 'invite', count: 0}, {targetSystem: 'invite', count: 201},
+    {targetSystem: 'invite', count: 1, minWarmupDays: -1}, {targetSystem: 'shiire', count: 1},
+    {targetSystem: 'vending', count: 1, vendingMachineId: 'nope', productId: 'nope'}
+  ]) {
+    const response = await call(assign, 'POST', payload);
+    assert.ok([400, 404].includes(response.status), JSON.stringify(payload) + ' -> ' + response.status);
+  }
+  assert.equal(state.generatorPops.length, 1, 'rejected requests never pop accounts');
+});
+
+test('accounts popped for a manual assignment are kept and redelivered when delivery fails', async t => {
+  const {state, call, sweep} = await runtime(t);
+  const assign = `/api/guilds/${guildId}/generator/assign`;
+
+  state.shiireFailAdd = true;
+  const failed = await call(assign, 'POST', {targetSystem: 'invite', count: 3});
+  assert.equal(failed.status, 502);
+  assert.match(failed.body.error, /保管済み/);
+  const pending = (await call(assign)).body.pending;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].count, 3);
+  assert.equal(pending[0].targetSystem, 'invite');
+  assert.match(pending[0].lastError, /SHIIRE_API_ERROR/);
+  assert.doesNotMatch(JSON.stringify(pending), /user1|pw1|tok1/, 'credentials are never returned');
+
+  state.shiireFailAdd = false;
+  await sweep();
+  assert.equal(state.pools['invite-campaign'], 3);
+  assert.equal(state.generatorPops.length, 1, 'redelivery must not pop again');
+  assert.deepEqual((await call(assign)).body, {pending: []});
+});
+
+test('an empty generator is reported without leaving anything pending', async t => {
+  const {state, call} = await runtime(t);
+  const assign = `/api/guilds/${guildId}/generator/assign`;
+  state.generatorOutOfStock = true;
+  const response = await call(assign, 'POST', {targetSystem: 'giveaway', count: 2});
+  assert.equal(response.status, 409);
+  assert.match(response.body.error, /OUT_OF_STOCK/);
+  assert.deepEqual((await call(assign)).body, {pending: []});
 });

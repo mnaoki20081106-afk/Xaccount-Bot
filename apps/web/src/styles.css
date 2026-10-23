@@ -4544,3 +4544,12 @@ body.dsm-touch-reordering .discord-category {
 .x-generator-unit-cost.compact .metric strong {
   font-size: 20px;
 }
+
+.x-generator-manager h4 {
+  margin: 18px 0 6px;
+  font-size: 13px;
+  color: #a9b5ce;
+}
+.x-generator-manager .x-generator-single {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}

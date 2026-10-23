@@ -1487,6 +1487,7 @@ export default function App() {
                 <XGeneratorManager
                   key={"XGeneratorManager:"+selectedId}
                   guildId={selectedId}
+                  channels={meta.channels}
                   onNotice={flash}
                   onError={fail}
                 />

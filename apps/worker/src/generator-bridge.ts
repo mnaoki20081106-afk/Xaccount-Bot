@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 import { randomId, json } from "./utils";
 import { signedGeneratorFetch, generatorJson, popGeneratorAccounts } from "./generator-client";
-import { handleGeneratorRestockApi } from "./generator-restock";
+import { handleGeneratorAssignApi, handleGeneratorRestockApi } from "./generator-restock";
 import { VendingHttpError, requireGuild } from "./vending";
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
@@ -249,6 +249,10 @@ export async function handleGeneratorBridge(
     if (suffix === "/server" && request.method === "GET") {
       const resp = await signedGeneratorFetch(env, "/api/generator/server", { method: "GET" });
       return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/assign") {
+      return await handleGeneratorAssignApi(request, env, guildId);
     }
 
     if (suffix === "/restock-rules" || suffix.startsWith("/restock-rules/")) {

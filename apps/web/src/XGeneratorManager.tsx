@@ -3,6 +3,7 @@ import { api } from "./api";
 
 type Props = {
   guildId: string;
+  channels: Array<{ id: string; name: string; type?: string; botCanPost?: boolean }>;
   onNotice: (message: string) => void;
   onError: (reason: unknown) => void;
 };
@@ -49,7 +50,7 @@ type AccountRow = {
   notes: string | null;
 };
 
-type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "proxy" | "server" | "cost";
+type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "perks" | "proxy" | "server" | "cost";
 
 type CostWindow = {
   key: string;
@@ -202,6 +203,45 @@ const PROXY_STATE_TONE: Record<ProxySessionRow["state"], "good" | "warn" | "bad"
 };
 
 type RestockSystem = "vending" | "shiire";
+type PoolSystem = "invite" | "giveaway";
+
+const TARGET_SYSTEM_LABEL: Record<string, string> = {
+  vending: "自販機Bot",
+  shiire: "仕入れBot",
+  invite: "招待キャンペーン",
+  giveaway: "無料配布"
+};
+
+type GiveawayOverview = {
+  enabled: boolean;
+  stockCount: number;
+  reservedCount: number;
+  claims: Record<string, number>;
+  recent: Array<{ user_id: string; status: string; error: string | null; updated_at: number; delivered_at: number | null }>;
+};
+
+type PendingDelivery = {
+  id: string;
+  targetSystem: string;
+  productId: string;
+  count: number;
+  attempts: number;
+  lastError: string | null;
+  createdAt: number;
+};
+
+type PoolForm = { assignCount: string; warmupDays: string; minStock: string; targetStock: string; maxBatch: string };
+const DEFAULT_POOL_FORM: PoolForm = { assignCount: "5", warmupDays: "0", minStock: "5", targetStock: "20", maxBatch: "10" };
+
+const CLAIM_STATUS_LABEL: Record<string, string> = {
+  DELIVERED: "配布済み",
+  WAITING_STOCK: "在庫待ち",
+  DM_FAILED: "DM失敗",
+  DELIVERY_UNCERTAIN: "要確認",
+  CLAIMING: "処理中",
+  SENDING: "送信中",
+  ERROR: "エラー"
+};
 type VendingMachineRow = { id: string; name: string };
 // infinite_stock only exists on 自販機Bot products; 仕入れBot products are always finite.
 type VendingProductRow = { id: string; name: string; infinite_stock?: number; stock_count: number };
@@ -209,7 +249,7 @@ type VendingMachineDetail = VendingMachineRow & { products: VendingProductRow[] 
 
 type RestockRule = {
   id: string;
-  targetSystem: RestockSystem;
+  targetSystem: RestockSystem | PoolSystem;
   vendingMachineId: string;
   machineName: string | null;
   productId: string;
@@ -259,7 +299,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function XGeneratorManager({ guildId, onNotice, onError }: Props) {
+export default function XGeneratorManager({ guildId, channels, onNotice, onError }: Props) {
   const [activeTab, setActiveTab] = useState<ActiveTab>("status");
 
   const [status, setStatus] = useState<StatusData | null>(null);
@@ -342,6 +382,18 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
   const [logLoading, setLogLoading] = useState(false);
   const [logFeedback, setLogFeedback] = useState<Feedback | null>(null);
   const [stopBusy, setStopBusy] = useState(false);
+
+  const [giveaway, setGiveaway] = useState<GiveawayOverview | null>(null);
+  const [inviteStock, setInviteStock] = useState<number | null>(null);
+  const [pending, setPending] = useState<PendingDelivery[]>([]);
+  const [perksLoading, setPerksLoading] = useState(false);
+  const [perksBusy, setPerksBusy] = useState(false);
+  const [perksFeedback, setPerksFeedback] = useState<Feedback | null>(null);
+  const [poolForms, setPoolForms] = useState<Record<PoolSystem, PoolForm>>({
+    invite: { ...DEFAULT_POOL_FORM },
+    giveaway: { ...DEFAULT_POOL_FORM, minStock: "3", targetStock: "10", maxBatch: "5" }
+  });
+  const [panelChannelId, setPanelChannelId] = useState("");
 
   const base = "/api/guilds/" + guildId + "/generator";
   const vendingBase = "/api/guilds/" + guildId + "/vending";
@@ -532,6 +584,117 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
       .finally(() => setStopBusy(false));
   };
 
+  const shiireBase = "/api/guilds/" + guildId + "/shiire";
+
+  const loadPerks = useCallback(() => {
+    setPerksLoading(true);
+    Promise.all([
+      api<GiveawayOverview>(shiireBase + "/free-giveaway"),
+      api<{ stockCount: number }>(shiireBase + "/generator/pools/invite-campaign/stock"),
+      api<{ pending: PendingDelivery[] }>(base + "/assign"),
+      api<RestockRule[]>(base + "/restock-rules")
+    ])
+      .then(([overview, invite, pend, rules]) => {
+        setGiveaway(overview);
+        setInviteStock(invite.stockCount);
+        setPending(pend.pending);
+        setRestockRules(rules);
+        setPerksFeedback(null);
+      })
+      .catch(err => setPerksFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setPerksLoading(false));
+  }, [shiireBase, base]);
+
+  const runPerksAction = (request: Promise<unknown>, successMessage: string) => {
+    setPerksBusy(true);
+    setPerksFeedback(null);
+    request
+      .then(() => { onNotice(successMessage); loadPerks(); })
+      .catch(err => setPerksFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setPerksBusy(false));
+  };
+
+  const updatePoolForm = (system: PoolSystem, patch: Partial<PoolForm>) =>
+    setPoolForms(current => ({ ...current, [system]: { ...current[system], ...patch } }));
+
+  const assignToPool = (system: PoolSystem) => {
+    const form = poolForms[system];
+    const count = parseInt(form.assignCount, 10);
+    if (!Number.isInteger(count) || count < 1 || count > 200) {
+      setPerksFeedback({ kind: "error", message: "件数は1〜200で指定してください" });
+      return;
+    }
+    runPerksAction(
+      api(base + "/assign", {
+        method: "POST",
+        body: JSON.stringify({ targetSystem: system, count, minWarmupDays: parseInt(form.warmupDays, 10) || 0 }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      TARGET_SYSTEM_LABEL[system] + "の在庫に " + count + " 垢を割り当てました"
+    );
+  };
+
+  const createPoolRule = (system: PoolSystem) => {
+    const form = poolForms[system];
+    const minStock = parseInt(form.minStock, 10);
+    const targetStock = parseInt(form.targetStock, 10);
+    const maxBatch = parseInt(form.maxBatch, 10);
+    if (!Number.isInteger(minStock) || minStock < 0 || !Number.isInteger(targetStock) || targetStock < minStock || !Number.isInteger(maxBatch) || maxBatch < 1) {
+      setPerksFeedback({ kind: "error", message: "最低在庫・目標在庫・補充上限を正しく入力してください" });
+      return;
+    }
+    runPerksAction(
+      api(base + "/restock-rules", {
+        method: "POST",
+        body: JSON.stringify({ targetSystem: system, minStock, targetStock, maxBatch, minWarmupDays: parseInt(form.warmupDays, 10) || 0 }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      TARGET_SYSTEM_LABEL[system] + "の自動補充を設定しました"
+    );
+  };
+
+  const removePoolRule = (rule: RestockRule) => {
+    if (!confirm(TARGET_SYSTEM_LABEL[rule.targetSystem] + "の自動補充を削除しますか？")) return;
+    runPerksAction(api(base + "/restock-rules/" + rule.id, { method: "DELETE" }), "自動補充を削除しました");
+  };
+
+  const togglePoolRule = (rule: RestockRule) =>
+    runPerksAction(
+      api(base + "/restock-rules/" + rule.id, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !rule.enabled }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      rule.enabled ? "自動補充を無効にしました" : "自動補充を有効にしました"
+    );
+
+  const setGiveawayEnabled = (enabled: boolean) => {
+    if (enabled && !confirm("無料配布を開始します。パネルのボタンを押した人に、1人1個ずつ在庫のXアカウントが送られます。よろしいですか？")) return;
+    runPerksAction(
+      api(shiireBase + "/free-giveaway/settings", {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      enabled ? "無料配布を開始しました" : "無料配布を停止しました"
+    );
+  };
+
+  const postGiveawayPanel = () => {
+    if (!panelChannelId) {
+      setPerksFeedback({ kind: "error", message: "パネルを設置するチャンネルを選んでください" });
+      return;
+    }
+    runPerksAction(
+      api(shiireBase + "/free-giveaway/panel", {
+        method: "POST",
+        body: JSON.stringify({ channelId: panelChannelId }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      "無料配布のパネルを設置しました"
+    );
+  };
+
   const loadServerInfo = useCallback(() => {
     setServerLoading(true);
     api<ServerInfo>(base + "/server")
@@ -596,6 +759,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     if (activeTab === "proxy") loadProxy();
     if (activeTab === "server") { loadServerInfo(); loadVpsContract(); loadLogs(logLevel); }
     if (activeTab === "cost") { loadCosts(); loadExpenses(); }
+    if (activeTab === "perks") loadPerks();
     if (activeTab === "status") loadCosts();
   }, [activeTab]);
 
@@ -753,6 +917,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
     { key: "generate", label: "垢生成" },
     { key: "push", label: "仕入れbotに追加" },
     { key: "restock", label: "自動補充" },
+    { key: "perks", label: "招待・無料配布" },
     { key: "proxy", label: "プロキシ" },
     { key: "cost", label: "コスト・支払い" },
     { key: "server", label: "サーバー" }
@@ -1139,7 +1304,7 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
               {restockRules.map(rule => (
                 <div className="serverless-note" key={rule.id}>
                   <strong>
-                    [{rule.targetSystem === "shiire" ? "仕入れBot" : "自販機Bot"}] {rule.machineName ?? rule.vendingMachineId} — {rule.productName ?? rule.productId}
+                    [{TARGET_SYSTEM_LABEL[rule.targetSystem] ?? rule.targetSystem}] {rule.machineName ?? rule.vendingMachineId} — {rule.productName ?? rule.productId}
                   </strong>
                   <span>
                     最低 {rule.minStock} / 目標 {rule.targetStock} / 1回最大 {rule.maxBatch}
@@ -1407,6 +1572,191 @@ export default function XGeneratorManager({ guildId, onNotice, onError }: Props)
           )}
         </section>
       )}
+      {activeTab === "perks" && (() => {
+        const renderPool = (system: PoolSystem, title: string, description: string, stock: number | null) => {
+          const form = poolForms[system];
+          const rule = restockRules.find(r => r.targetSystem === system) ?? null;
+          return (
+            <>
+              <div className="metric-grid x-generator-single">
+                <article className="metric card">
+                  <span>{title}の在庫</span>
+                  <strong>{stock ?? "—"}</strong>
+                  <small>配れる垢の数</small>
+                </article>
+              </div>
+              <p className="muted">{description}</p>
+
+              <h4>ジェネレーターの垢を割り当てる</h4>
+              <div className="form-grid two">
+                <label className="field">
+                  <span>件数</span>
+                  <input type="number" min={1} max={200} value={form.assignCount} onChange={e => updatePoolForm(system, { assignCount: e.target.value })} />
+                </label>
+                <label className="field">
+                  <span>最低ウォームアップ日数</span>
+                  <input type="number" min={0} max={365} value={form.warmupDays} onChange={e => updatePoolForm(system, { warmupDays: e.target.value })} />
+                  <small>0なら制限しません。自動補充にも使われます。</small>
+                </label>
+              </div>
+              <div className="button-row">
+                <button type="button" className="primary" onClick={() => assignToPool(system)} disabled={perksBusy}>
+                  {perksBusy ? "処理中…" : "今すぐ割り当てる"}
+                </button>
+              </div>
+
+              <h4>自動補充</h4>
+              {rule ? (
+                <div className="serverless-note">
+                  <strong>{rule.enabled ? "有効" : "無効"} ・ 最低 {rule.minStock} / 目標 {rule.targetStock} / 1回最大 {rule.maxBatch}</strong>
+                  <span>
+                    {rule.lastRunAt ? "最終確認 " + new Date(rule.lastRunAt).toLocaleString("ja-JP") : "未実行"}
+                    {rule.lastAdded > 0 ? "（前回 " + rule.lastAdded + " 垢補充）" : ""}
+                    {rule.lastError ? " ・ エラー: " + rule.lastError : ""}
+                  </span>
+                  <div className="button-row">
+                    <button type="button" className="secondary" onClick={() => togglePoolRule(rule)} disabled={perksBusy}>
+                      {rule.enabled ? "無効にする" : "有効にする"}
+                    </button>
+                    <button type="button" className="danger" onClick={() => removePoolRule(rule)} disabled={perksBusy}>削除</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="form-grid two">
+                    <label className="field">
+                      <span>最低在庫数</span>
+                      <input type="number" min={0} value={form.minStock} onChange={e => updatePoolForm(system, { minStock: e.target.value })} />
+                      <small>在庫がこの数を下回ったら補充します。</small>
+                    </label>
+                    <label className="field">
+                      <span>目標在庫数</span>
+                      <input type="number" min={0} value={form.targetStock} onChange={e => updatePoolForm(system, { targetStock: e.target.value })} />
+                    </label>
+                    <label className="field">
+                      <span>1回あたりの補充上限</span>
+                      <input type="number" min={1} max={200} value={form.maxBatch} onChange={e => updatePoolForm(system, { maxBatch: e.target.value })} />
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="secondary" onClick={() => createPoolRule(system)} disabled={perksBusy}>
+                      自動補充を設定
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          );
+        };
+
+        return (
+          <>
+            {perksFeedback && <div className={perksFeedback.kind === "error" ? "alert error" : "alert success"}>{perksFeedback.message}</div>}
+
+            {pending.length > 0 && (
+              <section className="card">
+                <div className="alert error">
+                  納品待ちの垢が {pending.reduce((sum, p) => sum + p.count, 0)} 件あります。取り出し済みなので消えません。1分ごとに自動で再納品します。
+                </div>
+                <div className="list-stack">
+                  {pending.map(p => (
+                    <div className="serverless-note" key={p.id}>
+                      <strong>{TARGET_SYSTEM_LABEL[p.targetSystem] ?? p.targetSystem} ・ {p.count} 垢 ・ 試行 {p.attempts} 回</strong>
+                      <span>{p.lastError ?? ""}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <h3>招待キャンペーン</h3>
+                  <p className="muted">「◯人招待で垢プレゼント」の景品の在庫です。人数条件や目標在庫は「仕入れbot」タブの招待特典で設定します。</p>
+                </div>
+                <button type="button" className="secondary" onClick={loadPerks} disabled={perksLoading}>
+                  {perksLoading ? "更新中…" : "更新"}
+                </button>
+              </div>
+              {renderPool(
+                "invite", "招待キャンペーン",
+                "ここに入れた垢が先に景品として使われ、目標在庫に達している間は仕入れbotはこの分を新しく購入しません。",
+                inviteStock
+              )}
+            </section>
+
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <h3>無料配布（1人1個）</h3>
+                  <p className="muted">Discordアカウントごとに1個、パネルのボタンを押した人にDMで無料のXアカウントを送ります。</p>
+                </div>
+              </div>
+              {giveaway && (
+                <>
+                  <label className="toggle-row">
+                    <span className="toggle-copy">
+                      <strong>無料配布を行う</strong>
+                      <small>{giveaway.enabled ? "ON: ボタンを押した人に配布しています" : "OFF: ボタンを押しても配布されません"}</small>
+                    </span>
+                    <span className={`switch ${giveaway.enabled ? "on" : ""}`}>
+                      <input type="checkbox" checked={giveaway.enabled} disabled={perksBusy} onChange={e => setGiveawayEnabled(e.target.checked)} />
+                      <span />
+                    </span>
+                  </label>
+
+                  <div className="serverless-note">
+                    <strong>受け取り状況</strong>
+                    <span>
+                      {Object.keys(CLAIM_STATUS_LABEL)
+                        .filter(key => (giveaway.claims[key] ?? 0) > 0)
+                        .map(key => CLAIM_STATUS_LABEL[key] + " " + giveaway.claims[key])
+                        .join(" ・ ") || "まだ誰も受け取っていません"}
+                    </span>
+                    {(giveaway.claims.DELIVERY_UNCERTAIN ?? 0) > 0 && (
+                      <span>「要確認」は送信結果が分からなかった人です。2個目は渡されません。本人に届いたか確認してください。</span>
+                    )}
+                  </div>
+
+                  {renderPool("giveaway", "無料配布", "在庫が0になると、ボタンを押した人は「在庫切れ」と表示され、入荷後に同じボタンでもう一度受け取れます。", giveaway.stockCount)}
+
+                  <h4>パネルを設置</h4>
+                  <div className="form-grid two">
+                    <label className="field">
+                      <span>設置するチャンネル</span>
+                      <select value={panelChannelId} onChange={e => setPanelChannelId(e.target.value)}>
+                        <option value="">選択してください</option>
+                        {channels
+                          .filter(c => (c.type === undefined || c.type === "text" || c.type === "announcement") && c.botCanPost !== false)
+                          .map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="secondary" onClick={postGiveawayPanel} disabled={perksBusy}>パネルを設置</button>
+                  </div>
+
+                  {giveaway.recent.length > 0 && (
+                    <>
+                      <h4>最近の受け取り</h4>
+                      <div className="list-stack">
+                        {giveaway.recent.map(r => (
+                          <div className="serverless-note" key={r.user_id}>
+                            <strong>{CLAIM_STATUS_LABEL[r.status] ?? r.status} ・ ユーザーID {r.user_id}</strong>
+                            <span>{new Date(r.updated_at).toLocaleString("ja-JP")}{r.error ? " ・ " + r.error : ""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </section>
+          </>
+        );
+      })()}
+
       {activeTab === "cost" && (
         <>
           <section className="card">

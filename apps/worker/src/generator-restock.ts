@@ -20,12 +20,27 @@ import { signedShiireFetch } from "./shiire-bridge";
 //   "vending" – 自販機Bot products in this worker's own D1 (vending_stock).
 //   "shiire"  – 仕入れBot (Discord-Shiire) vending products, reached through
 //               the signed Shiire bridge (generator/products/:id/stock).
+//   "invite"  – the invite-campaign reward pool in Discord-Shiire.
+//   "giveaway"– the free-giveaway pool in Discord-Shiire.
+//               (both through generator/pools/:pool/stock; no machine/product)
 //
 // Popping marks generator accounts as sold, so accounts that were popped but
 // could not be delivered yet are kept (encrypted) on the rule row and
 // delivered on the next run before anything else is popped.
 
-type TargetSystem = "vending" | "shiire";
+type TargetSystem = "vending" | "shiire" | "invite" | "giveaway";
+
+const POOL_BY_SYSTEM: Partial<Record<TargetSystem, { pool: string; label: string }>> = {
+  invite: { pool: "invite-campaign", label: "招待キャンペーン" },
+  giveaway: { pool: "free-giveaway", label: "無料配布" }
+};
+
+function parseTargetSystem(value: unknown): TargetSystem {
+  return value === "shiire" || value === "invite" || value === "giveaway" ? value : "vending";
+}
+
+// What a delivery needs to know about where accounts go.
+type Target = Pick<RestockRule, "target_system" | "guild_id" | "product_id">;
 
 export type RestockRule = {
   id: string;
@@ -137,16 +152,37 @@ async function vendingStockCount(env: Env, productId: string): Promise<number> {
   return row?.n ?? 0;
 }
 
-async function stockCountFor(env: Env, rule: RestockRule): Promise<number> {
-  return rule.target_system === "shiire"
-    ? shiireStockCount(env, rule.guild_id, rule.product_id)
-    : vendingStockCount(env, rule.product_id);
+async function shiirePoolStockCount(env: Env, guildId: string, pool: string): Promise<number> {
+  const data = await shiireJson<{ stockCount: number }>(
+    env,
+    "/bridge/main/guilds/" + guildId + "/generator/pools/" + pool + "/stock"
+  );
+  return Math.max(0, Number(data.stockCount ?? 0));
 }
 
-async function addStockFor(env: Env, rule: RestockRule, lines: string[]): Promise<number> {
-  return rule.target_system === "shiire"
-    ? shiireAddStock(env, rule.guild_id, rule.product_id, lines)
-    : addStock(env, rule.product_id, lines);
+async function shiirePoolAddStock(env: Env, guildId: string, pool: string, lines: string[]): Promise<number> {
+  const data = await shiireJson<{ added: number }>(
+    env,
+    "/bridge/main/guilds/" + guildId + "/generator/pools/" + pool + "/stock",
+    { method: "POST", body: JSON.stringify({ items: lines }) }
+  );
+  return Math.max(0, Number(data.added ?? 0));
+}
+
+async function stockCountFor(env: Env, target: Target): Promise<number> {
+  const pool = POOL_BY_SYSTEM[target.target_system];
+  if (pool) return shiirePoolStockCount(env, target.guild_id, pool.pool);
+  return target.target_system === "shiire"
+    ? shiireStockCount(env, target.guild_id, target.product_id)
+    : vendingStockCount(env, target.product_id);
+}
+
+async function addStockFor(env: Env, target: Target, lines: string[]): Promise<number> {
+  const pool = POOL_BY_SYSTEM[target.target_system];
+  if (pool) return shiirePoolAddStock(env, target.guild_id, pool.pool, lines);
+  return target.target_system === "shiire"
+    ? shiireAddStock(env, target.guild_id, target.product_id, lines)
+    : addStock(env, target.product_id, lines);
 }
 
 // Delivers lines that were popped earlier but never stored, then clears them.
@@ -209,6 +245,11 @@ async function runRule(env: Env, rule: RestockRule): Promise<{ added: number; st
 // failure (e.g. the generator or a bridge is unreachable) must not stop the others.
 export async function runGeneratorRestockSweep(env: Env): Promise<void> {
   await ensureVendingSchema(env);
+  try {
+    await retryPendingDeliveries(env);
+  } catch (error) {
+    console.error("generator pending delivery retry failed", error);
+  }
   const rules = (
     await env.DB.prepare(
       "SELECT * FROM vending_auto_restock WHERE enabled=1"
@@ -220,6 +261,147 @@ export async function runGeneratorRestockSweep(env: Env): Promise<void> {
     } catch (error) {
       console.error("generator restock rule failed", rule.id, error);
     }
+  }
+}
+
+// ── Manual assignment ("今すぐ割り当て") ─────────────────────────────────────
+//
+// Pops N accounts and puts them into a target. The generator treats popped
+// accounts as sold, so they are written (encrypted) to
+// generator_pending_deliveries before delivery is attempted; if delivery
+// fails the row stays and the minute sweep keeps retrying it.
+
+type PendingRow = {
+  id: string;
+  guild_id: string;
+  target_system: TargetSystem;
+  vending_machine_id: string;
+  product_id: string;
+  payload_enc: string;
+  line_count: number;
+  attempts: number;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+async function attemptPendingDelivery(env: Env, row: PendingRow): Promise<number> {
+  const lines = JSON.parse(await decrypt(encryptionSecret(env), row.payload_enc)) as string[];
+  try {
+    const added = await addStockFor(env, row, lines);
+    await env.DB.prepare("DELETE FROM generator_pending_deliveries WHERE id=?").bind(row.id).run();
+    return added;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await env.DB.prepare(
+      "UPDATE generator_pending_deliveries SET attempts=attempts+1,last_error=?,updated_at=? WHERE id=?"
+    ).bind(message.slice(0, 300), Date.now(), row.id).run();
+    throw error;
+  }
+}
+
+async function retryPendingDeliveries(env: Env): Promise<void> {
+  const rows = (
+    await env.DB.prepare(
+      "SELECT * FROM generator_pending_deliveries ORDER BY created_at ASC LIMIT 20"
+    ).all<PendingRow>()
+  ).results;
+  for (const row of rows) {
+    try {
+      await attemptPendingDelivery(env, row);
+    } catch (error) {
+      console.error("generator pending delivery failed", row.id, error);
+    }
+  }
+}
+
+// Thrown when accounts were popped but could not be delivered yet. They are
+// safely stored and the sweep retries them.
+class DeliveryPendingError extends Error {}
+
+async function assignToTarget(
+  env: Env,
+  guildId: string,
+  targetSystem: TargetSystem,
+  machineId: string,
+  productId: string,
+  count: number,
+  minWarmupDays: number
+): Promise<{ popped: number; added: number }> {
+  const lines = await popGeneratorAccounts(env, count, { minWarmupDays });
+  if (lines.length === 0) return { popped: 0, added: 0 };
+
+  const id = randomId();
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO generator_pending_deliveries(id,guild_id,target_system,vending_machine_id,product_id,payload_enc,line_count,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).bind(
+    id, guildId, targetSystem, machineId, productId,
+    await encrypt(encryptionSecret(env), JSON.stringify(lines)), lines.length, now, now
+  ).run();
+  const row = await env.DB.prepare("SELECT * FROM generator_pending_deliveries WHERE id=?").bind(id).first<PendingRow>();
+  try {
+    const added = await attemptPendingDelivery(env, row!);
+    return { popped: lines.length, added };
+  } catch (error) {
+    throw new DeliveryPendingError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function handleGeneratorAssignApi(
+  request: Request,
+  env: Env,
+  guildId: string
+): Promise<Response> {
+  await ensureVendingSchema(env);
+
+  if (request.method === "GET") {
+    const rows = (
+      await env.DB.prepare(
+        "SELECT * FROM generator_pending_deliveries WHERE guild_id=? ORDER BY created_at ASC"
+      ).bind(guildId).all<PendingRow>()
+    ).results;
+    return json(env, {
+      pending: rows.map(row => ({
+        id: row.id,
+        targetSystem: row.target_system,
+        productId: row.product_id,
+        count: row.line_count,
+        attempts: row.attempts,
+        lastError: row.last_error,
+        createdAt: row.created_at
+      }))
+    });
+  }
+
+  if (request.method !== "POST") throw new VendingHttpError(404, "見つかりません");
+  const body = await request.json() as Record<string, unknown>;
+  const targetSystem = parseTargetSystem(body.targetSystem);
+  const pool = POOL_BY_SYSTEM[targetSystem];
+  const machineId = pool ? "" : String(body.vendingMachineId ?? "").trim();
+  const productId = pool ? pool.pool : String(body.productId ?? "").trim();
+  const count = Number(body.count ?? 0);
+  const minWarmupDays = Number(body.minWarmupDays ?? 0);
+  if (!pool && (!machineId || !productId)) {
+    throw new VendingHttpError(400, "自販機と商品を選択してください");
+  }
+  if (!Number.isInteger(count) || count < 1 || count > 200) {
+    throw new VendingHttpError(400, "件数は1〜200で指定してください");
+  }
+  if (!Number.isInteger(minWarmupDays) || minWarmupDays < 0 || minWarmupDays > 365) {
+    throw new VendingHttpError(400, "最低ウォームアップ日数は0〜365で指定してください");
+  }
+  await resolveTarget(env, guildId, targetSystem, machineId, productId);
+
+  try {
+    const result = await assignToTarget(env, guildId, targetSystem, machineId, productId, count, minWarmupDays);
+    return json(env, { ok: true, ...result });
+  } catch (error) {
+    if (!(error instanceof DeliveryPendingError)) throw error;
+    // The accounts were already popped: they are kept and retried every minute.
+    return json(env, {
+      error: "取り出した垢は保管済みで、1分ごとに自動で再納品します。原因: " + error.message.slice(0, 200)
+    }, 502);
   }
 }
 
@@ -250,6 +432,8 @@ async function namesFor(
   rule: RestockRule,
   shiireMachines: ShiireMachineRow[] | null
 ): Promise<{ machineName: string | null; productName: string | null }> {
+  const pool = POOL_BY_SYSTEM[rule.target_system];
+  if (pool) return { machineName: pool.label, productName: "在庫プール" };
   if (rule.target_system === "shiire") {
     const machine = shiireMachines?.find(row => row.id === rule.vending_machine_id) ?? null;
     return {
@@ -269,6 +453,8 @@ async function resolveTarget(
   machineId: string,
   productId: string
 ): Promise<{ machineName: string; productName: string }> {
+  const pool = POOL_BY_SYSTEM[targetSystem];
+  if (pool) return { machineName: pool.label, productName: "在庫プール" };
   if (targetSystem === "shiire") {
     const machines = await listShiireMachines(env, guildId);
     const machine = machines.find(row => row.id === machineId);
@@ -317,15 +503,17 @@ export async function handleGeneratorRestockApi(
 
   if (suffix === "" && request.method === "POST") {
     const body = await request.json() as Record<string, unknown>;
-    const targetSystem: TargetSystem = body.targetSystem === "shiire" ? "shiire" : "vending";
-    const vendingMachineId = String(body.vendingMachineId ?? "").trim();
-    const productId = String(body.productId ?? "").trim();
+    const targetSystem = parseTargetSystem(body.targetSystem);
+    const pool = POOL_BY_SYSTEM[targetSystem];
+    // A pool has no machine or product: the pool name is its identity.
+    const vendingMachineId = pool ? "" : String(body.vendingMachineId ?? "").trim();
+    const productId = pool ? pool.pool : String(body.productId ?? "").trim();
     const minStock = Number(body.minStock ?? 0);
     const targetStock = Number(body.targetStock ?? 0);
     const maxBatch = Number(body.maxBatch ?? 0);
     const minWarmupDays = Number(body.minWarmupDays ?? 0);
     const enabled = body.enabled !== false;
-    if (!vendingMachineId || !productId) {
+    if (!pool && (!vendingMachineId || !productId)) {
       throw new VendingHttpError(400, "自販機と商品を選択してください");
     }
     validatePolicy(minStock, targetStock, maxBatch, minWarmupDays);

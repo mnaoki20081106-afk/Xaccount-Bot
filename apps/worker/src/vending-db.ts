@@ -70,6 +70,7 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_panel_images (vending_machine_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,mime_type TEXT NOT NULL,content_base64 TEXT NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE TABLE IF NOT EXISTS vending_auto_restock (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL DEFAULT 'vending',vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,min_stock INTEGER NOT NULL,target_stock INTEGER NOT NULL,max_batch INTEGER NOT NULL,min_warmup_days INTEGER NOT NULL DEFAULT 0,enabled INTEGER NOT NULL DEFAULT 1,pending_enc TEXT,last_run_at INTEGER,last_added INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_auto_restock_product_unique ON vending_auto_restock(product_id)",
+"CREATE TABLE IF NOT EXISTS generator_pending_deliveries (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL,vending_machine_id TEXT NOT NULL DEFAULT '',product_id TEXT NOT NULL,payload_enc TEXT NOT NULL,line_count INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)"
 ];
 
