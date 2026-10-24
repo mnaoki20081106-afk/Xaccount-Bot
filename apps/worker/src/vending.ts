@@ -380,6 +380,16 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     if(request.method==="PATCH"){
       const b=await input<any>(request); if(b.panelColor!==undefined&&b.panelColor!==null&&!/^#[0-9a-f]{6}$/i.test(String(b.panelColor))) throw new VendingHttpError(400,"パネルの色が不正です"); if(b.name!==undefined&&(!String(b.name).trim()||String(b.name).length>80)) throw new VendingHttpError(400,"自販機名が不正です");
       await updateMachine(env,vmId,session.user_id,{name:b.name?.trim(),publicLog:b.publicLogChannelId,localLog:b.localLogChannelId,privateLog:b.privateLogChannelId,roleId:b.roleId,panelTitle:b.panelTitle,panelDescription:b.panelDescription,panelImageUrl:b.panelImageUrl,panelColor:b.panelColor});
+      if(b.panelColor!==undefined){
+        // Re-render the already installed panel so the new color shows up immediately.
+        const deployed=(await listPanelDeployments(env,guildId)).find(row=>row.kind==="vending"&&row.object_id===vmId);
+        const fresh=await getMachine(env,vmId);
+        if(deployed?.channel_id&&deployed.message_id&&fresh){
+          await botJson(env,"/channels/"+deployed.channel_id+"/messages/"+deployed.message_id,{
+            method:"PATCH",body:JSON.stringify(panelPayload(fresh,await listVmProducts(env,vmId)))
+          }).catch(error=>console.error("panel color refresh failed",vmId,error));
+        }
+      }
       return json(env,{ok:true});
     }
     if(request.method==="DELETE") return json(env,{ok:await deleteMachine(env,vmId,session.user_id)});
