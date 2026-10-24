@@ -6,7 +6,7 @@ export type Vm = {
   id:string; guild_id:string; owner_id:string; name:string;
   public_log_channel_id:string|null; local_log_channel_id:string|null;
   private_log_channel_id:string|null; role_id:string|null;
-  panel_title:string|null; panel_description:string|null; panel_image_url:string|null;
+  panel_title:string|null; panel_description:string|null; panel_image_url:string|null; panel_color:string|null;
   active:number; created_at:number; updated_at:number;
 };
 
@@ -119,6 +119,13 @@ export async function ensureVendingSchema(env:Env){
     ).run();
   }
 
+  const machineColumnNames=new Set((await env.DB.prepare(
+    "PRAGMA table_info(vending_machines)"
+  ).all<{name:string}>()).results.map(column=>column.name));
+  if(!machineColumnNames.has("panel_color")){
+    await env.DB.prepare("ALTER TABLE vending_machines ADD COLUMN panel_color TEXT").run();
+  }
+
   const restockColumnNames=new Set((await env.DB.prepare(
     "PRAGMA table_info(vending_auto_restock)"
   ).all<{name:string}>()).results.map(column=>column.name));
@@ -188,11 +195,11 @@ export async function createMachine(env:Env,guildId:string,ownerId:string,name:s
   await env.DB.prepare("INSERT INTO vending_machines(id,guild_id,owner_id,name,active,created_at,updated_at) VALUES (?,?,?,?,1,?,?)").bind(id,guildId,ownerId,name,now,now).run();
   return getMachine(env,id);
 }
-export async function updateMachine(env:Env,id:string,ownerId:string,p:Partial<{name:string;publicLog:string|null;localLog:string|null;privateLog:string|null;roleId:string|null;panelTitle:string|null;panelDescription:string|null;panelImageUrl:string|null}>){
+export async function updateMachine(env:Env,id:string,ownerId:string,p:Partial<{name:string;publicLog:string|null;localLog:string|null;privateLog:string|null;roleId:string|null;panelTitle:string|null;panelDescription:string|null;panelImageUrl:string|null;panelColor:string|null}>){
   const cur=await env.DB.prepare("SELECT * FROM vending_machines WHERE id=? AND owner_id=? AND active=1").bind(id,ownerId).first<Vm>();
   if(!cur) return false;
-  const r=await env.DB.prepare("UPDATE vending_machines SET name=?,public_log_channel_id=?,local_log_channel_id=?,private_log_channel_id=?,role_id=?,panel_title=?,panel_description=?,panel_image_url=?,updated_at=? WHERE id=? AND owner_id=? AND active=1").bind(
-    p.name??cur.name,p.publicLog===undefined?cur.public_log_channel_id:p.publicLog,p.localLog===undefined?cur.local_log_channel_id:p.localLog,p.privateLog===undefined?cur.private_log_channel_id:p.privateLog,p.roleId===undefined?cur.role_id:p.roleId,p.panelTitle===undefined?cur.panel_title:p.panelTitle,p.panelDescription===undefined?cur.panel_description:p.panelDescription,p.panelImageUrl===undefined?cur.panel_image_url:p.panelImageUrl,Date.now(),id,ownerId
+  const r=await env.DB.prepare("UPDATE vending_machines SET name=?,public_log_channel_id=?,local_log_channel_id=?,private_log_channel_id=?,role_id=?,panel_title=?,panel_description=?,panel_image_url=?,panel_color=?,updated_at=? WHERE id=? AND owner_id=? AND active=1").bind(
+    p.name??cur.name,p.publicLog===undefined?cur.public_log_channel_id:p.publicLog,p.localLog===undefined?cur.local_log_channel_id:p.localLog,p.privateLog===undefined?cur.private_log_channel_id:p.privateLog,p.roleId===undefined?cur.role_id:p.roleId,p.panelTitle===undefined?cur.panel_title:p.panelTitle,p.panelDescription===undefined?cur.panel_description:p.panelDescription,p.panelImageUrl===undefined?cur.panel_image_url:p.panelImageUrl,p.panelColor===undefined?cur.panel_color:p.panelColor,Date.now(),id,ownerId
   ).run();
   return (r.meta.changes??0)>0;
 }

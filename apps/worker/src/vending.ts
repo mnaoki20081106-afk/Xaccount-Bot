@@ -177,6 +177,12 @@ async function restoreAchievementChannelName(
   return result.ok;
 }
 
+function embedColor(hex:string|null|undefined){
+  if(!hex||!/^#[0-9a-f]{6}$/i.test(hex)) return 5763719;
+  // Discord renders color 0 as "no color"; 1 is visually identical black.
+  return parseInt(hex.slice(1),16)||1;
+}
+
 function panelEmbed(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
   const lines=products.map(p=>{
     const stock=p.infinite_stock?"∞":String(p.stock_count);
@@ -186,7 +192,7 @@ function panelEmbed(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
   return {
     title:vm.panel_title||vm.name||"自販機",
     description:(vm.panel_description||"購入したい商品を下のボタンから選択してください。")+(lines.length?"\n\n"+lines.join("\n\n"):"\n\n現在販売中の商品はありません。"),
-    color:5763719,
+    color:embedColor(vm.panel_color),
     ...(vm.panel_image_url?{image:{url:vm.panel_image_url}}:{})
   };
 }
@@ -372,8 +378,8 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     const guildId=vmMatch[1]!,vmId=vmMatch[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id);
     if(request.method==="GET") return json(env,{...vm,products:await listVmProducts(env,vmId),coupons:await listCoupons(env,vmId)});
     if(request.method==="PATCH"){
-      const b=await input<any>(request); if(b.name!==undefined&&(!String(b.name).trim()||String(b.name).length>80)) throw new VendingHttpError(400,"自販機名が不正です");
-      await updateMachine(env,vmId,session.user_id,{name:b.name?.trim(),publicLog:b.publicLogChannelId,localLog:b.localLogChannelId,privateLog:b.privateLogChannelId,roleId:b.roleId,panelTitle:b.panelTitle,panelDescription:b.panelDescription,panelImageUrl:b.panelImageUrl});
+      const b=await input<any>(request); if(b.panelColor!==undefined&&b.panelColor!==null&&!/^#[0-9a-f]{6}$/i.test(String(b.panelColor))) throw new VendingHttpError(400,"パネルの色が不正です"); if(b.name!==undefined&&(!String(b.name).trim()||String(b.name).length>80)) throw new VendingHttpError(400,"自販機名が不正です");
+      await updateMachine(env,vmId,session.user_id,{name:b.name?.trim(),publicLog:b.publicLogChannelId,localLog:b.localLogChannelId,privateLog:b.privateLogChannelId,roleId:b.roleId,panelTitle:b.panelTitle,panelDescription:b.panelDescription,panelImageUrl:b.panelImageUrl,panelColor:b.panelColor});
       return json(env,{ok:true});
     }
     if(request.method==="DELETE") return json(env,{ok:await deleteMachine(env,vmId,session.user_id)});
@@ -836,6 +842,8 @@ async function handleSingleProductCommand(interaction:any,env:Env):Promise<Respo
   const vm=await createMachine(env,guildId,SINGLE_OWNER_ID,("単品: "+filename).slice(0,80));
   if(!vm) return ires(eph("自販機の作成に失敗しました。"));
   await markSingleMachine(env,vm.id,guildId);
+  await updateMachine(env,vm.id,SINGLE_OWNER_ID,{panelColor:"#000000"});
+  vm.panel_color="#000000";
   await createVmProduct(env,vm.id,{name:filename.slice(0,80),description:"",pricePayPay:price,priceKyash:price,emoji:null,infiniteStock:true,infiniteContent:text});
   await postSinglePanel(env,guildId,channelId,vm);
   return ires(eph("単品自販機を設置しました。価格を変更するには同じチャンネルで /price を実行してください。"));

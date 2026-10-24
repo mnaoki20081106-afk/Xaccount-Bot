@@ -16,6 +16,7 @@ type Machine = {
   panel_title:string|null;
   panel_description:string|null;
   panel_image_url:string|null;
+  panel_color:string|null;
 };
 
 type Product = {
@@ -155,7 +156,8 @@ export default function VendingManager({
     roleId:"",
     panelTitle:"",
     panelDescription:"",
-    panelImageUrl:""
+    panelImageUrl:"",
+    panelColor:"#57f287"
   });
   const [panelChannel,setPanelChannel]=useState("");
   const [panelMessageUrl,setPanelMessageUrl]=useState("");
@@ -218,6 +220,7 @@ export default function VendingManager({
     machineForm.panelTitle!==(detail.panel_title??"") ||
     machineForm.panelDescription!==(detail.panel_description??"") ||
     machineForm.panelImageUrl!==(detail.panel_image_url??"") ||
+    machineForm.panelColor!==(detail.panel_color??"#57f287") ||
     machineForm.roleId!==(detail.role_id??"") ||
     machineForm.publicLogChannelId!==(detail.public_log_channel_id??"") ||
     machineForm.localLogChannelId!==(detail.local_log_channel_id??"") ||
@@ -302,7 +305,8 @@ export default function VendingManager({
         roleId:data.role_id??"",
         panelTitle:data.panel_title??"",
         panelDescription:data.panel_description??"",
-        panelImageUrl:data.panel_image_url??""
+        panelImageUrl:data.panel_image_url??"",
+        panelColor:data.panel_color??"#57f287"
       });
     }finally{
       if(request===detailRequest.current) setDetailLoading(false);
@@ -376,7 +380,8 @@ export default function VendingManager({
         roleId:machineForm.roleId||null,
         panelTitle:machineForm.panelTitle||null,
         panelDescription:machineForm.panelDescription||null,
-        panelImageUrl:machineForm.panelImageUrl||null
+        panelImageUrl:machineForm.panelImageUrl||null,
+        panelColor:machineForm.panelColor
       })
     });
   }
@@ -1024,6 +1029,14 @@ export default function VendingManager({
                           onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}
                           placeholder={machineForm.name||"自販機"}
                           maxLength={256}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>パネルの色</span>
+                        <input
+                          type="color"
+                          value={machineForm.panelColor}
+                          onChange={e=>setMachineForm({...machineForm,panelColor:e.target.value})}
                         />
                       </label>
                       <label className="field">
