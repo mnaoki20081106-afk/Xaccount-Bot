@@ -195,6 +195,51 @@ export async function handleGeneratorBridge(
       }
     }
 
+    // 卒業テスト用の観測者（検索を代行する別垢）。トークンは保存時のみ送り、一覧では返さない。
+    if (suffix === "/observers" && request.method === "GET") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/observers", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
+    if (suffix === "/observers" && request.method === "POST") {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(await request.text()) as Record<string, unknown>;
+      } catch {
+        return json(env, { error: "INVALID_JSON" }, 400);
+      }
+      const label = String(parsed.label ?? "").trim().slice(0, 60);
+      const authToken = String(parsed.auth_token ?? "").trim();
+      const ct0 = String(parsed.ct0 ?? "").trim();
+      if (!authToken || !ct0 || authToken.length > 512 || ct0.length > 512 ||
+          /\s/.test(authToken) || /\s/.test(ct0)) {
+        return json(env, { error: "OBSERVER_CREDENTIAL_INVALID" }, 400);
+      }
+      const resp = await signedGeneratorFetch(env, "/api/generator/observers", {
+        method: "POST",
+        body: JSON.stringify({ label, auth_token: authToken, ct0 })
+      });
+      return json(env, await generatorJson(resp));
+    }
+
+    const observer = suffix.match(/^\/observers\/(\d{1,9})(\/verify)?$/);
+    if (observer) {
+      const path = "/api/generator/observers/" + observer[1];
+      if (observer[2] === "/verify" && request.method === "POST") {
+        const resp = await signedGeneratorFetch(env, path + "/verify", { method: "POST", body: "{}" });
+        return json(env, await generatorJson(resp));
+      }
+      if (!observer[2] && request.method === "DELETE") {
+        const resp = await signedGeneratorFetch(env, path, { method: "DELETE" });
+        return json(env, await generatorJson(resp));
+      }
+    }
+
+    if (suffix === "/graduation" && request.method === "GET") {
+      const resp = await signedGeneratorFetch(env, "/api/generator/graduation", { method: "GET" });
+      return json(env, await generatorJson(resp));
+    }
+
     if (suffix === "/costs" && request.method === "GET") {
       const resp = await signedGeneratorFetch(env, "/api/generator/costs", { method: "GET" });
       return json(env, await generatorJson(resp));
