@@ -31,11 +31,38 @@ type StatusData = {
 };
 
 type ConfigData = {
-  proxy: { provider: string; host: string; port: number; country: string; sticky_ttl_minutes: number; max_accounts_per_ip: number };
+  proxy: { provider: string; host: string; port: number; country: string; sticky_ttl_minutes: number; session_lifetime_minutes?: number; max_accounts_per_ip: number };
   sms: { provider: string; preferred_countries: string[] };
   captcha: { provider: string; provider_fallback: string };
   factory: { max_per_hour: number; use_phone: boolean; setup_profile: boolean };
   warmup: { min_days_before_sale: number; actions_per_day_soft: number };
+};
+
+type ObserverRow = {
+  id: number;
+  label: string;
+  status: "unverified" | "ok" | "invalid" | "suspended" | "locked";
+  last_error: string | null;
+  last_checked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+};
+
+type GraduationRow = {
+  id: number;
+  username: string;
+  passed: boolean;
+  attempts: number;
+  checked_at: string | null;
+  report: { stage: string; checks: Array<{ name: string; status: "pass" | "fail" | "unknown"; detail: string }> } | null;
+};
+
+const OBSERVER_STATUS_LABEL: Record<ObserverRow["status"], string> = {
+  ok: "使用可",
+  unverified: "未確認",
+  invalid: "無効（トークン失効）",
+  suspended: "凍結",
+  locked: "ロック"
 };
 
 type AccountRow = {
@@ -50,7 +77,7 @@ type AccountRow = {
   notes: string | null;
 };
 
-type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "perks" | "proxy" | "server" | "cost";
+type ActiveTab = "status" | "inventory" | "accounts" | "generate" | "push" | "restock" | "perks" | "proxy" | "graduation" | "server" | "cost";
 
 type CostWindow = {
   key: string;
@@ -342,6 +369,13 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
   const [proxyLoading, setProxyLoading] = useState(false);
   const [proxyBusy, setProxyBusy] = useState(false);
   const [proxyFeedback, setProxyFeedback] = useState<Feedback | null>(null);
+  const [observers, setObservers] = useState<ObserverRow[]>([]);
+  const [graduation, setGraduation] = useState<{ graduated: number; accounts: GraduationRow[] } | null>(null);
+  const [obsLabel, setObsLabel] = useState("");
+  const [obsAuthToken, setObsAuthToken] = useState("");
+  const [obsCt0, setObsCt0] = useState("");
+  const [obsBusy, setObsBusy] = useState(false);
+  const [obsFeedback, setObsFeedback] = useState<Feedback | null>(null);
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [serverLoading, setServerLoading] = useState(false);
   const [serverFeedback, setServerFeedback] = useState<Feedback | null>(null);
@@ -447,6 +481,60 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
       .catch(err => setProxyFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
       .finally(() => setProxyLoading(false));
   }, [base]);
+
+  const loadGraduation = useCallback(() => {
+    api<{ observers: ObserverRow[] }>(base + "/observers")
+      .then(data => { setObservers(data.observers); setObsFeedback(null); })
+      .catch(err => setObsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+    api<{ graduated: number; accounts: GraduationRow[] }>(base + "/graduation")
+      .then(data => setGraduation(data))
+      .catch(err => setObsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [base]);
+
+  const saveObserver = () => {
+    if (!obsAuthToken.trim() || !obsCt0.trim()) {
+      setObsFeedback({ kind: "error", message: "auth_token と ct0 の両方を入力してください" });
+      return;
+    }
+    setObsBusy(true);
+    setObsFeedback({ kind: "info", message: "登録してトークンを検証しています…" });
+    api<{ observer: ObserverRow }>(base + "/observers", {
+      method: "POST",
+      body: JSON.stringify({ label: obsLabel, auth_token: obsAuthToken, ct0: obsCt0 })
+    })
+      .then(data => {
+        setObsAuthToken("");
+        setObsCt0("");
+        setObsLabel("");
+        const ok = data.observer.status === "ok";
+        setObsFeedback({
+          kind: ok ? "success" : "error",
+          message: ok
+            ? "観測者を登録しました（検証OK）"
+            : "登録しましたが検証に失敗しました: " + OBSERVER_STATUS_LABEL[data.observer.status]
+        });
+        loadGraduation();
+      })
+      .catch(err => setObsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setObsBusy(false));
+  };
+
+  const verifyObserver = (row: ObserverRow) => {
+    setObsBusy(true);
+    api(base + "/observers/" + row.id + "/verify", { method: "POST" })
+      .then(() => loadGraduation())
+      .catch(err => setObsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setObsBusy(false));
+  };
+
+  const deleteObserver = (row: ObserverRow) => {
+    if (!window.confirm("観測者 #" + row.id + (row.label ? "（" + row.label + "）" : "") + " を削除します。よろしいですか？")) return;
+    setObsBusy(true);
+    api(base + "/observers/" + row.id, { method: "DELETE" })
+      .then(() => { onNotice("観測者を削除しました"); loadGraduation(); })
+      .catch(err => setObsFeedback({ kind: "error", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setObsBusy(false));
+  };
 
   const loadCosts = useCallback(() => {
     setCostsLoading(true);
@@ -722,6 +810,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     if (activeTab === "generate") { loadStatus(); loadConfig(); }
     if (activeTab === "restock") loadRestockRules();
     if (activeTab === "proxy") loadProxy();
+    if (activeTab === "graduation") loadGraduation();
     if (activeTab === "server") { loadServerInfo(); loadVpsContract(); loadLogs(logLevel); }
     if (activeTab === "cost") { loadCosts(); loadExpenses(); }
     if (activeTab === "perks") loadPerks();
@@ -884,6 +973,7 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
     { key: "restock", label: "自動補充" },
     { key: "perks", label: "招待・無料配布" },
     { key: "proxy", label: "プロキシ" },
+    { key: "graduation", label: "卒業テスト" },
     { key: "cost", label: "コスト・支払い" },
     { key: "server", label: "サーバー" }
   ];
@@ -1297,6 +1387,71 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
             </div>
           </section>
         </>
+      )}
+      {activeTab === "graduation" && (
+        <section className="card">
+          <div className="section-head">
+            <div>
+              <h3>卒業テスト・観測者</h3>
+              <p className="muted">
+                ウォームアップ完了後、別のXアカウント（観測者）から検索して「Top検索に本人のポストが出る」「検索候補に本人が出る」を確認し、
+                両方通った垢だけを卒業とします。観測者はチェック専用のアカウントを推奨します。
+                トークンは暗号化して保存し、保存後は画面にも返しません。
+              </p>
+            </div>
+            <button type="button" className="secondary" onClick={loadGraduation}>更新</button>
+          </div>
+
+          <label className="field">
+            <span>ラベル（任意）</span>
+            <input value={obsLabel} maxLength={60} onChange={e => setObsLabel(e.target.value)} placeholder="例: 観測用1" />
+          </label>
+          <label className="field">
+            <span>auth_token</span>
+            <input type="password" value={obsAuthToken} autoComplete="off" onChange={e => setObsAuthToken(e.target.value)} placeholder="観測者の auth_token" />
+          </label>
+          <label className="field">
+            <span>ct0</span>
+            <input type="password" value={obsCt0} autoComplete="off" onChange={e => setObsCt0(e.target.value)} placeholder="観測者の ct0" />
+          </label>
+          <div className="button-row">
+            <button type="button" className="primary" disabled={obsBusy} onClick={saveObserver}>
+              {obsBusy ? "処理中…" : "観測者を登録して検証"}
+            </button>
+          </div>
+          {obsFeedback && <div className={"alert " + (obsFeedback.kind === "error" ? "error" : obsFeedback.kind)}>{obsFeedback.message}</div>}
+
+          <h4>登録済みの観測者</h4>
+          {observers.length === 0 && (
+            <p className="muted">観測者が未登録です。登録するまで卒業テストは「保留」のままで、合格しません。</p>
+          )}
+          {observers.map(o => (
+            <div key={o.id} className="x-generator-row-head">
+              <span>
+                #{o.id} {o.label || "（ラベルなし）"} — <strong>{OBSERVER_STATUS_LABEL[o.status]}</strong>
+                {o.last_checked_at && <> ・検証 {new Date(o.last_checked_at).toLocaleString("ja-JP")}</>}
+                {o.last_error && <> ・{o.last_error}</>}
+              </span>
+              <span className="button-row">
+                <button type="button" className="secondary" disabled={obsBusy} onClick={() => verifyObserver(o)}>再検証</button>
+                <button type="button" className="danger" disabled={obsBusy} onClick={() => deleteObserver(o)}>削除</button>
+              </span>
+            </div>
+          ))}
+
+          <h4>卒業状況{graduation ? "（合格 " + graduation.graduated + " 垢）" : ""}</h4>
+          {graduation && graduation.accounts.length === 0 && <p className="muted">まだ判定された垢はありません。</p>}
+          {graduation?.accounts.map(a => (
+            <div key={a.id} className="x-generator-row-head">
+              <span>
+                @{a.username} — <strong>{a.passed ? "合格" : "未合格"}</strong>（不合格 {a.attempts} 回）
+                {a.report?.checks.map(c => (
+                  <span key={c.name} className="muted"> ／ {c.name}: {c.status === "pass" ? "○" : c.status === "fail" ? "×" : "？"} {c.detail}</span>
+                ))}
+              </span>
+            </div>
+          ))}
+        </section>
       )}
       {activeTab === "proxy" && (
         <section className="card">

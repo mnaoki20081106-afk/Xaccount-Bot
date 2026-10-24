@@ -105,6 +105,7 @@ type GeneratorAccount = {
   username: string;
   password: string;
   email: string | null;
+  email_password?: string | null;
   phone: string | null;
   auth_token: string | null;
   ct0: string | null;
@@ -112,13 +113,13 @@ type GeneratorAccount = {
 };
 
 // Account Format: Username:Password:Email:Email Password:Email Token:Email Token Verification:Phone:2FA:Token
-// The generator does not hold mailbox credentials, so those slots stay empty to keep positions.
+// Email Token / Email Token Verification are not held by the generator, so those slots stay empty to keep positions.
 function formatGeneratorAccountLine(a: GeneratorAccount): string {
   return [
     a.username,
     a.password,
     a.email,
-    "", // Email Password
+    a.email_password,
     "", // Email Token
     "", // Email Token Verification
     a.phone,
@@ -134,14 +135,16 @@ function formatGeneratorAccountLine(a: GeneratorAccount): string {
 export async function popGeneratorAccounts(
   env: Env,
   count: number,
-  opts: { minWarmupDays?: number; allowSoftShadow?: boolean } = {}
+  opts: { minWarmupDays?: number; allowSoftShadow?: boolean; tier?: "any" | "top_search" } = {}
 ): Promise<string[]> {
   const resp = await signedGeneratorFetch(env, "/api/generator/pop", {
     method: "POST",
     body: JSON.stringify({
       count,
       min_warmup_days: opts.minWarmupDays ?? 0,
-      allow_soft_shadow: opts.allowSoftShadow ?? false
+      allow_soft_shadow: opts.allowSoftShadow ?? false,
+      // top_search: 検索TOP掲載を実測済み（卒業テスト合格）の垢だけ
+      tier: opts.tier ?? "any"
     })
   });
   const data = (await generatorJson(resp)) as { ok: boolean; popped: number; accounts: GeneratorAccount[] };
