@@ -105,6 +105,7 @@ type GeneratorAccount = {
   username: string;
   password: string;
   email: string | null;
+  email_password?: string | null;
   phone: string | null;
   auth_token: string | null;
   ct0: string | null;
@@ -114,6 +115,7 @@ type GeneratorAccount = {
 function formatGeneratorAccountLine(a: GeneratorAccount): string {
   const parts = [a.username + ":" + a.password];
   if (a.email) parts.push(a.email);
+  if (a.email_password) parts.push("email_password=" + a.email_password);
   if (a.phone) parts.push(a.phone);
   if (a.auth_token) parts.push("auth_token=" + a.auth_token);
   if (a.ct0) parts.push("ct0=" + a.ct0);
@@ -128,14 +130,16 @@ function formatGeneratorAccountLine(a: GeneratorAccount): string {
 export async function popGeneratorAccounts(
   env: Env,
   count: number,
-  opts: { minWarmupDays?: number; allowSoftShadow?: boolean } = {}
+  opts: { minWarmupDays?: number; allowSoftShadow?: boolean; tier?: "any" | "top_search" } = {}
 ): Promise<string[]> {
   const resp = await signedGeneratorFetch(env, "/api/generator/pop", {
     method: "POST",
     body: JSON.stringify({
       count,
       min_warmup_days: opts.minWarmupDays ?? 0,
-      allow_soft_shadow: opts.allowSoftShadow ?? false
+      allow_soft_shadow: opts.allowSoftShadow ?? false,
+      // top_search: 検索TOP掲載を実測済み（卒業テスト合格）の垢だけ
+      tier: opts.tier ?? "any"
     })
   });
   const data = (await generatorJson(resp)) as { ok: boolean; popped: number; accounts: GeneratorAccount[] };

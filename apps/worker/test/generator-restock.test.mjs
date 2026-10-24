@@ -15,6 +15,7 @@ async function runtime(t) {
     generatorPops: [],
     generatorOutOfStock: false,
     shiireStock: 0,
+    shiireClass: undefined,
     pools: {'invite-campaign': 0, 'free-giveaway': 0},
     poolAdds: [],
     shiireAdds: [],
@@ -63,7 +64,7 @@ async function runtime(t) {
         const base = '/bridge/main/guilds/' + guildId;
         if (url.pathname === base + '/vending' && request.method === 'GET') {
           return Response.json([{id: 'sm1', name: 'Shiire machine', products: [
-            {id: 'sp1', name: 'Shiire product', procurement_class: 'NO_SHADOWBAN', stock_count: state.shiireStock}
+            {id: 'sp1', name: 'Shiire product', procurement_class: state.shiireClass ?? 'NO_SHADOWBAN', stock_count: state.shiireStock}
           ]}]);
         }
         if (url.pathname === base + '/generator/products/sp1/stock') {
@@ -142,7 +143,7 @@ test('vending product is topped up from the generator only when below the minimu
   await sweep();
   assert.equal(await stockOf(), 4, 'empty stock is filled by min(target - stock, maxBatch)');
   assert.equal(state.generatorPops.length, 1);
-  assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 0, allow_soft_shadow: false});
+  assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 0, allow_soft_shadow: false, tier: 'any'});
 
   await sweep();
   assert.equal(state.generatorPops.length, 1, 'stock at or above the minimum must not pop more accounts');
@@ -213,7 +214,7 @@ test('仕入れBot product is restocked through the signed bridge and survives a
   const failed = await call(rulesPath + '/' + created.body.id + '/run-now', 'POST');
   assert.equal(failed.status, 502);
   assert.equal(state.generatorPops.length, 1);
-  assert.deepEqual(state.generatorPops[0], {count: 3, min_warmup_days: 2, allow_soft_shadow: false});
+  assert.deepEqual(state.generatorPops[0], {count: 3, min_warmup_days: 2, allow_soft_shadow: false, tier: 'any'});
   let rule = (await call(rulesPath)).body[0];
   assert.equal(rule.pendingDelivery, true, 'popped accounts are kept for retry');
   assert.match(rule.lastError, /SHIIRE_API_ERROR/);
@@ -374,7 +375,7 @@ test('manual assignment puts generator accounts into a pool and validates input'
   const ok = await call(assign, 'POST', {targetSystem: 'giveaway', count: 4, minWarmupDays: 1});
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   assert.deepEqual(ok.body, {ok: true, popped: 4, added: 4});
-  assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 1, allow_soft_shadow: false});
+  assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 1, allow_soft_shadow: false, tier: 'any'});
   assert.equal(state.pools['free-giveaway'], 4);
   assert.equal(state.poolAdds[0].items[0], 'user1:pw1|user1@mail.test|auth_token=tok1');
   assert.deepEqual((await call(assign)).body, {pending: []});
@@ -420,4 +421,16 @@ test('an empty generator is reported without leaving anything pending', async t 
   assert.equal(response.status, 409);
   assert.match(response.body.error, /OUT_OF_STOCK/);
   assert.deepEqual((await call(assign)).body, {pending: []});
+});
+
+test('TOP_SEARCH products only receive graduated (search-verified) accounts; email password is delivered', async t => {
+  const {state, call} = await runtime(t);
+  state.shiireClass = 'TOP_SEARCH';
+  const created = await call(rulesPath, 'POST', {
+    targetSystem: 'shiire', vendingMachineId: 'sm1', productId: 'sp1', minStock: 2, targetStock: 3, maxBatch: 3
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal((await call(rulesPath + '/' + created.body.id + '/run-now', 'POST')).status, 200);
+  assert.equal(state.generatorPops[0].tier, 'top_search');
+  assert.ok(state.shiireAdds[0].length > 0);
 });

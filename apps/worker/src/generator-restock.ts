@@ -185,6 +185,18 @@ async function addStockFor(env: Env, target: Target, lines: string[]): Promise<n
     : addStock(env, target.product_id, lines);
 }
 
+// TOP_SEARCH 商品（検索TOPに載る前提で高単価）には卒業テスト合格済みの垢だけを入れる。
+// 商品の種別を確認できない時は、誤って未検証の垢を高単価商品に入れないよう失敗させる。
+async function tierFor(env: Env, guildId: string, targetSystem: TargetSystem, productId: string): Promise<"any" | "top_search"> {
+  if (targetSystem !== "shiire") return "any";
+  const machines = await listShiireMachines(env, guildId);
+  for (const machine of machines) {
+    const product = machine.products?.find(p => p.id === productId);
+    if (product) return product.procurement_class === "TOP_SEARCH" ? "top_search" : "any";
+  }
+  throw new Error("SHIIRE_PRODUCT_CLASS_UNKNOWN");
+}
+
 // Delivers lines that were popped earlier but never stored, then clears them.
 async function deliverPending(env: Env, rule: RestockRule): Promise<number> {
   const secret = encryptionSecret(env);
@@ -220,7 +232,8 @@ async function runRule(env: Env, rule: RestockRule): Promise<{ added: number; st
       return { added: 0, stockAfter: stock };
     }
 
-    const lines = await popGeneratorAccounts(env, needed, { minWarmupDays: rule.min_warmup_days });
+    const tier = await tierFor(env, rule.guild_id, rule.target_system, rule.product_id);
+    const lines = await popGeneratorAccounts(env, needed, { minWarmupDays: rule.min_warmup_days, tier });
     if (lines.length === 0) {
       await finish(0, null);
       return { added: 0, stockAfter: stock };
@@ -328,7 +341,8 @@ async function assignToTarget(
   count: number,
   minWarmupDays: number
 ): Promise<{ popped: number; added: number }> {
-  const lines = await popGeneratorAccounts(env, count, { minWarmupDays });
+  const tier = await tierFor(env, guildId, targetSystem, productId);
+  const lines = await popGeneratorAccounts(env, count, { minWarmupDays, tier });
   if (lines.length === 0) return { popped: 0, added: 0 };
 
   const id = randomId();
