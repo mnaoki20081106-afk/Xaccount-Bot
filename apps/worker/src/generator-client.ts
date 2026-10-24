@@ -106,6 +106,8 @@ type GeneratorAccount = {
   password: string;
   email: string | null;
   email_password?: string | null;
+  email_token?: string | null;
+  email_token_verification?: string | null;
   phone: string | null;
   auth_token: string | null;
   ct0: string | null;
@@ -113,15 +115,15 @@ type GeneratorAccount = {
 };
 
 // Account Format: Username:Password:Email:Email Password:Email Token:Email Token Verification:Phone:2FA:Token
-// Email Token / Email Token Verification are not held by the generator, so those slots stay empty to keep positions.
+// Missing values stay empty so field positions never shift.
 function formatGeneratorAccountLine(a: GeneratorAccount): string {
   return [
     a.username,
     a.password,
     a.email,
     a.email_password,
-    "", // Email Token
-    "", // Email Token Verification
+    a.email_token,
+    a.email_token_verification,
     a.phone,
     a.twofa_secret,
     a.auth_token
