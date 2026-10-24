@@ -111,18 +111,24 @@ type GeneratorAccount = {
   twofa_secret: string | null;
 };
 
+// Account Format: Username:Password:Email:Email Password:Email Token:Email Token Verification:Phone:2FA:Token
+// The generator does not hold mailbox credentials, so those slots stay empty to keep positions.
 function formatGeneratorAccountLine(a: GeneratorAccount): string {
-  const parts = [a.username + ":" + a.password];
-  if (a.email) parts.push(a.email);
-  if (a.phone) parts.push(a.phone);
-  if (a.auth_token) parts.push("auth_token=" + a.auth_token);
-  if (a.ct0) parts.push("ct0=" + a.ct0);
-  if (a.twofa_secret) parts.push("2fa=" + a.twofa_secret);
-  return parts.join("|");
+  return [
+    a.username,
+    a.password,
+    a.email,
+    "", // Email Password
+    "", // Email Token
+    "", // Email Token Verification
+    a.phone,
+    a.twofa_secret,
+    a.auth_token
+  ].map(v => v ?? "").join(":");
 }
 
 // Pops up to `count` ready accounts from the generator and formats each as a
-// single stock-content line ("user:pass|email|phone|auth_token=...|ct0=...|2fa=..."),
+// single stock-content line ("Username:Password:Email:EmailPassword:EmailToken:EmailTokenVerification:Phone:2FA:Token"),
 // the same format used for manual "push to shiire" pushes and pasted/imported
 // vending stock. Shared by the one-off push action and the automatic restock sweep.
 export async function popGeneratorAccounts(

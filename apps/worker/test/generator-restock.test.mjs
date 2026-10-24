@@ -225,7 +225,7 @@ test('仕入れBot product is restocked through the signed bridge and survives a
   assert.equal(state.generatorPops.length, 1, 'pending accounts are delivered before anything else is popped');
   assert.equal(state.shiireAdds.length, 1);
   assert.equal(state.shiireAdds[0].length, 3);
-  assert.match(state.shiireAdds[0][0], /^user1:pw1\|user1@mail\.test\|auth_token=tok1$/);
+  assert.equal(state.shiireAdds[0][0], "user1:pw1:user1@mail.test::::::tok1");
   assert.equal(state.shiireStock, 3);
   rule = (await call(rulesPath)).body[0];
   assert.equal(rule.pendingDelivery, false);
@@ -376,7 +376,7 @@ test('manual assignment puts generator accounts into a pool and validates input'
   assert.deepEqual(ok.body, {ok: true, popped: 4, added: 4});
   assert.deepEqual(state.generatorPops[0], {count: 4, min_warmup_days: 1, allow_soft_shadow: false});
   assert.equal(state.pools['free-giveaway'], 4);
-  assert.equal(state.poolAdds[0].items[0], 'user1:pw1|user1@mail.test|auth_token=tok1');
+  assert.equal(state.poolAdds[0].items[0], "user1:pw1:user1@mail.test::::::tok1");
   assert.deepEqual((await call(assign)).body, {pending: []});
 
   for (const payload of [
