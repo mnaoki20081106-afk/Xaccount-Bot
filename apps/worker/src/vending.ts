@@ -7,7 +7,7 @@ import { handleSupplyBridge } from "./supply-bridge";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, clearPaymentLink, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
-  getMachine, getOrder, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listDeliverySent, listMachines, listVmProducts,
+  getMachine, getOrder, listSingleMachineIds, markSingleMachine, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listDeliverySent, listMachines, listVmProducts,
   markDeliverySent, markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
   takePayChallenge, updateAchievementCountNameState, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
 } from "./vending-db";
@@ -794,10 +794,97 @@ async function tryDeliver(env:Env,order:VmOrder):Promise<boolean>{
   }
 }
 
+const SINGLE_OWNER_ID="shared-dashboard";
+const SINGLE_MAX_BYTES=500_000;
+const SINGLE_TEXT_EXT=/\.(txt|csv|tsv|json|md|log|xml|ya?ml|ini|cfg|conf|html?|js|ts|py)$/i;
+
+function panelPayload(vm:Vm,products:Array<VmProduct&{stock_count:number}>){
+  return {
+    embeds:[panelEmbed(vm,products)],
+    components:[{type:1,components:[
+      {type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vm.id},
+      {type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vm.id}
+    ]}]
+  };
+}
+
+async function postSinglePanel(env:Env,guildId:string,channelId:string,vm:Vm){
+  const products=await listVmProducts(env,vm.id);
+  const message=await send(env,channelId,panelPayload(vm,products));
+  await recordPanelDeployment(env,{guildId,kind:"vending",objectId:vm.id,channelId,messageId:message.id??null});
+  return message;
+}
+
+async function handleSingleProductCommand(interaction:any,env:Env):Promise<Response>{
+  const guildId=String(interaction.guild_id??""),channelId=String(interaction.channel_id??"");
+  if(!guildId) return ires(eph("サーバー内で実行してください。"));
+  const options=interaction.data?.options??[];
+  const fileId=options.find((o:any)=>o.name==="file")?.value;
+  const price=Number(options.find((o:any)=>o.name==="price")?.value);
+  const attachment=interaction.data?.resolved?.attachments?.[fileId];
+  if(!attachment) return ires(eph("ファイルを添付してください。"));
+  if(!Number.isInteger(price)||price<0||price>1_000_000) return ires(eph("価格は0〜1000000の整数で入力してください。"));
+  const filename=String(attachment.filename??"product.txt");
+  const contentType=String(attachment.content_type??"");
+  if(!contentType.startsWith("text/")&&!SINGLE_TEXT_EXT.test(filename)) return ires(eph("テキスト形式のファイルのみ商品にできます。"));
+  if(Number(attachment.size??0)>SINGLE_MAX_BYTES) return ires(eph("ファイルは500KB以下にしてください。"));
+  const response=await fetch(String(attachment.url));
+  if(!response.ok) return ires(eph("ファイルを取得できませんでした。"));
+  const text=await response.text();
+  if(!text.trim()||text.length>SINGLE_MAX_BYTES) return ires(eph("ファイルの内容が空、または大きすぎます。"));
+
+  const vm=await createMachine(env,guildId,SINGLE_OWNER_ID,("単品: "+filename).slice(0,80));
+  if(!vm) return ires(eph("自販機の作成に失敗しました。"));
+  await markSingleMachine(env,vm.id,guildId);
+  await createVmProduct(env,vm.id,{name:filename.slice(0,80),description:"",pricePayPay:price,priceKyash:price,emoji:null,infiniteStock:true,infiniteContent:text});
+  await postSinglePanel(env,guildId,channelId,vm);
+  return ires(eph("単品自販機を設置しました。価格を変更するには同じチャンネルで /price を実行してください。"));
+}
+
+async function applySinglePrice(env:Env,guildId:string,channelId:string,vmId:string,price:number):Promise<string>{
+  const vm=await getMachine(env,vmId);
+  if(!vm||vm.guild_id!==guildId||!(await listSingleMachineIds(env,guildId)).has(vmId)) return "パネルが見つかりません。";
+  const products=await listVmProducts(env,vmId);
+  for(const p of products) await updateVmProduct(env,p.id,vmId,{pricePayPay:price,priceKyash:price});
+  const old=(await listPanelDeployments(env,guildId)).find(row=>row.kind==="vending"&&row.object_id===vmId);
+  if(old?.channel_id&&old.message_id){
+    await botFetch(env,"/channels/"+old.channel_id+"/messages/"+old.message_id,{method:"DELETE"}).catch(()=>undefined);
+  }
+  await postSinglePanel(env,guildId,channelId,vm);
+  return "価格を"+price+"円に変更し、パネルを再設置しました。";
+}
+
+async function handlePriceCommand(interaction:any,env:Env):Promise<Response>{
+  const guildId=String(interaction.guild_id??""),channelId=String(interaction.channel_id??"");
+  const price=Number(interaction.data?.options?.find((o:any)=>o.name==="price")?.value);
+  if(!guildId) return ires(eph("サーバー内で実行してください。"));
+  if(!Number.isInteger(price)||price<0||price>1_000_000) return ires(eph("価格は0〜1000000の整数で入力してください。"));
+  const singles=await listSingleMachineIds(env,guildId);
+  const here=(await listPanelDeployments(env,guildId)).filter(row=>row.kind==="vending"&&row.channel_id===channelId&&singles.has(row.object_id));
+  const machines=(await Promise.all(here.map(row=>getMachine(env,row.object_id)))).filter((vm):vm is Vm=>Boolean(vm));
+  if(!machines.length) return ires(eph("このチャンネルに単品自販機のパネルがありません。"));
+  if(machines.length===1) return ires(eph(await applySinglePrice(env,guildId,channelId,machines[0]!.id,price)));
+  return ires(eph("価格を変更するパネルを選択してください。",[{type:1,components:[{
+    type:3,custom_id:"vm:pricesel:"+price,placeholder:"パネルを選択",
+    options:machines.slice(0,25).map(vm=>({label:vm.name.replace(/^単品: /,"").slice(0,100),value:vm.id}))
+  }]}]));
+}
+
+export async function handleVendingCommand(interaction:any,env:Env):Promise<Response|null>{
+  const name=interaction.data?.name;
+  if(name!=="single-product"&&name!=="price") return null;
+  await ensureVendingSchema(env);
+  return name==="price"?handlePriceCommand(interaction,env):handleSingleProductCommand(interaction,env);
+}
+
 export async function handleVendingInteraction(interaction:any,env:Env,ctx:ExecutionContext):Promise<Response|null>{
   await ensureVendingSchema(env);
   if(interaction.type===3){
     const id=String(interaction.data?.custom_id??"");
+    if(id.startsWith("vm:pricesel:")){
+      const price=Number(id.slice(12)),guildId=String(interaction.guild_id??"");
+      return ires(eph(await applySinglePrice(env,guildId,String(interaction.channel_id??""),String(interaction.data.values?.[0]??""),price)));
+    }
     if(id.startsWith("vm:buy:")){
       const vmId=id.slice(7),vm=await getMachine(env,vmId); if(!vm) return ires(eph("自販機が見つかりません。"));
       return ires(eph("決済方法を選択してください。",[{type:1,components:[{type:3,custom_id:"vm:method:"+vmId,placeholder:"決済方法",options:[{label:"PayPay",value:"paypay",emoji:{name:"💴"}},{label:"Kyash",value:"kyash",emoji:{name:"💳"}}]}]}]));

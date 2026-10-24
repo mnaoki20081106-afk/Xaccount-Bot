@@ -64,6 +64,7 @@ import { recordPanelDeployment } from "./backup-db";
 import {
   handleVendingApi,
   handleVendingInteraction,
+  handleVendingCommand,
   handleVendingMedia,
   vendingSweep,
   VendingHttpError
@@ -1199,7 +1200,7 @@ function isVendingInteraction(interaction:any):boolean{
 function shouldDeferInteraction(interaction:any):boolean{
   const id=interactionCustomId(interaction);
   if(interaction?.type===2){
-    return interaction?.data?.name==="security-status";
+    return ["security-status","single-product","price"].includes(interaction?.data?.name);
   }
   if(interaction?.type===3){
     if(
@@ -1510,6 +1511,8 @@ async function processInteraction(
 
   if(interaction.type===2){
     const name=interaction.data?.name;
+    const vendingCommand=await handleVendingCommand(interaction,env);
+    if(vendingCommand) return vendingCommand;
     if(name==="dashboard") return interactionResponse(ephemeral(`管理画面: ${env.WEB_PUBLIC_URL}`));
     if(name==="security-status"&&interaction.guild_id){
       await ensureSchema(env);
@@ -1631,7 +1634,20 @@ async function registerCommands(env:Env):Promise<void>{
     method:"PUT",
     body:JSON.stringify([
       {name:"dashboard",description:"管理ダッシュボードを開きます",type:1},
-      {name:"security-status",description:"セキュリティ設定を表示します",type:1}
+      {name:"security-status",description:"セキュリティ設定を表示します",type:1},
+      {
+        name:"single-product",description:"単品自販機を設置します",type:1,
+        default_member_permissions:"8",dm_permission:false,
+        options:[
+          {name:"file",description:"商品のファイル（テキスト）",type:11,required:true},
+          {name:"price",description:"価格（円）",type:4,required:true,min_value:0,max_value:1000000}
+        ]
+      },
+      {
+        name:"price",description:"このチャンネルの単品自販機の価格を変更します",type:1,
+        default_member_permissions:"8",dm_permission:false,
+        options:[{name:"price",description:"新しい価格（円）",type:4,required:true,min_value:0,max_value:1000000}]
+      }
     ])
   });
 }

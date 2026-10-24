@@ -71,7 +71,8 @@ const schema=[
 "CREATE TABLE IF NOT EXISTS vending_auto_restock (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL DEFAULT 'vending',vending_machine_id TEXT NOT NULL,product_id TEXT NOT NULL,min_stock INTEGER NOT NULL,target_stock INTEGER NOT NULL,max_batch INTEGER NOT NULL,min_warmup_days INTEGER NOT NULL DEFAULT 0,enabled INTEGER NOT NULL DEFAULT 1,pending_enc TEXT,last_run_at INTEGER,last_added INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_auto_restock_product_unique ON vending_auto_restock(product_id)",
 "CREATE TABLE IF NOT EXISTS generator_pending_deliveries (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL,vending_machine_id TEXT NOT NULL DEFAULT '',product_id TEXT NOT NULL,payload_enc TEXT NOT NULL,line_count INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
-"CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)"
+"CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)",
+"CREATE TABLE IF NOT EXISTS vending_single_machines (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,created_at INTEGER NOT NULL)"
 ];
 
 let ready=false;
@@ -677,3 +678,10 @@ export async function getPayPay(env:Env,userId:string,secret:string){
 export async function removePayPay(env:Env,userId:string){ await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_phone_enc=NULL,paypay_password_enc=NULL,paypay_uuid=NULL,paypay_session_enc=NULL,updated_at=? WHERE user_id=?").bind(Date.now(),userId).run(); }
 export async function savePayChallenge(env:Env,userId:string,payload:string,secret:string){ const id=randomId(); await env.DB.prepare("INSERT INTO vending_payment_login_challenges(id,user_id,provider,payload_enc,expires_at) VALUES (?,?,'paypay',?,?)").bind(id,userId,await encrypt(secret,payload),Date.now()+5*60_000).run(); return id; }
 export async function takePayChallenge(env:Env,id:string,userId:string,secret:string){ const r=await env.DB.prepare("SELECT payload_enc,expires_at FROM vending_payment_login_challenges WHERE id=? AND user_id=? AND provider='paypay'").bind(id,userId).first<{payload_enc:string;expires_at:number}>(); if(!r||r.expires_at<Date.now()) return null; await env.DB.prepare("DELETE FROM vending_payment_login_challenges WHERE id=?").bind(id).run(); return decrypt(secret,r.payload_enc); }
+
+export async function markSingleMachine(env:Env,vmId:string,guildId:string){
+  await env.DB.prepare("INSERT OR IGNORE INTO vending_single_machines(vending_machine_id,guild_id,created_at) VALUES (?,?,?)").bind(vmId,guildId,Date.now()).run();
+}
+export async function listSingleMachineIds(env:Env,guildId:string){
+  return new Set((await env.DB.prepare("SELECT vending_machine_id FROM vending_single_machines WHERE guild_id=?").bind(guildId).all<{vending_machine_id:string}>()).results.map(row=>row.vending_machine_id));
+}
