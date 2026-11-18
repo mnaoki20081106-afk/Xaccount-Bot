@@ -9,7 +9,7 @@ import {
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
   getMachine, getOrder, listSingleMachineIds, markSingleMachine, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listDeliverySent, listMachines, listVmProducts,
   markDeliverySent, markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
-  takePayChallenge, updateAchievementCountNameState, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
+  takePayChallenge, updateAchievementCountNameState, reorderVmProducts, dashboardSummary, listPanelAssets, getPanelAsset, createPanelAsset, updatePanelAsset, deletePanelAsset, recordPanelAssetMessage, type PanelAsset, type PanelAssetInput, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
   acceptPayPayLink, checkKyashLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
@@ -373,6 +373,66 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     }
   }
 
+  // Dashboard overview totals (自販機 / 商品 / 在庫 / 売上). Read-only.
+  const summary=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/dashboard-summary$/);
+  if(summary&&request.method==="GET"){
+    const guildId=summary[1]!,session=await requireGuild(request,env,guildId);
+    const [totals,deployments]=await Promise.all([
+      dashboardSummary(env,guildId,session.user_id),
+      listPanelDeployments(env,guildId)
+    ]);
+    return json(env,{...totals,installedPanels:deployments.filter(row=>row.kind==="vending").length});
+  }
+
+  // Asset management: free-form embed panels, optionally with a vending machine's buttons.
+  const assets=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/assets$/);
+  if(assets){
+    const guildId=assets[1]!,session=await requireGuild(request,env,guildId);
+    if(request.method==="GET") return json(env,await listPanelAssets(env,guildId,session.user_id));
+    if(request.method==="POST"){
+      const data=await panelAssetInput(env,session.user_id,await input<any>(request));
+      return json(env,await createPanelAsset(env,guildId,session.user_id,data),201);
+    }
+  }
+  const assetDeploy=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/assets\/([^/]+)\/deploy$/);
+  if(assetDeploy&&request.method==="POST"){
+    const guildId=assetDeploy[1]!,assetId=assetDeploy[2]!,session=await requireGuild(request,env,guildId);
+    const asset=await getPanelAsset(env,guildId,session.user_id,assetId);
+    if(!asset) throw new VendingHttpError(404,"パネルが見つかりません");
+    const b=await input<{channelId?:string;mode?:"new"|"update"}>(request);
+    const payload=await panelAssetPayload(env,session.user_id,asset);
+    if(b.mode==="update"){
+      if(!asset.channel_id||!asset.message_id) throw new VendingHttpError(409,"更新できる設置済みメッセージがありません。先に設置してください");
+      await botJson(env,"/channels/"+asset.channel_id+"/messages/"+asset.message_id,{method:"PATCH",body:JSON.stringify(payload)});
+      return json(env,{ok:true,channelId:asset.channel_id,messageId:asset.message_id});
+    }
+    const channelId=String(b.channelId??"").trim();
+    if(!/^\d{17,20}$/.test(channelId)) throw new VendingHttpError(400,"設置先チャンネルを選択してください");
+    const message=await send(env,channelId,payload);
+    await recordPanelAssetMessage(env,asset.id,channelId,message.id??null);
+    return json(env,{ok:true,channelId,messageId:message.id??null});
+  }
+  const assetItem=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/assets\/([^/]+)$/);
+  if(assetItem){
+    const guildId=assetItem[1]!,assetId=assetItem[2]!,session=await requireGuild(request,env,guildId);
+    if(request.method==="PUT"){
+      const data=await panelAssetInput(env,session.user_id,await input<any>(request));
+      if(!await updatePanelAsset(env,guildId,session.user_id,assetId,data)) throw new VendingHttpError(404,"パネルが見つかりません");
+      return json(env,await getPanelAsset(env,guildId,session.user_id,assetId));
+    }
+    if(request.method==="DELETE") return json(env,{ok:await deletePanelAsset(env,guildId,session.user_id,assetId)});
+  }
+
+  const reorder=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/products\/reorder$/);
+  if(reorder&&request.method==="POST"){
+    const guildId=reorder[1]!,vmId=reorder[2]!,session=await requireGuild(request,env,guildId);
+    await machineOwned(env,vmId,session.user_id);
+    const b=await input<{productIds?:unknown}>(request);
+    const ids=Array.isArray(b.productIds)?b.productIds.map(String):[];
+    if(!await reorderVmProducts(env,vmId,ids)) throw new VendingHttpError(409,"商品一覧が最新ではありません。再読み込みしてから並び替えてください");
+    return json(env,{ok:true});
+  }
+
   const vmMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)$/);
   if(vmMatch){
     const guildId=vmMatch[1]!,vmId=vmMatch[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id);
@@ -538,12 +598,22 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
 
   const panel=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel$/);
   if(panel&&request.method==="POST"){
-    const guildId=panel[1]!,vmId=panel[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),b=await input<{channelId:string}>(request),products=await listVmProducts(env,vmId);
+    const guildId=panel[1]!,vmId=panel[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),b=await input<{channelId:string;replacePrevious?:boolean}>(request),products=await listVmProducts(env,vmId);
+    const previous=b.replacePrevious
+      ?(await listPanelDeployments(env,guildId)).find(row=>row.kind==="vending"&&row.object_id===vmId)??null
+      :null;
     const message=await send(env,b.channelId,{embeds:[panelEmbed(vm,products)],components:[{type:1,components:[{type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vmId},{type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vmId}]}]});
+    // "チャンネル変更": remove the previously installed panel only after the new one was posted.
+    let previousRemoved:boolean|null=null;
+    if(previous?.channel_id&&previous.message_id&&previous.message_id!==message.id){
+      previousRemoved=await botFetch(env,"/channels/"+previous.channel_id+"/messages/"+previous.message_id,{method:"DELETE"})
+        .then(response=>response.ok||response.status===404)
+        .catch(()=>false);
+    }
     await recordPanelDeployment(env,{
       guildId,kind:"vending",objectId:vmId,channelId:b.channelId,messageId:message.id??null
     });
-    return json(env,{ok:true,messageId:message.id??null});
+    return json(env,{ok:true,messageId:message.id??null,previousRemoved});
   }
 
   const panelUpdate=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel\/update$/);
@@ -611,6 +681,48 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   }
 
   return null;
+}
+
+async function panelAssetInput(env:Env,ownerId:string,b:any):Promise<PanelAssetInput>{
+  const text=(value:unknown,max:number)=>String(value??"").slice(0,max);
+  const name=text(b.name,80).trim();
+  if(!name) throw new VendingHttpError(400,"パネル名を入力してください");
+  const title=text(b.title,256).trim();
+  const body=text(b.body,4000);
+  if(!title&&!body.trim()) throw new VendingHttpError(400,"タイトルか本文を入力してください");
+  const color=String(b.color??"#3867d6");
+  if(!/^#[0-9a-f]{6}$/i.test(color)) throw new VendingHttpError(400,"帯カラーが不正です");
+  const httpsUrl=(value:unknown,label:string)=>{
+    const raw=String(value??"").trim();
+    if(!raw) return null;
+    try{ const parsed=new URL(raw); if(parsed.protocol==="https:") return parsed.toString(); }catch{}
+    throw new VendingHttpError(400,label+"はhttps://から始まるURLで入力してください");
+  };
+  const vendingMachineId=String(b.vendingMachineId??"").trim()||null;
+  if(vendingMachineId) await machineOwned(env,vendingMachineId,ownerId);
+  return {
+    name,title,body,color,
+    imageUrl:httpsUrl(b.imageUrl,"画像URL"),
+    thumbnailUrl:httpsUrl(b.thumbnailUrl,"サムネイルURL"),
+    footer:text(b.footer,2048).trim()||null,
+    vendingMachineId
+  };
+}
+
+async function panelAssetPayload(env:Env,ownerId:string,asset:PanelAsset){
+  const embed:Record<string,unknown>={color:embedColor(asset.color)};
+  if(asset.title) embed.title=asset.title;
+  if(asset.body.trim()) embed.description=asset.body;
+  if(asset.image_url) embed.image={url:asset.image_url};
+  if(asset.thumbnail_url) embed.thumbnail={url:asset.thumbnail_url};
+  if(asset.footer) embed.footer={text:asset.footer};
+  if(!asset.vending_machine_id) return {embeds:[embed],components:[]};
+  const vm=await getMachine(env,asset.vending_machine_id);
+  if(!vm||vm.owner_id!==ownerId||!vm.active) throw new VendingHttpError(409,"紐付けた自販機が削除されています。自販機ボタンを選び直してください");
+  return {embeds:[embed],components:[{type:1,components:[
+    {type:2,style:3,label:"購入する",emoji:{name:"🛒"},custom_id:"vm:buy:"+vm.id},
+    {type:2,style:1,label:"在庫・販売数",emoji:{name:"📦"},custom_id:"vm:stock:"+vm.id}
+  ]}]};
 }
 
 function componentEmoji(raw:string|null){

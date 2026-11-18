@@ -13,6 +13,14 @@ import MemberActivityManager from "./MemberActivityManager";
 import SecurityManager from "./SecurityManager";
 import ExternalAuthManager from "./ExternalAuthManager";
 import PanelOverview from "./PanelOverview";
+import DashboardOverview, { type ConsoleView } from "./DashboardOverview";
+import VendingBoard from "./VendingBoard";
+import StockOverview from "./StockOverview";
+import CouponCenter from "./CouponCenter";
+import PaymentSettings from "./PaymentSettings";
+import AssetManager from "./AssetManager";
+import { Icon } from "./console-ui";
+import "./console.css";
 
 type User = { id: string; username: string; avatar: string | null };
 type Guild = {
@@ -162,8 +170,15 @@ export default function App() {
   const [me, setMe] = useState<User | null>(null);
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"server" | "security" | "members" | "verification" | "tickets" | "panels" | "vending" | "shiire" | "affiliate" | "followbomb" | "utility" | "generator" | "backup">("server");
-  const [focusVendingMachineId, setFocusVendingMachineId] = useState<string | null>(null);
+  const [activeView, setActiveViewState] = useState<ConsoleView>("overview");
+  const [menuOpen, setMenuOpen] = useState(false);
+  // null = table view; otherwise the detailed VendingManager is open on that target.
+  const [vendingFocus, setVendingFocus] = useState<{
+    machineId: string;
+    section?: "panel" | "products" | "settings" | "achievement";
+    productId?: string | null;
+    key: number;
+  } | null>(null);
   const [focusShiireMachineId, setFocusShiireMachineId] = useState<string | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
   const selectedGuildRef = useRef<string | null>(null);
@@ -228,6 +243,29 @@ export default function App() {
     () => guilds.find((guild) => !guild.botInstalled) ?? null,
     [guilds]
   );
+
+  function setActiveView(view: ConsoleView) {
+    setActiveViewState(view);
+    setMenuOpen(false);
+    if (view !== "vending") setVendingFocus(null);
+    window.scrollTo({ top: 0 });
+  }
+
+  function openVendingDetail(
+    machineId: string,
+    section: "panel" | "products" | "settings" | "achievement" = "panel",
+    productId: string | null = null
+  ) {
+    setVendingFocus({ machineId, section, productId, key: Date.now() });
+    setActiveViewState("vending");
+    setMenuOpen(false);
+    window.scrollTo({ top: 0 });
+  }
+
+  function openShiire(machineId: string) {
+    setFocusShiireMachineId(machineId);
+    setActiveView("shiire");
+  }
 
   function flash(message: string) {
     setNotice(message);
@@ -599,294 +637,309 @@ export default function App() {
     );
   }
 
+
+  type NavItem = { view: ConsoleView; label: string; icon: string; bot?: string };
+  const navGroups: Array<{ label: string; note?: string; items: NavItem[] }> = [
+    { label: "", items: [{ view: "overview", label: "ダッシュボード概要", icon: "grid" }] },
+    {
+      label: "販売",
+      items: [
+        { view: "vending", label: "自販機 & 商品管理", icon: "machine" },
+        { view: "stock", label: "在庫エディタ", icon: "box" },
+        { view: "coupons", label: "クーポン管理", icon: "tag" },
+        { view: "payments", label: "PayPay設定", icon: "card" },
+        { view: "assets", label: "アセット管理（パネル作成）", icon: "image" },
+        { view: "panels", label: "設置済みパネル一覧", icon: "panels" }
+      ]
+    },
+    {
+      label: "サーバー",
+      items: [
+        { view: "server", label: "チャンネル位置エディタ", icon: "list" },
+        { view: "tickets", label: "チケット窓口", icon: "ticket" },
+        { view: "verification", label: "認証", icon: "check" },
+        { view: "members", label: "入室管理", icon: "door" },
+        { view: "security", label: "セキュリティ", icon: "shield" },
+        { view: "backup", label: "バックアップ管理", icon: "backup" }
+      ]
+    },
+    {
+      label: "連携Bot",
+      note: "別Bot",
+      items: [
+        { view: "shiire", label: "仕入れbot", icon: "truck", bot: "別Bot · Discord-Shiire" },
+        { view: "affiliate", label: "アフィリエイト", icon: "users", bot: "別Bot · Discord-Shiire" },
+        { view: "followbomb", label: "フォロ爆", icon: "spark", bot: "別Bot · Discord-Shiire" },
+        { view: "utility", label: "X Utility", icon: "wrench", bot: "別Bot · X-Utility" },
+        { view: "generator", label: "垢生成", icon: "coins", bot: "外部Generator連携" }
+      ]
+    }
+  ];
+
+  const installedGuilds = guilds.filter((guild) => guild.botInstalled);
+  const missingGuilds = guilds.filter((guild) => !guild.botInstalled);
+
+  function panelProps(view: ConsoleView, extraClass = "") {
+    return {
+      id: "admin-panel-" + view,
+      className: ("admin-tab-panel " + extraClass).trim(),
+      role: "tabpanel" as const,
+      "aria-labelledby": "admin-tab-" + view,
+      hidden: activeView !== view
+    };
+  }
+
+  function pageHead(title: string, description: string, bot?: string) {
+    return (
+      <div className="xc-page-head">
+        <div>
+          <h1>{title}</h1>
+          <p>{description}</p>
+        </div>
+        {bot && <span className="xc-pill orange">{bot}</span>}
+      </div>
+    );
+  }
+
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="logo-mark small">D</div>
+    <div className="xc-shell">
+      <header className="xc-header">
+        <div className="xc-brand">
+          <button
+            type="button"
+            className="xc-header-btn xc-menu-toggle"
+            aria-expanded={menuOpen}
+            aria-controls="xc-sidebar"
+            onClick={() => setMenuOpen((open) => !open)}
+            title="メニュー"
+          >
+            <Icon name="menu" size={18} />
+          </button>
+          <span className="xc-brand-mark"><Icon name="machine" size={22} /></span>
           <div>
-            <strong>DSM</strong>
-            <small>Server Manager</small>
+            <strong>Xaccount-Bot <em>Pro</em></strong>
+            <small title={status?.discordError ?? undefined}>
+              <i className={`xc-dot ${status?.discordReady ? "on" : ""}`} />
+              BOT {status?.discordReady ? "ONLINE" : "OFFLINE"}
+              {status?.discordReady && typeof status.guildCount === "number" ? ` · ${status.guildCount} servers` : ""}
+            </small>
           </div>
         </div>
-
-        <div className="server-list">
-          <span className="side-label">SERVERS</span>
-          {guilds.map((guild) => (
-            guild.botInstalled ? (
-              <button
-                key={guild.id}
-                className={`server-button ${selectedId === guild.id ? "active" : ""}`}
-                onClick={() => void selectGuild(guild.id)}
-              >
-                {guild.icon ? (
-                  <img
-                    src={`https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=80`}
-                    alt=""
-                  />
-                ) : (
-                  <span className="server-fallback">{guild.name.slice(0, 2).toUpperCase()}</span>
-                )}
-                <span className="server-copy">
-                  <strong>{guild.name}</strong>
-                  <small>BOT導入済み</small>
-                </span>
-                <span className="dot online" />
-              </button>
-            ) : (
-              <a
-                key={guild.id}
-                className="server-button"
-                href={inviteUrlForGuild(guild.id)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <span className="server-fallback">!</span>
-                <span className="server-copy">
-                  <strong>{guild.name}</strong>
-                  <small>Main Botの再追加が必要</small>
-                </span>
-                <span className="dot" />
-              </a>
-            )
-          ))}
-        </div>
-
-        <div className="account">
-          <div className="avatar">{me?.username?.slice(0, 1).toUpperCase() ?? "?"}</div>
-          <div>
-            <strong>{me?.username ?? "共同管理者"}</strong>
-            <small>共同編集</small>
-          </div>
-          <button className="icon-button" onClick={() => void logout()} title="ログアウト">
-            ↪
+        <div className="xc-header-actions">
+          {status?.inviteUrl && (
+            <a className="xc-header-btn" href={botAuthorizeUrl} target="_blank" rel="noreferrer">
+              <Icon name="link" size={16} /><span className="label">{selectedGuild ? "BOT権限を更新" : "BOTを追加"}</span>
+            </a>
+          )}
+          <button
+            type="button"
+            className="xc-header-btn"
+            disabled={busy}
+            onClick={() => void (selectedId ? selectGuild(selectedId) : loadBase())}
+          >
+            <Icon name="refresh" size={16} /><span className="label">更新</span>
+          </button>
+          <button type="button" className="xc-header-btn logout" onClick={() => void logout()}>
+            <Icon name="logout" size={16} /><span className="label">ログアウト</span>
           </button>
         </div>
-      </aside>
+      </header>
 
-      <main className="content">
-        <header className="topbar">
-          <div>
-            <span className="eyebrow">CONTROL PANEL</span>
-            <h1>{selectedGuild?.name ?? "サーバーを選択"}</h1>
-          </div>
-          <div className="status-row">
-            {status?.inviteUrl && (
-              <a className="primary" href={botAuthorizeUrl} target="_blank" rel="noreferrer">
-                {selectedGuild ? "BOT権限を更新" : "BOTをサーバーへ追加"}
-              </a>
-            )}
-            <span
-              className={`status-pill ${status?.discordReady ? "good" : "bad"}`}
-              title={status?.discordError ?? undefined}
+      <div className="xc-body">
+        <aside id="xc-sidebar" className={`xc-sidebar ${menuOpen ? "open" : ""}`}>
+          <div className="xc-server-select">
+            <span>管理中のサーバー</span>
+            <select
+              value={selectedId ?? ""}
+              onChange={(event) => event.target.value && void selectGuild(event.target.value)}
+              aria-label="管理するサーバー"
             >
-              <i /> BOT {status?.discordReady ? "Online" : "Offline"}
-              {status?.discordReady && typeof status.guildCount === "number"
-                ? ` · ${status.guildCount} server${status.guildCount === 1 ? "" : "s"}`
-                : ""}
-            </span>
-            <span className="status-pill good">
-              <i /> API Serverless
-            </span>
+              {!selectedId && <option value="">サーバーを選択</option>}
+              {installedGuilds.map((guild) => (
+                <option key={guild.id} value={guild.id}>{guild.name}</option>
+              ))}
+            </select>
+            {missingGuilds.map((guild) => (
+              <a key={guild.id} href={inviteUrlForGuild(guild.id)} target="_blank" rel="noreferrer">
+                ⚠ {guild.name}: BOTの再追加が必要
+              </a>
+            ))}
           </div>
-        </header>
 
-        {notice && <div className="alert success">{notice}</div>}
-        {error && <div className="alert error">{error}</div>}
-        {busy && <div className="progress"><span /></div>}
-
-        {!selectedGuild && (
-          <section className="empty-state card">
-            {missingMainBotGuild ? (
-              <>
-                <h2>Main Botの再追加が必要です</h2>
-                <p>
-                  Security Botはこのサーバーを認識していますが、Main Bot本人が現在Discordサーバーに参加していません。
-                  再追加後に一覧を再読み込みしてください。
-                </p>
-                <a
-                  className="primary"
-                  href={inviteUrlForGuild(missingMainBotGuild.id)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Main Botをこのサーバーへ再追加
-                </a>
-              </>
-            ) : (
-              <>
-                <h2>管理するサーバーを選んでください</h2>
-                <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
-              </>
-            )}
-            {status?.discordError && (
-              <div className="alert error">
-                Discord API: {status.discordError}
-              </div>
-            )}
-            <button className="primary" onClick={() => void loadBase()} disabled={busy}>
-              サーバー一覧を再読み込み
-            </button>
-          </section>
-        )}
-
-        {selectedGuild && meta && (
-          <>
-            <nav className="page-tabs" role="tablist" aria-label="管理機能">
-              <button
-                type="button"
-                id="admin-tab-server"
-                role="tab"
-                aria-controls="admin-panel-server"
-                aria-selected={activeView === "server"}
-                className={activeView === "server" ? "active" : ""}
-                onClick={() => setActiveView("server")}
-              >
-                サーバー管理
-              </button>
-              <button
-                type="button"
-                id="admin-tab-security"
-                role="tab"
-                aria-controls="admin-panel-security"
-                aria-selected={activeView === "security"}
-                className={activeView === "security" ? "active" : ""}
-                onClick={() => setActiveView("security")}
-              >
-                セキュリティ
-              </button>
-              <button
-                type="button"
-                id="admin-tab-members"
-                role="tab"
-                aria-controls="admin-panel-members"
-                aria-selected={activeView === "members"}
-                className={activeView === "members" ? "active" : ""}
-                onClick={() => setActiveView("members")}
-              >
-                入室管理
-              </button>
-              <button
-                type="button"
-                id="admin-tab-verification"
-                role="tab"
-                aria-controls="admin-panel-verification"
-                aria-selected={activeView === "verification"}
-                className={activeView === "verification" ? "active" : ""}
-                onClick={() => setActiveView("verification")}
-              >
-                認証
-              </button>
-              <button
-                type="button"
-                id="admin-tab-tickets"
-                role="tab"
-                aria-controls="admin-panel-tickets"
-                aria-selected={activeView === "tickets"}
-                className={activeView === "tickets" ? "active" : ""}
-                onClick={() => setActiveView("tickets")}
-              >
-                Ticket
-              </button>
-              <button
-                type="button"
-                id="admin-tab-panels"
-                role="tab"
-                aria-controls="admin-panel-panels"
-                aria-selected={activeView === "panels"}
-                className={activeView === "panels" ? "active" : ""}
-                onClick={() => setActiveView("panels")}
-              >
-                パネル管理
-              </button>
-              <button
-                type="button"
-                id="admin-tab-vending"
-                role="tab"
-                aria-controls="admin-panel-vending"
-                aria-selected={activeView === "vending"}
-                className={activeView === "vending" ? "active" : ""}
-                onClick={() => setActiveView("vending")}
-              >
-                自販機
-              </button>
-              <button
-                type="button"
-                id="admin-tab-shiire"
-                role="tab"
-                aria-controls="admin-panel-shiire"
-                aria-selected={activeView === "shiire"}
-                className={activeView === "shiire" ? "active" : ""}
-                onClick={() => setActiveView("shiire")}
-              >
-                仕入れbot
-              </button>
-              <button
-                type="button"
-                id="admin-tab-affiliate"
-                role="tab"
-                aria-controls="admin-panel-affiliate"
-                aria-selected={activeView === "affiliate"}
-                className={activeView === "affiliate" ? "active" : ""}
-                onClick={() => setActiveView("affiliate")}
-              >
-                アフィリエイト
-              </button>
-              <button
-                type="button"
-                id="admin-tab-followbomb"
-                role="tab"
-                aria-controls="admin-panel-followbomb"
-                aria-selected={activeView === "followbomb"}
-                className={activeView === "followbomb" ? "active" : ""}
-                onClick={() => setActiveView("followbomb")}
-              >
-                フォロ爆
-              </button>
-              <button
-                type="button"
-                id="admin-tab-utility"
-                role="tab"
-                aria-controls="admin-panel-utility"
-                aria-selected={activeView === "utility"}
-                className={activeView === "utility" ? "active" : ""}
-                onClick={() => setActiveView("utility")}
-              >
-                X Utility
-              </button>
-              <button
-                type="button"
-                id="admin-tab-backup"
-                role="tab"
-                aria-controls="admin-panel-backup"
-                aria-selected={activeView === "backup"}
-                className={activeView === "backup" ? "active" : ""}
-                onClick={() => setActiveView("backup")}
-              >
-                バックアップ管理
-              </button>
-              <button
-                type="button"
-                id="admin-tab-generator"
-                role="tab"
-                aria-controls="admin-panel-generator"
-                aria-selected={activeView === "generator"}
-                className={activeView === "generator" ? "active" : ""}
-                onClick={() => setActiveView("generator")}
-              >
-                垢生成
-              </button>
+          {selectedGuild && meta && (
+            <nav role="tablist" aria-orientation="vertical" aria-label="管理機能">
+              {navGroups.map((group) => (
+                <div className="xc-nav-group" key={group.label || "main"}>
+                  {group.label && (
+                    <div className="xc-nav-label">
+                      <span>{group.label}</span>
+                      {group.note && <span className="xc-pill orange" style={{ fontSize: 10, padding: "1px 7px" }}>{group.note}</span>}
+                    </div>
+                  )}
+                  {group.items.map((item) => (
+                    <button
+                      key={item.view}
+                      type="button"
+                      id={"admin-tab-" + item.view}
+                      role="tab"
+                      aria-controls={"admin-panel-" + item.view}
+                      aria-selected={activeView === item.view}
+                      className="xc-nav-item"
+                      onClick={() => setActiveView(item.view)}
+                    >
+                      <Icon name={item.icon} />
+                      <span className="xc-nav-copy">
+                        {item.label}
+                        {item.bot && <small>{item.bot}</small>}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
             </nav>
+          )}
 
-            {settings && (
-              <>
-                <section
-                  id="admin-panel-server"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-server"
-                  hidden={activeView !== "server"}
-                >
+          <div className="xc-nav-group" style={{ borderTop: "1px solid #1c2440", marginTop: 8, paddingTop: 12 }}>
+            <small className="muted" style={{ padding: "0 12px", fontSize: 12 }}>
+              ログイン中: {me?.username ?? "共同管理者"}（管理パスワード）
+            </small>
+          </div>
+        </aside>
+
+        <main className="xc-main">
+          {notice && <div className="alert success">{notice}</div>}
+          {error && <div className="alert error">{error}</div>}
+          {busy && <div className="progress"><span /></div>}
+
+          {!selectedGuild && (
+            <section className="empty-state card">
+              {missingMainBotGuild ? (
+                <>
+                  <h2>Main Botの再追加が必要です</h2>
+                  <p>
+                    Security Botはこのサーバーを認識していますが、Main Bot本人が現在Discordサーバーに参加していません。
+                    再追加後に一覧を再読み込みしてください。
+                  </p>
+                  <a className="primary" href={inviteUrlForGuild(missingMainBotGuild.id)} target="_blank" rel="noreferrer">
+                    Main Botをこのサーバーへ再追加
+                  </a>
+                </>
+              ) : (
+                <>
+                  <h2>管理するサーバーを選んでください</h2>
+                  <p>BOTを追加すると、参加済みサーバーがここに自動表示されます。</p>
+                </>
+              )}
+              {status?.discordError && <div className="alert error">Discord API: {status.discordError}</div>}
+              <button className="primary" onClick={() => void loadBase()} disabled={busy}>
+                サーバー一覧を再読み込み
+              </button>
+            </section>
+          )}
+
+          {selectedGuild && meta && (
+            <>
+              <section {...panelProps("overview")}>
+                {activeView === "overview" && (
+                  <DashboardOverview
+                    key={"DashboardOverview:" + selectedId}
+                    guildId={selectedId!}
+                    channels={meta.channels}
+                    onNavigate={setActiveView}
+                    onEditVending={(machineId) => openVendingDetail(machineId)}
+                    onEditShiire={openShiire}
+                    onNotice={flash}
+                    onError={fail}
+                  />
+                )}
+              </section>
+
+              <section {...panelProps("vending")}>
+                {activeView === "vending" && !vendingFocus && (
+                  <VendingBoard
+                    key={"VendingBoard:" + selectedId}
+                    guildId={selectedId!}
+                    channels={meta.channels}
+                    onOpenDetail={openVendingDetail}
+                    onEditShiire={openShiire}
+                    onNotice={flash}
+                    onError={fail}
+                  />
+                )}
+                {activeView === "vending" && vendingFocus && (
+                  <>
+                    <div className="xc-detail-back" style={{ marginBottom: 14 }}>
+                      <button type="button" className="xc-btn ghost" onClick={() => setVendingFocus(null)}>
+                        ← 自販機一覧に戻る
+                      </button>
+                      <span className="muted">パネルデザイン・商品と在庫の詳細・クーポン/通知・実績部屋を編集できます</span>
+                    </div>
+                    <VendingManager
+                      key={"VendingManager:" + selectedId}
+                      guildId={selectedId!}
+                      channels={meta.channels}
+                      roles={meta.roles}
+                      onNotice={flash}
+                      onError={fail}
+                      focus={vendingFocus}
+                      onOpenPayments={() => setActiveView("payments")}
+                    />
+                  </>
+                )}
+              </section>
+
+              <section {...panelProps("stock")}>
+                {activeView === "stock" && (
+                  <StockOverview
+                    key={"StockOverview:" + selectedId}
+                    guildId={selectedId!}
+                    onOpenProduct={(machineId, productId) => openVendingDetail(machineId, "products", productId)}
+                    onEditShiire={openShiire}
+                    onError={fail}
+                  />
+                )}
+              </section>
+
+              <section {...panelProps("coupons")}>
+                {activeView === "coupons" && (
+                  <CouponCenter key={"CouponCenter:" + selectedId} guildId={selectedId!} onNotice={flash} onError={fail} />
+                )}
+              </section>
+
+              <section {...panelProps("payments")}>
+                {activeView === "payments" && <PaymentSettings onNotice={flash} onError={fail} />}
+              </section>
+
+              <section {...panelProps("assets")}>
+                {activeView === "assets" && (
+                  <AssetManager
+                    key={"AssetManager:" + selectedId}
+                    guildId={selectedId!}
+                    channels={meta.channels}
+                    onNavigate={setActiveView}
+                    onNotice={flash}
+                    onError={fail}
+                  />
+                )}
+              </section>
+
+              <section {...panelProps("panels")}>
+                {activeView === "panels" && (
+                  <PanelOverview
+                    key={"PanelOverview:" + selectedId}
+                    guildId={selectedId!}
+                    channels={meta.channels}
+                    onError={fail}
+                    onEditVending={(machineId) => openVendingDetail(machineId)}
+                    onEditShiire={openShiire}
+                  />
+                )}
+              </section>
+
+              {settings && (
+                <>
+                  <section {...panelProps("server")}>
+                    {pageHead("チャンネル位置エディタ", "Discordのカテゴリー・チャンネルの並び順・階層・権限、ロールを編集します。")}
                   <ServerEditor
                   key={"ServerEditor:"+selectedId}
                   guildId={selectedId!}
@@ -949,7 +1002,41 @@ export default function App() {
                   </article>
                   </section>
 
-                  <section className="two-col">
+                    <section className="two-col">
+                      <article className="card">
+                      <span className="eyebrow">QUICK TEMPLATES</span>
+                      <h2>一括テンプレート</h2>
+                      <p className="muted">必要な時だけ、基本構成を一気に追加できます。</p>
+                      <div className="template-grid">
+                      <button onClick={() => void applyTemplate("community")}>
+                      <strong>Community</strong>
+                      <small>Welcome / Rules / General / Staff</small>
+                      </button>
+                      <button onClick={() => void applyTemplate("shop")}>
+                      <strong>Shop</strong>
+                      <small>Products / Orders / Support</small>
+                      </button>
+                      <button onClick={() => void applyTemplate("support")}>
+                      <strong>Support</strong>
+                      <small>FAQ / Ticket / Staff</small>
+                      </button>
+                      </div>
+                      </article>
+                    </section>
+                  </section>
+
+                  <section {...panelProps("security")}>
+                    {pageHead("セキュリティ", "Anti-Nuke / Anti-Raid / Phishing / Lockdown のリアルタイム防御と、Discord AutoModの補助保護を管理します。")}
+                    {activeView === "security" && (
+                      <SecurityManager
+                        key={"SecurityManager:" + selectedId}
+                        guildId={selectedId!}
+                        channels={meta.channels}
+                        onNotice={flash}
+                        onError={fail}
+                      />
+                    )}
+                    <div className="stack" style={{ marginTop: 20 }}>
                     <article className="card">
                     <div className="section-head">
                     <div>
@@ -1067,55 +1154,24 @@ export default function App() {
                     </Field>
                     </div>
                     </article>
-                    <div className="stack">
-                      <article className="card">
-                      <span className="eyebrow">QUICK TEMPLATES</span>
-                      <h2>一括テンプレート</h2>
-                      <p className="muted">必要な時だけ、基本構成を一気に追加できます。</p>
-                      <div className="template-grid">
-                      <button onClick={() => void applyTemplate("community")}>
-                      <strong>Community</strong>
-                      <small>Welcome / Rules / General / Staff</small>
-                      </button>
-                      <button onClick={() => void applyTemplate("shop")}>
-                      <strong>Shop</strong>
-                      <small>Products / Orders / Support</small>
-                      </button>
-                      <button onClick={() => void applyTemplate("support")}>
-                      <strong>Support</strong>
-                      <small>FAQ / Ticket / Staff</small>
-                      </button>
-                      </div>
-                      </article>
                     </div>
                   </section>
-                </section>
 
-                <section
-                  id="admin-panel-members"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-members"
-                  hidden={activeView !== "members"}
-                >
-                  {activeView === "members" && (
-                    <MemberActivityManager
-                      key={"MemberActivityManager:"+selectedId}
-                      guildId={selectedId!}
-                      channels={meta.channels}
-                      onNotice={flash}
-                      onError={fail}
-                    />
-                  )}
-                </section>
+                  <section {...panelProps("members")}>
+                    {pageHead("入室管理", "メンバーの入退室通知と参加状況を管理します。")}
+                    {activeView === "members" && (
+                      <MemberActivityManager
+                        key={"MemberActivityManager:" + selectedId}
+                        guildId={selectedId!}
+                        channels={meta.channels}
+                        onNotice={flash}
+                        onError={fail}
+                      />
+                    )}
+                  </section>
 
-                <section
-                  id="admin-panel-verification"
-                  className="admin-tab-panel admin-focus-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-verification"
-                  hidden={activeView !== "verification"}
-                >
+                  <section {...panelProps("verification", "admin-focus-panel")}>
+                    {pageHead("認証", "認証パネルの設置と、認証後に付与するロールを設定します。")}
                   <article className="card">
                   <div className="section-head">
                   <div>
@@ -1225,15 +1281,10 @@ export default function App() {
                   <article className="card">
                   <ExternalAuthManager guildId={selectedId ?? ""} />
                   </article>
-                </section>
+                  </section>
 
-                <section
-                  id="admin-panel-tickets"
-                  className="admin-tab-panel admin-focus-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-tickets"
-                  hidden={activeView !== "tickets"}
-                >
+                  <section {...panelProps("tickets", "admin-focus-panel")}>
+                    {pageHead("チケット窓口", "サポートチケットの対応者ロールと、チケットパネルの設置先を設定します。")}
                   <article className="card">
                   <div className="section-head">
                   <div>
@@ -1351,181 +1402,91 @@ export default function App() {
                   </a>
                   )}
                   </article>
-                </section>
+                  </section>
 
-                <section
-                  id="admin-panel-panels"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-panels"
-                  hidden={activeView !== "panels"}
-                >
-                  {activeView === "panels" && (
-                    <PanelOverview
-                      key={"PanelOverview:"+selectedId}
-                      guildId={selectedId!}
-                      channels={meta.channels}
-                      onError={fail}
-                      onEditVending={(machineId) => {
-                        setFocusVendingMachineId(machineId);
-                        setActiveView("vending");
-                      }}
-                      onEditShiire={(machineId) => {
-                        setFocusShiireMachineId(machineId);
-                        setActiveView("shiire");
-                      }}
-                    />
-                  )}
-                </section>
+                  <section {...panelProps("shiire")}>
+                    {pageHead("仕入れbot", "Xアカウントの自動仕入れ・在庫・仕入れbot自販機を管理します。販売と納品は別Bot（Discord-Shiire）が行います。", "別Bot · Discord-Shiire")}
+                    {activeView === "shiire" && (
+                      <ShiireOperationsCenter
+                        key={"ShiireOperationsCenter:" + selectedId}
+                        guildId={selectedId!}
+                        channels={meta.channels}
+                        roles={meta.roles}
+                        onNotice={flash}
+                        onError={fail}
+                        focusMachineId={focusShiireMachineId}
+                      />
+                    )}
+                  </section>
 
-                <section
-                  id="admin-panel-vending"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-vending"
-                  hidden={activeView !== "vending"}
-                >
-                  <VendingManager
-                  key={"VendingManager:"+selectedId}
-                  guildId={selectedId!}
-                  channels={meta.channels}
-                  roles={meta.roles}
-                  onNotice={flash}
-                  onError={fail}
-                  focusMachineId={focusVendingMachineId}
+                  <section {...panelProps("affiliate")}>
+                    {pageHead("アフィリエイト", "仕入れbot側で動くアフィリエイト・招待キャンペーンを管理します。", "別Bot · Discord-Shiire")}
+                    {activeView === "affiliate" && (
+                      <AffiliateManager
+                        key={"AffiliateManager:" + selectedId}
+                        guildId={selectedId!}
+                        channels={meta.channels}
+                        onNotice={flash}
+                        onError={fail}
+                      />
+                    )}
+                  </section>
+
+                  <section {...panelProps("followbomb")}>
+                    {pageHead("フォロ爆", "仕入れbot側のSMM（フォロワー）販売を管理します。", "別Bot · Discord-Shiire")}
+                    {activeView === "followbomb" && (
+                      <FollowBombManager
+                        key={"FollowBombManager:" + selectedId}
+                        guildId={selectedId!}
+                        channels={meta.channels}
+                        onNotice={flash}
+                        onError={fail}
+                      />
+                    )}
+                  </section>
+                </>
+              )}
+
+              <section {...panelProps("utility")}>
+                {pageHead("X Utility", "垢状態チェック・2FAコード生成・アカウント形式判別。パネルはX-Utility BOTが投稿します。", "別Bot · X-Utility")}
+                {activeView === "utility" && selectedId && (
+                  <XUtilityManager
+                    key={"XUtilityManager:" + selectedId}
+                    guildId={selectedId}
+                    channels={meta.channels}
+                    onNotice={flash}
+                    onError={fail}
                   />
-                </section>
+                )}
+              </section>
 
-                <section
-                  id="admin-panel-shiire"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-shiire"
-                  hidden={activeView !== "shiire"}
-                >
-                  {activeView === "shiire" && (
-                    <ShiireOperationsCenter
-                      key={"ShiireOperationsCenter:"+selectedId}
-                      guildId={selectedId!}
-                      channels={meta.channels}
-                      roles={meta.roles}
-                      onNotice={flash}
-                      onError={fail}
-                      focusMachineId={focusShiireMachineId}
-                    />
-                  )}
-                </section>
-
-                <section
-                  id="admin-panel-affiliate"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-affiliate"
-                  hidden={activeView !== "affiliate"}
-                >
-                  {activeView === "affiliate" && (
-                    <AffiliateManager
-                      key={"AffiliateManager:"+selectedId}
-                      guildId={selectedId!}
-                      channels={meta.channels}
-                      onNotice={flash}
-                      onError={fail}
-                    />
-                  )}
-                </section>
-
-                <section
-                  id="admin-panel-followbomb"
-                  className="admin-tab-panel"
-                  role="tabpanel"
-                  aria-labelledby="admin-tab-followbomb"
-                  hidden={activeView !== "followbomb"}
-                >
-                  {activeView === "followbomb" && (
-                    <FollowBombManager
-                      key={"FollowBombManager:"+selectedId}
-                      guildId={selectedId!}
-                      channels={meta.channels}
-                      onNotice={flash}
-                      onError={fail}
-                    />
-                  )}
-                </section>
-              </>
-            )}
-
-            <section
-              id="admin-panel-utility"
-              className="admin-tab-panel"
-              role="tabpanel"
-              aria-labelledby="admin-tab-utility"
-              hidden={activeView !== "utility"}
-            >
-              {activeView === "utility" && selectedId && meta && (
-                <XUtilityManager
-                  key={"XUtilityManager:"+selectedId}
-                  guildId={selectedId}
-                  channels={meta.channels}
-                  onNotice={flash}
-                  onError={fail}
-                />
-              )}
-            </section>
-
-            <section
-              id="admin-panel-security"
-              className="admin-tab-panel"
-              role="tabpanel"
-              aria-labelledby="admin-tab-security"
-              hidden={activeView !== "security"}
-            >
-              {activeView === "security" && (
-                <SecurityManager
-                  key={"SecurityManager:"+selectedId}
+              <section {...panelProps("backup")}>
+                {pageHead("バックアップ管理", "サーバー構成のバックアップ・復元と、メンバー復旧を管理します。")}
+                <BackupManager
+                  key={"BackupManager:" + selectedId}
                   guildId={selectedId!}
                   channels={meta.channels}
                   onNotice={flash}
                   onError={fail}
                 />
-              )}
-            </section>
+              </section>
 
-            <section
-              id="admin-panel-backup"
-              className="admin-tab-panel"
-              role="tabpanel"
-              aria-labelledby="admin-tab-backup"
-              hidden={activeView !== "backup"}
-            >
-              <BackupManager
-              key={"BackupManager:"+selectedId}
-              guildId={selectedId!}
-              channels={meta.channels}
-              onNotice={flash}
-              onError={fail}
-              />
-            </section>
-
-            <section
-              id="admin-panel-generator"
-              className="admin-tab-panel"
-              role="tabpanel"
-              aria-labelledby="admin-tab-generator"
-              hidden={activeView !== "generator"}
-            >
-              {activeView === "generator" && selectedId && (
-                <XGeneratorManager
-                  key={"XGeneratorManager:"+selectedId}
-                  guildId={selectedId}
-                  channels={meta.channels}
-                  onNotice={flash}
-                  onError={fail}
-                />
-              )}
-            </section>
-          </>
-        )}
-      </main>
+              <section {...panelProps("generator")}>
+                {pageHead("垢生成", "外部Generatorと連携したアカウント生成と、自販機在庫への自動補充を管理します。", "外部Generator連携")}
+                {activeView === "generator" && selectedId && (
+                  <XGeneratorManager
+                    key={"XGeneratorManager:" + selectedId}
+                    guildId={selectedId}
+                    channels={meta.channels}
+                    onNotice={flash}
+                    onError={fail}
+                  />
+                )}
+              </section>
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

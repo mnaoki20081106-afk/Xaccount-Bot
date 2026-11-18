@@ -73,6 +73,10 @@ type Props = {
   // specific machine. Applied once per value change, then left alone so the
   // operator's own selection afterwards is never overridden.
   focusMachineId?:string|null;
+  // Optional deep link from the console screens: which section / product to open.
+  // `key` changes on every request so the same target can be opened again.
+  focus?:{machineId:string;section?:"panel"|"products"|"settings"|"achievement";productId?:string|null;key:number}|null;
+  onOpenPayments?:()=>void;
 };
 
 const emptyProduct = {
@@ -130,9 +134,11 @@ async function preparePanelImage(file:File):Promise<string>{
 }
 
 export default function VendingManager({
-  guildId, channels, roles, onNotice, onError, focusMachineId
+  guildId, channels, roles, onNotice, onError, focusMachineId, focus, onOpenPayments
 }:Props){
   const focusedMachineRef=useRef<string|null>(null);
+  const focusedKeyRef=useRef<number|null>(null);
+  const pendingProductRef=useRef<string|null>(null);
   const [activeSection,setActiveSection]=useState<"panel"|"products"|"settings"|"achievement">("panel");
   const [mobilePanelView,setMobilePanelView]=useState<"edit"|"preview">("edit");
   const productEditorRef=useRef<HTMLDivElement>(null);
@@ -191,8 +197,6 @@ export default function VendingManager({
   const [couponDiscount,setCouponDiscount]=useState(100);
 
   const [paymentStatus,setPaymentStatus]=useState({paypay:false,kyash:false});
-  const [payPayForm,setPayPayForm]=useState({phone:"",password:"",challengeId:"",otp:""});
-  const [kyashForm,setKyashForm]=useState({email:"",password:"",challengeId:"",otp:""});
 
   const selected = useMemo(
     ()=>machines.find(machine=>machine.id===selectedId)??null,
@@ -350,6 +354,28 @@ export default function VendingManager({
     setActiveSection("panel");
     void loadMachines(focusMachineId).catch(onError);
   },[focusMachineId]);
+
+  useEffect(()=>{
+    if(!focus||focus.key===focusedKeyRef.current) return;
+    focusedKeyRef.current=focus.key;
+    setActiveSection(focus.section??"panel");
+    pendingProductRef.current=focus.productId??null;
+    if(focus.machineId===selectedId&&detail){
+      void loadDetail(focus.machineId).catch(onError);
+    }else{
+      setEditingProduct(null);
+      void loadMachines(focus.machineId).catch(onError);
+    }
+  },[focus]);
+
+  useEffect(()=>{
+    const productId=pendingProductRef.current;
+    if(!productId||!detail) return;
+    const product=detail.products.find(row=>row.id===productId);
+    if(!product) return;
+    pendingProductRef.current=null;
+    editProduct(product);
+  },[detail]);
 
   async function createMachine(event:FormEvent){
     event.preventDefault();
@@ -767,74 +793,6 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
-  async function disconnectPayPay(){
-    if(!window.confirm("保存されているPayPay接続情報を削除しますか？")) return;
-    setBusy(true);
-    try{
-      await api("/api/vending/paypay/logout",{method:"POST"});
-      await loadPaymentStatus();
-      onNotice("PayPayアカウントを切断しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function startPayPay(event:FormEvent){
-    event.preventDefault();
-    setBusy(true);
-    try{
-      const result=await api<{challengeId:string}>("/api/vending/paypay/login/start",{
-        method:"POST",
-        body:JSON.stringify({phone:payPayForm.phone,password:payPayForm.password})
-      });
-      setPayPayForm(current=>({...current,challengeId:result.challengeId,otp:""}));
-      onNotice("PayPayのSMS認証コードを入力してください");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function verifyPayPay(event:FormEvent){
-    event.preventDefault();
-    setBusy(true);
-    try{
-      await api("/api/vending/paypay/login/verify",{
-        method:"POST",
-        body:JSON.stringify({challengeId:payPayForm.challengeId,otp:payPayForm.otp})
-      });
-      setPayPayForm({phone:"",password:"",challengeId:"",otp:""});
-      await loadPaymentStatus();
-      onNotice("PayPayアカウントを接続しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function startKyash(event:FormEvent){
-    event.preventDefault();
-    setBusy(true);
-    try{
-      const result=await api<{challengeId:string}>("/api/vending/kyash/login/start",{
-        method:"POST",
-        body:JSON.stringify({email:kyashForm.email,password:kyashForm.password})
-      });
-      setKyashForm(current=>({...current,challengeId:result.challengeId,otp:""}));
-      onNotice("KyashのSMS認証コードを入力してください");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function verifyKyash(event:FormEvent){
-    event.preventDefault();
-    setBusy(true);
-    try{
-      await api("/api/vending/kyash/login/verify",{
-        method:"POST",
-        body:JSON.stringify({challengeId:kyashForm.challengeId,otp:kyashForm.otp})
-      });
-      setKyashForm({email:"",password:"",challengeId:"",otp:""});
-      await loadPaymentStatus();
-      onNotice("Kyashアカウントを接続しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
 
   return (
     <section className="card vending-manager" inert={busy||detailLoading||panelImageBusy} aria-busy={busy||detailLoading||panelImageBusy}>
@@ -885,78 +843,12 @@ export default function VendingManager({
             {machines.length===0&&<div className="vending-empty">まだ自販機がありません。</div>}
           </div>
 
-          <details className="payment-connect">
-            <summary>決済アカウント・接続設定</summary>
-            {paymentStatus.paypay&&(
-              <button className="danger vending-disconnect" onClick={()=>void disconnectPayPay()} disabled={busy}>
-                PayPay切断
-              </button>
+          <div className="payment-connect">
+            <small className="muted">PayPay / Kyashの接続は「PayPay設定」画面で管理します。</small>
+            {onOpenPayments&&(
+              <button type="button" className="secondary" onClick={onOpenPayments}>PayPay設定を開く</button>
             )}
-            {!paymentStatus.paypay&&(
-              payPayForm.challengeId ? (
-                <form onSubmit={(event)=>void verifyPayPay(event)}>
-                  <input
-                    value={payPayForm.otp}
-                    onChange={(event)=>setPayPayForm({...payPayForm,otp:event.target.value})}
-                    placeholder="PayPay OTP"
-                    inputMode="numeric"
-                    maxLength={6}
-                  />
-                  <button className="secondary" type="submit">認証</button>
-                </form>
-              ) : (
-                <form onSubmit={(event)=>void startPayPay(event)}>
-                  <input
-                    value={payPayForm.phone}
-                    onChange={(event)=>setPayPayForm({...payPayForm,phone:event.target.value})}
-                    placeholder="PayPay 電話番号"
-                    autoComplete="tel"
-                  />
-                  <input
-                    type="password"
-                    value={payPayForm.password}
-                    onChange={(event)=>setPayPayForm({...payPayForm,password:event.target.value})}
-                    placeholder="PayPay パスワード"
-                    autoComplete="current-password"
-                  />
-                  <button className="secondary" type="submit">PayPay接続</button>
-                </form>
-              )
-            )}
-
-            {!paymentStatus.kyash&&(
-              kyashForm.challengeId ? (
-                <form onSubmit={(event)=>void verifyKyash(event)}>
-                  <input
-                    value={kyashForm.otp}
-                    onChange={(event)=>setKyashForm({...kyashForm,otp:event.target.value})}
-                    placeholder="Kyash OTP"
-                    inputMode="numeric"
-                    maxLength={8}
-                  />
-                  <button className="secondary" type="submit">認証</button>
-                </form>
-              ) : (
-                <form onSubmit={(event)=>void startKyash(event)}>
-                  <input
-                    type="email"
-                    value={kyashForm.email}
-                    onChange={(event)=>setKyashForm({...kyashForm,email:event.target.value})}
-                    placeholder="Kyash メール"
-                    autoComplete="email"
-                  />
-                  <input
-                    type="password"
-                    value={kyashForm.password}
-                    onChange={(event)=>setKyashForm({...kyashForm,password:event.target.value})}
-                    placeholder="Kyash パスワード"
-                    autoComplete="current-password"
-                  />
-                  <button className="secondary" type="submit">Kyash接続</button>
-                </form>
-              )
-            )}
-          </details>
+          </div>
         </aside>
 
         <div className="vending-main">

@@ -1683,3 +1683,80 @@ test('bulk channel permission update persists and verifies the selected role ove
   assert.equal(BigInt(overwrite.allow)&1024n,1024n,'view must be allowed');
   assert.equal(BigInt(overwrite.deny)&2048n,2048n,'send must be denied');
 });
+
+test('console: product reorder, overview summary and asset panels', async t => {
+  const {mf,db,calls}=await runtime(t);
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+  const base=`/api/guilds/${guildId}/vending`;
+  const vm=await request(mf,base,token,'POST',{name:'Console machine'});
+  assert.equal(vm.status,201,JSON.stringify(vm.body));
+  const ids=[];
+  for(const name of ['A','B','C']){
+    const product=await request(mf,`${base}/${vm.body.id}/products`,token,'POST',{name,pricePayPay:100,priceKyash:120});
+    assert.equal(product.status,201,JSON.stringify(product.body));
+    ids.push(product.body.id);
+  }
+  // Products are listed in creation order until reordered.
+  let listed=await request(mf,`${base}/${vm.body.id}/products`,token);
+  assert.deepEqual(listed.body.map(p=>p.name),['A','B','C']);
+
+  const stale=await request(mf,`${base}/${vm.body.id}/products/reorder`,token,'POST',{productIds:[ids[2],ids[0]]});
+  assert.equal(stale.status,409,'a list missing a product must be rejected');
+  const reordered=await request(mf,`${base}/${vm.body.id}/products/reorder`,token,'POST',{productIds:[ids[2],ids[0],ids[1]]});
+  assert.equal(reordered.status,200,JSON.stringify(reordered.body));
+  listed=await request(mf,`${base}/${vm.body.id}/products`,token);
+  assert.deepEqual(listed.body.map(p=>p.name),['C','A','B']);
+  await request(mf,`${base}/${vm.body.id}/products`,token,'POST',{name:'D',pricePayPay:1,priceKyash:1});
+  listed=await request(mf,`${base}/${vm.body.id}/products`,token);
+  assert.deepEqual(listed.body.map(p=>p.name),['C','A','B','D'],'new products are appended');
+
+  await request(mf,`${base}/${vm.body.id}/products/${ids[0]}/stock`,token,'POST',{lines:['x1','x2']});
+  const now=Date.now();
+  await db.batch([
+    db.prepare("INSERT INTO vending_orders(id,vending_machine_id,product_id,guild_id,user_id,payment_method,quantity,unit_price,discount_each,total_amount,status,created_at,updated_at) VALUES ('o1',?,?,?,'u','paypay',1,100,0,100,'delivered',?,?)").bind(vm.body.id,ids[0],guildId,now,now),
+    db.prepare("INSERT INTO vending_orders(id,vending_machine_id,product_id,guild_id,user_id,payment_method,quantity,unit_price,discount_each,total_amount,status,created_at,updated_at) VALUES ('o2',?,?,?,'u','paypay',1,100,100,0,'delivered',?,?)").bind(vm.body.id,ids[0],guildId,now,now),
+    db.prepare("INSERT INTO vending_orders(id,vending_machine_id,product_id,guild_id,user_id,payment_method,quantity,unit_price,discount_each,total_amount,status,created_at,updated_at) VALUES ('o3',?,?,?,'u','paypay',1,500,0,500,'awaiting_payment',?,?)").bind(vm.body.id,ids[0],guildId,now,now)
+  ]);
+  const summary=await request(mf,`${base}/dashboard-summary`,token);
+  assert.equal(summary.status,200,JSON.stringify(summary.body));
+  assert.equal(summary.body.machineCount,1);
+  assert.equal(summary.body.productCount,4);
+  assert.equal(summary.body.finiteStock,2);
+  assert.equal(summary.body.emptyProducts,3);
+  assert.equal(summary.body.revenueYen,100,'only delivered orders count as revenue');
+  assert.equal(summary.body.paidOrders,1);
+  assert.equal(summary.body.freeOrders,1);
+
+  const badAsset=await request(mf,`${base}/assets`,token,'POST',{name:'x',title:'t',color:'red'});
+  assert.equal(badAsset.status,400);
+  const badImage=await request(mf,`${base}/assets`,token,'POST',{name:'x',title:'t',imageUrl:'http://insecure.example/a.png'});
+  assert.equal(badImage.status,400);
+  const asset=await request(mf,`${base}/assets`,token,'POST',{
+    name:'案内',title:'高性能自販機',body:'# 見出し\n**太字**',color:'#3867d6',vendingMachineId:vm.body.id
+  });
+  assert.equal(asset.status,201,JSON.stringify(asset.body));
+  const noUpdateYet=await request(mf,`${base}/assets/${asset.body.id}/deploy`,token,'POST',{mode:'update'});
+  assert.equal(noUpdateYet.status,409);
+  const deployed=await request(mf,`${base}/assets/${asset.body.id}/deploy`,token,'POST',{channelId:chatChannelId});
+  assert.equal(deployed.status,200,JSON.stringify(deployed.body));
+  const post=calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/channels/${chatChannelId}/messages`).at(-1);
+  assert.equal(post.body.embeds[0].title,'高性能自販機');
+  assert.equal(post.body.embeds[0].color,0x3867d6);
+  assert.equal(post.body.components[0].components[0].custom_id,'vm:buy:'+vm.body.id);
+  const list=await request(mf,`${base}/assets`,token);
+  assert.equal(list.body.length,1);
+  assert.equal(list.body[0].channel_id,chatChannelId);
+  assert.equal(list.body[0].message_id,'723456789012345678');
+  const updated=await request(mf,`${base}/assets/${asset.body.id}`,token,'PUT',{name:'案内',title:'改',body:'b',color:'#000000',vendingMachineId:''});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));
+  const patched=await request(mf,`${base}/assets/${asset.body.id}/deploy`,token,'POST',{mode:'update'});
+  assert.equal(patched.status,200,JSON.stringify(patched.body));
+  const patch=calls.filter(c=>c.method==='PATCH'&&c.path===`/api/v10/channels/${chatChannelId}/messages/723456789012345678`).at(-1);
+  assert.equal(patch.body.embeds[0].title,'改');
+  assert.equal(patch.body.embeds[0].color,1,'black must not become Discord "no color"');
+  assert.deepEqual(patch.body.components,[],'removing the vending link removes the buttons');
+  const removed=await request(mf,`${base}/assets/${asset.body.id}`,token,'DELETE');
+  assert.equal(removed.body.ok,true);
+  assert.equal((await request(mf,`${base}/assets`,token)).body.length,0);
+});

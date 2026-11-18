@@ -72,7 +72,9 @@ const schema=[
 "CREATE UNIQUE INDEX IF NOT EXISTS vending_auto_restock_product_unique ON vending_auto_restock(product_id)",
 "CREATE TABLE IF NOT EXISTS generator_pending_deliveries (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,target_system TEXT NOT NULL,vending_machine_id TEXT NOT NULL DEFAULT '',product_id TEXT NOT NULL,payload_enc TEXT NOT NULL,line_count INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 "CREATE INDEX IF NOT EXISTS vending_auto_restock_guild_idx ON vending_auto_restock(guild_id,enabled)",
-"CREATE TABLE IF NOT EXISTS vending_single_machines (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,created_at INTEGER NOT NULL)"
+"CREATE TABLE IF NOT EXISTS vending_single_machines (vending_machine_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,created_at INTEGER NOT NULL)",
+"CREATE TABLE IF NOT EXISTS dashboard_panel_assets (id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,owner_id TEXT NOT NULL,name TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',body TEXT NOT NULL DEFAULT '',color TEXT NOT NULL DEFAULT '#3867d6',image_url TEXT,thumbnail_url TEXT,footer TEXT,vending_machine_id TEXT,channel_id TEXT,message_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
+"CREATE INDEX IF NOT EXISTS dashboard_panel_assets_guild_idx ON dashboard_panel_assets(guild_id,owner_id,created_at)"
 ];
 
 let ready=false;
@@ -169,6 +171,16 @@ export async function ensureVendingSchema(env:Env){
     ).run();
   }
 
+  const productColumns=(await env.DB.prepare(
+    "PRAGMA table_info(vending_products)"
+  ).all<{name:string}>()).results;
+  if(!productColumns.some(column=>column.name==="sort_order")){
+    // Existing rows keep sort_order=0 and therefore keep their created_at order.
+    await env.DB.prepare(
+      "ALTER TABLE vending_products ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+    ).run();
+  }
+
   ready=true;
 }
 
@@ -246,16 +258,16 @@ export async function deleteVmPanelImage(env:Env,vmId:string,ownerId:string):Pro
 }
 
 export async function listVmProducts(env:Env,vmId:string){
-  return (await env.DB.prepare("SELECT p.*,CASE WHEN p.infinite_stock=1 THEN -1 ELSE COALESCE((SELECT COUNT(*) FROM vending_stock s WHERE s.product_id=p.id AND s.state='available'),0) END AS stock_count FROM vending_products p WHERE p.vending_machine_id=? AND p.active=1 ORDER BY p.created_at ASC").bind(vmId).all<VmProduct&{stock_count:number}>()).results;
+  return (await env.DB.prepare("SELECT p.*,CASE WHEN p.infinite_stock=1 THEN -1 ELSE COALESCE((SELECT COUNT(*) FROM vending_stock s WHERE s.product_id=p.id AND s.state='available'),0) END AS stock_count FROM vending_products p WHERE p.vending_machine_id=? AND p.active=1 ORDER BY p.sort_order ASC,p.created_at ASC").bind(vmId).all<VmProduct&{stock_count:number}>()).results;
 }
 export async function getVmProduct(env:Env,id:string){ return await env.DB.prepare("SELECT * FROM vending_products WHERE id=? AND active=1").bind(id).first<VmProduct>()??null; }
 export async function createVmProduct(env:Env,vmId:string,input:{name:string;description:string;pricePayPay:number;priceKyash:number;emoji:string|null;infiniteStock?:boolean;infiniteContent?:string|null}){
   const id=randomId(),now=Date.now();
   const infiniteStock=input.infiniteStock?1:0;
   const infiniteContent=infiniteStock?String(input.infiniteContent??""):null;
-  await env.DB.prepare("INSERT INTO vending_products(id,vending_machine_id,name,description,price_paypay,price_kyash,emoji,infinite_stock,infinite_content,sales_count,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,1,?,?)").bind(
+  await env.DB.prepare("INSERT INTO vending_products(id,vending_machine_id,name,description,price_paypay,price_kyash,emoji,infinite_stock,infinite_content,sales_count,active,created_at,updated_at,sort_order) VALUES (?,?,?,?,?,?,?,?,?,0,1,?,?,(SELECT COALESCE(MAX(sort_order),0)+1 FROM vending_products WHERE vending_machine_id=?))").bind(
     id,vmId,input.name,input.description,input.pricePayPay,input.priceKyash,input.emoji,
-    infiniteStock,infiniteContent,now,now
+    infiniteStock,infiniteContent,now,now,vmId
   ).run();
   return getVmProduct(env,id);
 }
@@ -691,4 +703,114 @@ export async function markSingleMachine(env:Env,vmId:string,guildId:string){
 }
 export async function listSingleMachineIds(env:Env,guildId:string){
   return new Set((await env.DB.prepare("SELECT vending_machine_id FROM vending_single_machines WHERE guild_id=?").bind(guildId).all<{vending_machine_id:string}>()).results.map(row=>row.vending_machine_id));
+}
+
+// Persist the dashboard product order. productIds must be exactly the active
+// products of this machine; anything else is rejected so a stale client list
+// cannot silently drop or reorder products it did not know about.
+export async function reorderVmProducts(env:Env,vmId:string,productIds:string[]):Promise<boolean>{
+  const current=(await env.DB.prepare(
+    "SELECT id FROM vending_products WHERE vending_machine_id=? AND active=1"
+  ).bind(vmId).all<{id:string}>()).results.map(row=>row.id);
+  if(productIds.length!==current.length||new Set(productIds).size!==productIds.length) return false;
+  const known=new Set(current);
+  if(!productIds.every(id=>known.has(id))) return false;
+  const now=Date.now();
+  await env.DB.batch(productIds.map((id,index)=>env.DB.prepare(
+    "UPDATE vending_products SET sort_order=?,updated_at=? WHERE id=? AND vending_machine_id=?"
+  ).bind(index+1,now,id,vmId)));
+  return true;
+}
+
+export type DashboardSummary={
+  machineCount:number;
+  productCount:number;
+  finiteStock:number;
+  infiniteProducts:number;
+  emptyProducts:number;
+  deliveredOrders:number;
+  paidOrders:number;
+  freeOrders:number;
+  revenueYen:number;
+};
+
+// Totals for the dashboard overview. Only orders with status 'delivered' count
+// as sales; pending, expired and in-flight orders are excluded from revenue.
+export async function dashboardSummary(env:Env,guildId:string,ownerId:string):Promise<DashboardSummary>{
+  const machines=await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM vending_machines WHERE guild_id=? AND owner_id=? AND active=1"
+  ).bind(guildId,ownerId).first<{n:number}>();
+  const products=await env.DB.prepare(
+    `SELECT COUNT(*) AS n,
+      SUM(CASE WHEN p.infinite_stock=1 THEN 1 ELSE 0 END) AS infinite_n,
+      SUM(CASE WHEN p.infinite_stock=1 THEN 0 ELSE (SELECT COUNT(*) FROM vending_stock s WHERE s.product_id=p.id AND s.state='available') END) AS stock_n,
+      SUM(CASE WHEN p.infinite_stock=0 AND NOT EXISTS (SELECT 1 FROM vending_stock s WHERE s.product_id=p.id AND s.state='available') THEN 1 ELSE 0 END) AS empty_n
+     FROM vending_products p JOIN vending_machines m ON m.id=p.vending_machine_id
+     WHERE m.guild_id=? AND m.owner_id=? AND m.active=1 AND p.active=1`
+  ).bind(guildId,ownerId).first<{n:number;infinite_n:number|null;stock_n:number|null;empty_n:number|null}>();
+  const orders=await env.DB.prepare(
+    `SELECT COUNT(*) AS n,
+      SUM(CASE WHEN o.total_amount>0 THEN 1 ELSE 0 END) AS paid_n,
+      SUM(CASE WHEN o.total_amount<=0 THEN 1 ELSE 0 END) AS free_n,
+      COALESCE(SUM(o.total_amount),0) AS revenue
+     FROM vending_orders o JOIN vending_machines m ON m.id=o.vending_machine_id
+     WHERE o.guild_id=? AND m.owner_id=? AND o.status='delivered'`
+  ).bind(guildId,ownerId).first<{n:number;paid_n:number|null;free_n:number|null;revenue:number}>();
+  return {
+    machineCount:Number(machines?.n??0),
+    productCount:Number(products?.n??0),
+    finiteStock:Number(products?.stock_n??0),
+    infiniteProducts:Number(products?.infinite_n??0),
+    emptyProducts:Number(products?.empty_n??0),
+    deliveredOrders:Number(orders?.n??0),
+    paidOrders:Number(orders?.paid_n??0),
+    freeOrders:Number(orders?.free_n??0),
+    revenueYen:Number(orders?.revenue??0)
+  };
+}
+
+export type PanelAsset={
+  id:string; guild_id:string; owner_id:string; name:string; title:string; body:string;
+  color:string; image_url:string|null; thumbnail_url:string|null; footer:string|null;
+  vending_machine_id:string|null; channel_id:string|null; message_id:string|null;
+  created_at:number; updated_at:number;
+};
+export type PanelAssetInput={
+  name:string; title:string; body:string; color:string; imageUrl:string|null;
+  thumbnailUrl:string|null; footer:string|null; vendingMachineId:string|null;
+};
+
+export async function listPanelAssets(env:Env,guildId:string,ownerId:string){
+  return (await env.DB.prepare(
+    "SELECT * FROM dashboard_panel_assets WHERE guild_id=? AND owner_id=? ORDER BY created_at DESC"
+  ).bind(guildId,ownerId).all<PanelAsset>()).results;
+}
+export async function getPanelAsset(env:Env,guildId:string,ownerId:string,id:string){
+  return await env.DB.prepare(
+    "SELECT * FROM dashboard_panel_assets WHERE id=? AND guild_id=? AND owner_id=?"
+  ).bind(id,guildId,ownerId).first<PanelAsset>()??null;
+}
+export async function createPanelAsset(env:Env,guildId:string,ownerId:string,input:PanelAssetInput){
+  const id=randomId(),now=Date.now();
+  await env.DB.prepare(
+    "INSERT INTO dashboard_panel_assets(id,guild_id,owner_id,name,title,body,color,image_url,thumbnail_url,footer,vending_machine_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+  ).bind(id,guildId,ownerId,input.name,input.title,input.body,input.color,input.imageUrl,input.thumbnailUrl,input.footer,input.vendingMachineId,now,now).run();
+  return getPanelAsset(env,guildId,ownerId,id);
+}
+export async function updatePanelAsset(env:Env,guildId:string,ownerId:string,id:string,input:PanelAssetInput){
+  const result=await env.DB.prepare(
+    "UPDATE dashboard_panel_assets SET name=?,title=?,body=?,color=?,image_url=?,thumbnail_url=?,footer=?,vending_machine_id=?,updated_at=? WHERE id=? AND guild_id=? AND owner_id=?"
+  ).bind(input.name,input.title,input.body,input.color,input.imageUrl,input.thumbnailUrl,input.footer,input.vendingMachineId,Date.now(),id,guildId,ownerId).run();
+  return (result.meta.changes??0)>0;
+}
+export async function recordPanelAssetMessage(env:Env,id:string,channelId:string,messageId:string|null){
+  await env.DB.prepare(
+    "UPDATE dashboard_panel_assets SET channel_id=?,message_id=?,updated_at=? WHERE id=?"
+  ).bind(channelId,messageId,Date.now(),id).run();
+}
+export async function deletePanelAsset(env:Env,guildId:string,ownerId:string,id:string){
+  const result=await env.DB.prepare(
+    "DELETE FROM dashboard_panel_assets WHERE id=? AND guild_id=? AND owner_id=?"
+  ).bind(id,guildId,ownerId).run();
+  return (result.meta.changes??0)>0;
 }

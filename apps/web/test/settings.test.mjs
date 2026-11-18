@@ -43,12 +43,18 @@ test('typed ID separators, save-in-flight edits, reload persistence, and backup 
   else if(p==='/api/restore-jobs')value=[];
   else if(p.endsWith('/recovery/status'))value={registered:0,authorizePath:'/auth/recovery/start',redirectPath:'/auth/discord/callback'};
   else if(p==='/api/vending/payments/status')value={paypay:false,kyash:false};
+  else if(p.endsWith('/vending/dashboard-summary'))value={machineCount:0,productCount:0,finiteStock:0,infiniteProducts:0,emptyProducts:0,deliveredOrders:0,paidOrders:0,freeOrders:0,revenueYen:0,installedPanels:0};
+  else if(p.endsWith('/vending/panels')||p.endsWith('/shiire/vending'))value=[];
   else if(p.endsWith('/vending/achievement-room'))value={rooms:[]};
   else if(p.endsWith('/products')||p.endsWith('/vending'))value=[];
   else throw new Error('Unexpected request: '+p);
   return Response.json(value);
  };
  render(React.createElement(App));
+ // The console opens on the overview; the fallback guard settings live on the security page.
+ const securityTab=await screen.findByRole('tab',{name:'セキュリティ'});
+ assert.equal(screen.getByRole('tab',{name:'ダッシュボード概要'}).getAttribute('aria-selected'),'true');
+ await user.click(securityTab);
  const trusted=await screen.findByLabelText(/信頼ユーザーID/);
  await user.type(trusted,'400000000000000001,400000000000000002');
  assert.equal(trusted.value,'400000000000000001,400000000000000002','typing comma must not erase separator');
