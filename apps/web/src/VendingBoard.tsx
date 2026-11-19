@@ -1,7 +1,7 @@
 import { FormEvent, Fragment, useEffect, useState } from "react";
 import { api } from "./api";
 import {
-  ConsoleChannel, Icon, Loading, ShiireMachineRow, VmDetail, VmMachine, VmPanelRow, VmProduct,
+  ConsoleChannel, DiscordText, Icon, Loading, Modal, ShiireMachineRow, VmDetail, VmMachine, VmPanelRow, VmProduct,
   channelName, errorText, postableChannels, yen
 } from "./console-ui";
 
@@ -16,11 +16,14 @@ const emptyProduct={name:"",description:"",pricePayPay:0,priceKyash:0,emoji:"",i
  * stays in the existing VendingManager, opened through onOpenDetail.
  */
 export default function VendingBoard({
-  guildId, channels, onOpenDetail, onEditShiire, onNotice, onError
+  guildId, channels, onOpenDetail, onEditShiire, onNotice, onError, focusProductId, onFocusHandled
 }:{
   guildId:string;
+  // From 在庫エディタ: open this product's 在庫管理 row once the list is loaded.
+  focusProductId?:string|null;
+  onFocusHandled?:()=>void;
   channels:ConsoleChannel[];
-  onOpenDetail:(machineId:string,section?:"panel"|"products"|"settings"|"achievement",productId?:string|null)=>void;
+  onOpenDetail:(machineId:string,section?:"panel"|"settings"|"achievement")=>void;
   onEditShiire:(machineId:string)=>void;
   onNotice:(message:string)=>void;
   onError:(reason:unknown)=>void;
@@ -38,6 +41,13 @@ export default function VendingBoard({
   const [channelEdit,setChannelEdit]=useState<{machineId:string;channelId:string}|null>(null);
   const [stockOpen,setStockOpen]=useState<string|null>(null);
   const [stockText,setStockText]=useState("");
+  // Stock contents / withdrawal inside the 在庫管理 row.
+  const [stockItems,setStockItems]=useState<{productId:string;title:string;lines:string[]}|null>(null);
+  const [withdrawQty,setWithdrawQty]=useState(1);
+  // 帯の色 popover, preview modal and product edit modal.
+  const [colorEdit,setColorEdit]=useState<{machineId:string;value:string}|null>(null);
+  const [previewId,setPreviewId]=useState<string|null>(null);
+  const [productEdit,setProductEdit]=useState<{machineId:string;productId:string;form:typeof emptyProduct}|null>(null);
 
   const postable=postableChannels(channels);
 
@@ -72,6 +82,17 @@ export default function VendingBoard({
   }
 
   useEffect(()=>{ void load(); },[guildId]);
+
+  useEffect(()=>{
+    if(!focusProductId||!loaded) return;
+    if(machines.some(machine=>machine.products.some(product=>product.id===focusProductId))){
+      setStockOpen(focusProductId);
+      setStockText("");
+      setStockItems(null);
+      requestAnimationFrame(()=>document.getElementById("stock-row-"+focusProductId)?.scrollIntoView({block:"center",behavior:"smooth"}));
+    }
+    onFocusHandled?.();
+  },[focusProductId,loaded,machines]);
 
   async function run(action:()=>Promise<void>,message?:string){
     setBusy(true);
@@ -193,6 +214,63 @@ export default function VendingBoard({
     });
   }
 
+  async function saveColor(machine:BoardMachine,value:string){
+    if(!/^#[0-9a-f]{6}$/i.test(value)){ onError(new Error("色は #RRGGBB の16進数で入力してください")); return; }
+    await run(async()=>{
+      // The server re-renders an installed panel when the color changes.
+      await api(`/api/guilds/${guildId}/vending/${machine.id}`,{method:"PATCH",body:JSON.stringify({panelColor:value})});
+      setMachines(current=>current.map(row=>row.id===machine.id?{...row,panel_color:value}:row));
+      setColorEdit(null);
+    },machine.name+" の帯の色を変更しました"+(machine.panel?.messageId?"（設置済みパネルにも反映）":""));
+  }
+
+  function openProductEdit(machine:BoardMachine,product:VmProduct){
+    setProductEdit({machineId:machine.id,productId:product.id,form:{
+      name:product.name,description:product.description,pricePayPay:product.price_paypay,priceKyash:product.price_kyash,
+      emoji:product.emoji??"",infiniteStock:Boolean(product.infinite_stock),infiniteContent:product.infinite_content??""
+    }});
+  }
+
+  async function saveProductEdit(event:FormEvent){
+    event.preventDefault();
+    if(!productEdit) return;
+    const {machineId,productId,form}=productEdit;
+    await run(async()=>{
+      await api(`/api/guilds/${guildId}/vending/${machineId}/products/${productId}`,{
+        method:"PATCH",
+        body:JSON.stringify({
+          name:form.name.trim(),description:form.description,
+          pricePayPay:Number(form.pricePayPay),priceKyash:Number(form.priceKyash),
+          emoji:form.emoji.trim()||null,infiniteStock:form.infiniteStock,
+          infiniteContent:form.infiniteStock?form.infiniteContent:null
+        })
+      });
+      setProductEdit(null);
+      await loadOwn();
+    },"商品を更新しました");
+  }
+
+  async function showStock(machine:BoardMachine,product:VmProduct){
+    await run(async()=>{
+      const items=await api<Array<{id:string;content:string}>>(`/api/guilds/${guildId}/vending/${machine.id}/products/${product.id}/stock`);
+      setStockItems({productId:product.id,title:`${product.name} の在庫（${items.length}件${items.length>=500?"・先頭500件":""}）`,lines:items.map(item=>item.content)});
+    });
+  }
+
+  async function withdrawStock(machine:BoardMachine,product:VmProduct){
+    const quantity=Math.max(1,Math.min(500,Math.floor(withdrawQty)||1));
+    if(!window.confirm(`${product.name} の在庫を${quantity}件引き出しますか？引き出した在庫は販売されなくなります。`)) return;
+    await run(async()=>{
+      const result=await api<{items:string[]}>(`/api/guilds/${guildId}/vending/${machine.id}/products/${product.id}/withdraw`,{
+        method:"POST",body:JSON.stringify({quantity})
+      });
+      setStockItems({productId:product.id,title:`${product.name} から引き出した在庫（${result.items.length}件）`,lines:result.items});
+      await loadOwn();
+    },"在庫を引き出しました。内容をコピーして保管してください");
+  }
+
+  const previewMachine=machines.find(machine=>machine.id===previewId)??null;
+
   return (
     <>
       <div className="xc-page-head">
@@ -227,6 +305,36 @@ export default function VendingBoard({
         <section key={machine.id} className="xc-card xc-machine" aria-label={machine.name}>
           <div className="xc-machine-head">
             <div className="xc-machine-title">
+              <span className="xc-color-anchor">
+                <button
+                  type="button"
+                  className="xc-color-dot"
+                  style={{background:machine.panel_color||"#57f287"}}
+                  aria-label={machine.name+"の帯の色を変更"}
+                  title="帯の色を変更"
+                  aria-expanded={colorEdit?.machineId===machine.id}
+                  onClick={()=>setColorEdit(current=>current?.machineId===machine.id?null:{machineId:machine.id,value:machine.panel_color||"#57f287"})}
+                />
+                {colorEdit?.machineId===machine.id&&(
+                  <div className="xc-color-popover" role="dialog" aria-label="帯の色">
+                    <strong>帯の色</strong>
+                    <div className="xc-color">
+                      <input type="color" aria-label="カラーパレット" value={/^#[0-9a-f]{6}$/i.test(colorEdit.value)?colorEdit.value:"#57f287"} onChange={event=>setColorEdit({machineId:machine.id,value:event.target.value})} />
+                      <input type="text" aria-label="16進数カラー" className="xc-input" value={colorEdit.value} maxLength={7}
+                        onChange={event=>{const raw=event.target.value.trim();setColorEdit({machineId:machine.id,value:raw.startsWith("#")?raw:"#"+raw});}} />
+                    </div>
+                    <div className="xc-color-swatches">
+                      {["#57f287","#5865f2","#3867d6","#eb459e","#fee75c","#ed4245","#f0a35b","#ffffff","#000000"].map(color=>(
+                        <button type="button" key={color} style={{background:color}} aria-label={color} onClick={()=>setColorEdit({machineId:machine.id,value:color})} />
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button type="button" className="xc-btn violet tiny" disabled={busy} onClick={()=>void saveColor(machine,colorEdit.value)}>保存</button>
+                      <button type="button" className="xc-btn ghost tiny" onClick={()=>setColorEdit(null)}>キャンセル</button>
+                    </div>
+                  </div>
+                )}
+              </span>
               <h2>{machine.name}</h2>
               <span className="xc-pill id">{machine.id.slice(0,8)}</span>
               {machine.panel?.channelId
@@ -234,10 +342,13 @@ export default function VendingBoard({
                 :<span className="xc-pill gray">パネル未設置</span>}
             </div>
             <div className="xc-machine-actions">
+              <button type="button" className="xc-btn ghost" onClick={()=>setPreviewId(machine.id)}>
+                プレビューを表示
+              </button>
               <button type="button" className="xc-btn green" disabled={busy} onClick={()=>void reinstallPanel(machine)}>
                 <Icon name="refresh" size={15} /> パネル再設置
               </button>
-              <button type="button" className="xc-btn ghost icon" title="詳細設定（パネルデザイン・ログ・通知・実績部屋）" aria-label={machine.name+"の詳細設定"} onClick={()=>onOpenDetail(machine.id,"panel")}>
+              <button type="button" className="xc-btn ghost icon" title="詳細設定（パネル文面・画像・ログ・在庫通知・実績部屋）" aria-label={machine.name+"の詳細設定"} onClick={()=>onOpenDetail(machine.id,"panel")}>
                 <Icon name="gear" size={16} />
               </button>
               <button type="button" className="xc-btn blue" onClick={()=>setChannelEdit(current=>current?.machineId===machine.id?null:{
@@ -331,14 +442,14 @@ export default function VendingBoard({
                       <td className={product.description?"desc":"muted"}>{product.description||"-"}</td>
                       <td className="actions">
                         {!product.infinite_stock&&(
-                          <button type="button" className="xc-btn tiny stock" aria-expanded={stockOpen===product.id} onClick={()=>{setStockOpen(stockOpen===product.id?null:product.id);setStockText("");}}>在庫管理</button>
+                          <button type="button" className="xc-btn tiny stock" aria-expanded={stockOpen===product.id} onClick={()=>{setStockOpen(stockOpen===product.id?null:product.id);setStockText("");setStockItems(null);setWithdrawQty(1);}}>在庫管理</button>
                         )}
-                        <button type="button" className="xc-btn tiny edit" onClick={()=>onOpenDetail(machine.id,"products",product.id)}>編集</button>
+                        <button type="button" className="xc-btn tiny edit" onClick={()=>openProductEdit(machine,product)}>編集</button>
                         <button type="button" className="xc-btn tiny del" disabled={busy} onClick={()=>void removeProduct(machine,product)}>削除</button>
                       </td>
                     </tr>
                     {stockOpen===product.id&&(
-                      <tr>
+                      <tr id={"stock-row-"+product.id}>
                         <td colSpan={8}>
                           <div className="xc-inline-form" style={{margin:0}}>
                             <label>{product.name} に在庫を追加（1行 = 1在庫、最大500行）
@@ -348,9 +459,19 @@ export default function VendingBoard({
                               <button type="button" className="xc-btn violet" disabled={busy||!stockText.trim()} onClick={()=>void addStock(machine,product)}>
                                 {stockText.trim()?`${stockText.split(/\r?\n/).filter(line=>line.trim()).length}件を追加`:"在庫を追加"}
                               </button>
-                              <button type="button" className="xc-btn ghost" onClick={()=>onOpenDetail(machine.id,"products",product.id)}>在庫の中身確認・引き出し</button>
+                              <button type="button" className="xc-btn ghost" disabled={busy||product.stock_count===0} onClick={()=>void showStock(machine,product)}>中身を表示</button>
+                              <label style={{flex:"0 0 auto",display:"flex",alignItems:"center",gap:6,flexDirection:"row"}}>
+                                <input type="number" min={1} max={500} value={withdrawQty} style={{width:80}} aria-label="引き出す件数" onChange={event=>setWithdrawQty(Number(event.target.value))} />
+                                件
+                              </label>
+                              <button type="button" className="xc-btn red" disabled={busy||product.stock_count===0} onClick={()=>void withdrawStock(machine,product)}>引き出す</button>
                               <span className="muted" style={{fontSize:12}}>現在の在庫: {product.stock_count} 件</span>
                             </div>
+                            {stockItems?.productId===product.id&&(
+                              <label>{stockItems.title}
+                                <textarea rows={Math.min(10,Math.max(3,stockItems.lines.length))} readOnly value={stockItems.lines.join("\n")} onFocus={event=>event.currentTarget.select()} />
+                              </label>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -423,6 +544,64 @@ export default function VendingBoard({
           </section>
         );
       })}
+      {previewMachine&&(
+        <Modal title={previewMachine.name+" のプレビュー"} onClose={()=>setPreviewId(null)} wide>
+          <div className="xc-discord-preview">
+            <div className="xc-discord-author">
+              <span className="xc-discord-avatar">Bot</span>
+              <strong>Xaccount-Bot</strong>
+              <span className="xc-app-tag">アプリ</span>
+            </div>
+            <div className="xc-discord-embed" style={{borderLeftColor:previewMachine.panel_color||"#57f287"}}>
+              <h4>{previewMachine.panel_title||previewMachine.name||"自販機"}</h4>
+              <div className="embed-body">
+                <DiscordText text={
+                  (previewMachine.panel_description||"購入したい商品を下のボタンから選択してください。")+
+                  (previewMachine.products.length
+                    ?"\n\n"+previewMachine.products.map(product=>
+                        (product.emoji?product.emoji+" ":"")+"**"+product.name+"**\nPayPay: "+product.price_paypay+"円 / Kyash: "+product.price_kyash+
+                        "円 / 在庫: "+(product.infinite_stock?"∞":product.stock_count)+" / 販売: "+product.sales_count
+                      ).join("\n\n")
+                    :"\n\n現在販売中の商品はありません。")
+                } />
+              </div>
+              {previewMachine.panel_image_url&&<img className="embed-image" src={previewMachine.panel_image_url} alt="" />}
+            </div>
+            <div className="xc-discord-buttons">
+              <span className="green">🛒 購入する</span>
+              <span className="blurple">📦 在庫・販売数</span>
+            </div>
+          </div>
+          <p className="muted" style={{fontSize:12,marginTop:12}}>Discordに送信される内容と同じ構成です。タイトル・説明・画像は⚙（詳細設定）で変更できます。</p>
+        </Modal>
+      )}
+
+      {productEdit&&(
+        <Modal title="商品を編集" onClose={()=>setProductEdit(null)}>
+          <form className="xc-form" onSubmit={event=>void saveProductEdit(event)}>
+            <div className="two">
+              <label>商品名<input value={productEdit.form.name} maxLength={80} required onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,name:event.target.value}})} /></label>
+              <label>絵文字<input value={productEdit.form.emoji} maxLength={64} placeholder="📦" onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,emoji:event.target.value}})} /></label>
+            </div>
+            <div className="two">
+              <label>PayPay価格（円）<input type="number" min={0} value={productEdit.form.pricePayPay} onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,pricePayPay:Number(event.target.value)}})} /></label>
+              <label>Kyash価格（円）<input type="number" min={0} value={productEdit.form.priceKyash} onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,priceKyash:Number(event.target.value)}})} /></label>
+            </div>
+            <label>説明<input value={productEdit.form.description} maxLength={500} onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,description:event.target.value}})} /></label>
+            <label style={{display:"flex",alignItems:"center",gap:8}}>
+              <input type="checkbox" style={{width:"auto"}} checked={productEdit.form.infiniteStock} onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,infiniteStock:event.target.checked}})} />
+              常時販売（無限在庫・毎回同じ内容を納品）
+            </label>
+            {productEdit.form.infiniteStock&&(
+              <label>納品内容<textarea style={{minHeight:120}} value={productEdit.form.infiniteContent} required onChange={event=>setProductEdit({...productEdit,form:{...productEdit.form,infiniteContent:event.target.value}})} /></label>
+            )}
+            <div className="xc-form-footer">
+              <button type="submit" className="xc-btn violet" disabled={busy}>保存</button>
+              <button type="button" className="xc-btn ghost" onClick={()=>setProductEdit(null)}>キャンセル</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </>
   );
 }

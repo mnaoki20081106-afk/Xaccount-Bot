@@ -173,6 +173,7 @@ export default function App() {
   const [activeView, setActiveViewState] = useState<ConsoleView>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [serverTab, setServerTab] = useState<"channels" | "roles" | "templates">("channels");
+  const [boardFocusProductId, setBoardFocusProductId] = useState<string | null>(null);
   // null = table view; otherwise the detailed VendingManager is open on that target.
   const [vendingFocus, setVendingFocus] = useState<{
     machineId: string;
@@ -860,6 +861,8 @@ export default function App() {
                   <VendingBoard
                     key={"VendingBoard:" + selectedId}
                     guildId={selectedId!}
+                    focusProductId={boardFocusProductId}
+                    onFocusHandled={() => setBoardFocusProductId(null)}
                     channels={meta.channels}
                     onOpenDetail={openVendingDetail}
                     onEditShiire={openShiire}
@@ -873,7 +876,7 @@ export default function App() {
                       <button type="button" className="xc-btn ghost" onClick={() => setVendingFocus(null)}>
                         ← 自販機一覧に戻る
                       </button>
-                      <span className="muted">パネルデザイン・商品と在庫の詳細・クーポン/通知・実績部屋を編集できます</span>
+                      <span className="muted">パネルの文面・画像、購入後ロール・ログ、在庫追加通知、実績部屋を設定できます</span>
                     </div>
                     <VendingManager
                       key={"VendingManager:" + selectedId}
@@ -894,7 +897,12 @@ export default function App() {
                   <StockOverview
                     key={"StockOverview:" + selectedId}
                     guildId={selectedId!}
-                    onOpenProduct={(machineId, productId) => openVendingDetail(machineId, "products", productId)}
+                    onOpenProduct={(_machineId, productId) => {
+                      // Stock is managed on the vending list: open that product's 在庫管理 row.
+                      setBoardFocusProductId(productId);
+                      setVendingFocus(null);
+                      setActiveViewState("vending");
+                    }}
                     onEditShiire={openShiire}
                     onError={fail}
                   />

@@ -1,3 +1,5 @@
+import { Fragment, ReactNode, useEffect } from "react";
+
 // Shared pieces for the sidebar console screens.
 
 export type ConsoleChannel = {
@@ -12,6 +14,8 @@ export type VmMachine = {
   name:string;
   panel_title:string|null;
   panel_color:string|null;
+  panel_description?:string|null;
+  panel_image_url?:string|null;
 };
 
 export type VmProduct = {
@@ -73,6 +77,44 @@ export function channelName(channels:ConsoleChannel[],id:string|null|undefined){
 
 export function yen(value:number){
   return "¥"+Math.round(value).toLocaleString("ja-JP");
+}
+
+/** Dialog overlay. Closes on Escape and on a click outside the panel. */
+export function Modal({title,onClose,children,wide=false}:{title:string;onClose:()=>void;children:ReactNode;wide?:boolean}){
+  useEffect(()=>{
+    const onKey=(event:KeyboardEvent)=>{ if(event.key==="Escape") onClose(); };
+    document.addEventListener("keydown",onKey);
+    return ()=>document.removeEventListener("keydown",onKey);
+  },[onClose]);
+  return (
+    <div className="xc-modal-backdrop" onMouseDown={event=>{ if(event.target===event.currentTarget) onClose(); }}>
+      <div className={`xc-modal ${wide?"wide":""}`} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="xc-modal-head">
+          <h2>{title}</h2>
+          <button type="button" className="xc-btn ghost icon" onClick={onClose} aria-label="閉じる">×</button>
+        </div>
+        <div className="xc-modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Minimal Discord markdown for previews: **bold** and line breaks. */
+export function DiscordText({text}:{text:string}){
+  return (
+    <>
+      {text.split("\n").map((line,index)=>(
+        <div key={index}>
+          {line
+            ? line.split(/(\*\*[^*]+\*\*)/g).map((part,i)=>
+                part.startsWith("**")&&part.endsWith("**")&&part.length>4
+                  ?<strong key={i}>{part.slice(2,-2)}</strong>
+                  :<Fragment key={i}>{part}</Fragment>)
+            : "\u00a0"}
+        </div>
+      ))}
+    </>
+  );
 }
 
 /** Inline loading indicator used while bot data (especially the 仕入れbot) is fetched. */

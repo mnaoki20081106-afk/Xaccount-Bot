@@ -493,3 +493,39 @@ body.dsm-touch-reordering .discord-channel-scroll { touch-action: none; overscro
 }
 @keyframes xc-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .xc-spinner { animation-duration: 2.4s; } }
+
+/* Vending list: band color dot + popover, modal dialogs */
+.xc-color-anchor { position: relative; display: inline-flex; }
+.xc-color-dot {
+  width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 2px #1c2440;
+}
+.xc-color-dot:focus-visible { outline: 2px solid #8f86ff; outline-offset: 3px; }
+.xc-color-popover {
+  position: absolute; top: 32px; left: 0; z-index: 20; width: 240px;
+  display: grid; gap: 10px; padding: 14px; border-radius: 14px;
+  background: #121a30; border: 1px solid #2a3350; box-shadow: 0 16px 40px rgba(0, 0, 0, .45);
+}
+.xc-color-popover strong { font-size: 13px; }
+.xc-color-popover .xc-color input[type="text"] { width: 100%; }
+.xc-color-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.xc-color-swatches button { width: 22px; height: 22px; border-radius: 6px; border: 1px solid #2a3350; cursor: pointer; padding: 0; }
+.xc-modal-backdrop {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px;
+  background: rgba(3, 6, 14, .72); backdrop-filter: blur(3px);
+}
+.xc-modal {
+  width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  border-radius: 18px; background: #0f1528; border: 1px solid #263050; box-shadow: 0 30px 80px rgba(0, 0, 0, .5);
+}
+.xc-modal.wide { width: min(720px, 100%); }
+.xc-modal-head {
+  position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 20px; background: #0f1528; border-bottom: 1px solid #1c2440;
+}
+.xc-modal-head h2 { margin: 0; font-size: 17px; }
+.xc-modal-body { padding: 20px; }
+.vending-layout.vending-layout-single { grid-template-columns: minmax(0, 1fr); }
+.vending-settings-single { max-width: 760px; }
+/* Detail designer preview: draw the band in the machine's own color. */
+.vending-discord-embed::before { background: var(--embed-color, #57f287) !important; }

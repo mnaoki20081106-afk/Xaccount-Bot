@@ -358,7 +358,8 @@ export default function VendingManager({
   useEffect(()=>{
     if(!focus||focus.key===focusedKeyRef.current) return;
     focusedKeyRef.current=focus.key;
-    setActiveSection(focus.section??"panel");
+    // Products / stock are edited on the list screen now.
+    setActiveSection(focus.section==="settings"||focus.section==="achievement"?focus.section:"panel");
     pendingProductRef.current=focus.productId??null;
     if(focus.machineId===selectedId&&detail){
       void loadDetail(focus.machineId).catch(onError);
@@ -368,31 +369,6 @@ export default function VendingManager({
     }
   },[focus]);
 
-  useEffect(()=>{
-    const productId=pendingProductRef.current;
-    if(!productId||!detail) return;
-    const product=detail.products.find(row=>row.id===productId);
-    if(!product) return;
-    pendingProductRef.current=null;
-    editProduct(product);
-  },[detail]);
-
-  async function createMachine(event:FormEvent){
-    event.preventDefault();
-    const name=newMachineName.trim();
-    if(!name) return;
-    setBusy(true);
-    try{
-      const vm=await api<Machine>(`/api/guilds/${guildId}/vending`,{
-        method:"POST",
-        body:JSON.stringify({name})
-      });
-      setNewMachineName("");
-      await loadMachines(vm.id);
-      onNotice("自販機を作成しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
 
   async function persistMachine(){
     if(!selectedId) return;
@@ -467,50 +443,6 @@ export default function VendingManager({
       onNotice("パネル画像を削除しました");
     }catch(reason){onError(reason);}
     finally{setPanelImageBusy(false);}
-  }
-
-  async function removeMachine(){
-    if(!selectedId||!detail) return;
-    if(!window.confirm(`自販機「${detail.name}」を削除しますか？`)) return;
-    setBusy(true);
-    try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}`,{method:"DELETE"});
-      await loadMachines(null);
-      onNotice("自販機を削除しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function publishPanel(){
-    if(!selectedId||!panelChannel) return;
-    setBusy(true);
-    try{
-      await persistEditingProduct();
-      await persistMachine();
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/panel`,{
-        method:"POST",
-        body:JSON.stringify({channelId:panelChannel})
-      });
-      await loadMachines(selectedId);
-      onNotice("プレビュー内容を保存してDiscordへ設置しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function updatePanel(){
-    if(!selectedId||!panelMessageUrl.trim()) return;
-    setBusy(true);
-    try{
-      await persistEditingProduct();
-      await persistMachine();
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/panel/update`,{
-        method:"POST",
-        body:JSON.stringify({messageUrl:panelMessageUrl.trim()})
-      });
-      await loadMachines(selectedId);
-      onNotice("プレビュー内容を保存して既存パネルを更新しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
   }
 
   async function saveStockNotification(){
@@ -646,161 +578,13 @@ export default function VendingManager({
     finally{setBusy(false);}
   }
 
-  async function addProduct(event:FormEvent){
-    event.preventDefault();
-    if(!selectedId||!newProduct.name.trim()) return;
-    if(newProduct.infiniteStock&&!newProduct.infiniteContent.trim()){
-      onError(new Error("無限在庫の商品は納品内容を入力してください"));
-      return;
-    }
-    setBusy(true);
-    try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/products`,{
-        method:"POST",
-        body:JSON.stringify(newProduct)
-      });
-      setNewProduct(emptyProduct);
-      await loadDetail(selectedId);
-      onNotice("商品を追加しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  function editProduct(product:Product){
-    setActiveSection("products");
-    if(editingProduct?.id===product.id) return;
-    if(productDirty&&!window.confirm("編集中の商品に未保存の変更があります。破棄して別の商品を開きますか？")) return;
-    setEditingProduct(product);
-    setProductEdit({
-      name:product.name,
-      description:product.description,
-      pricePayPay:product.price_paypay,
-      priceKyash:product.price_kyash,
-      emoji:product.emoji??"",
-      infiniteStock:Boolean(product.infinite_stock),
-      infiniteContent:product.infinite_content??""
-    });
-    setStockText("");
-    setStockPreview([]);
-  }
-
-  async function saveProduct(){
-    if(!selectedId||!editingProduct) return;
-    if(productEdit.infiniteStock&&!productEdit.infiniteContent.trim()){
-      onError(new Error("無限在庫の商品は納品内容を入力してください"));
-      return;
-    }
-    setBusy(true);
-    try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}`,{
-        method:"PATCH",
-        body:JSON.stringify(productEdit)
-      });
-      await loadDetail(selectedId);
-      setEditingProduct(null);
-      onNotice("商品情報を更新しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function removeProduct(product:Product){
-    if(!selectedId||!window.confirm(`商品「${product.name}」を削除しますか？`)) return;
-    setBusy(true);
-    try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/products/${product.id}`,{method:"DELETE"});
-      await loadDetail(selectedId);
-      if(editingProduct?.id===product.id) setEditingProduct(null);
-      onNotice("商品を削除しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function addStock(){
-    if(!selectedId||!editingProduct||!stockText.trim()) return;
-    setBusy(true);
-    try{
-      const lines=stockText.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
-      let added=0;
-      for(let offset=0;offset<lines.length;offset+=400){
-        const result=await api<{added:number}>(
-          `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/stock`,
-          {method:"POST",body:JSON.stringify({
-            lines:lines.slice(offset,offset+400),
-            notify:offset+400>=lines.length
-          })}
-        );
-        added+=result.added;
-      }
-      setStockText("");
-      await loadDetail(selectedId);
-      onNotice(`${added}件の在庫を追加しました`);
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function viewStock(){
-    if(!selectedId||!editingProduct) return;
-    try{
-      const items=await api<Array<{id:string;content:string}>>(
-        `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/stock`
-      );
-      setStockPreview(items);
-    }catch(reason){onError(reason);}
-  }
-
-  async function withdraw(){
-    if(!selectedId||!editingProduct) return;
-    setBusy(true);
-    try{
-      const result=await api<{items:string[]}>(
-        `/api/guilds/${guildId}/vending/${selectedId}/products/${editingProduct.id}/withdraw`,
-        {method:"POST",body:JSON.stringify({quantity:withdrawQuantity})}
-      );
-      await loadDetail(selectedId);
-      setStockPreview(result.items.map((content,index)=>({id:String(index),content})));
-      onNotice(`${result.items.length}件の在庫を引き出しました`);
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function addCoupon(event:FormEvent){
-    event.preventDefault();
-    if(!selectedId||!couponCode.trim()) return;
-    setBusy(true);
-    try{
-      await api(`/api/guilds/${guildId}/vending/${selectedId}/coupons`,{
-        method:"POST",
-        body:JSON.stringify({code:couponCode.trim(),discount:couponDiscount})
-      });
-      setCouponCode("");
-      await loadDetail(selectedId);
-      onNotice("クーポンを追加しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-  async function removeCoupon(code:string){
-    if(!selectedId) return;
-    setBusy(true);
-    try{
-      await api(
-        `/api/guilds/${guildId}/vending/${selectedId}/coupons/${encodeURIComponent(code)}`,
-        {method:"DELETE"}
-      );
-      await loadDetail(selectedId);
-      onNotice("クーポンを削除しました");
-    }catch(reason){onError(reason);}
-    finally{setBusy(false);}
-  }
-
-
   return (
     <section className="card vending-manager" inert={busy||detailLoading||panelImageBusy} aria-busy={busy||detailLoading||panelImageBusy}>
       <div className="section-head">
         <div>
-          <span className="eyebrow">VENDING MACHINE</span>
-          <h2>自販機管理</h2>
-          <p className="muted">商品・在庫・クーポン・ログ・PayPay/Kyashをまとめて管理します。</p>
+          <span className="eyebrow">DETAIL SETTINGS</span>
+          <h2>{detail?.name??"自販機"} の詳細設定</h2>
+          <p className="muted">パネルの文面・画像、購入後ロール、ログ、在庫追加通知、実績部屋を設定します。商品・在庫・帯の色・プレビュー・設置は一覧画面、クーポンは「クーポン管理」で操作します。</p>
         </div>
         <div className="vending-payment-badges">
           <span className={`status-pill ${paymentStatus.paypay?"good":"warn"}`}><i /> PayPay {paymentStatus.paypay?"接続済み":"未接続"}</span>
@@ -808,59 +592,18 @@ export default function VendingManager({
         </div>
       </div>
 
-      <div className="vending-layout">
-        <aside className="vending-sidebar">
-          <form className="vending-create" onSubmit={(event)=>void createMachine(event)}>
-            <input
-              value={newMachineName}
-              onChange={(event)=>setNewMachineName(event.target.value)}
-              placeholder="新しい自販機名"
-              maxLength={80}
-            />
-            <button className="primary" type="submit" disabled={busy}>＋</button>
-          </form>
-
-          <div className="vending-machine-list">
-            {machines.map(machine=>(
-              <button
-                key={machine.id}
-                className={`vending-machine-button ${machine.id===selectedId?"active":""}`}
-                disabled={busy||detailLoading}
-                onClick={()=>{
-                  setSelectedId(machine.id);
-                  setDetail(null);
-                  setEditingProduct(null);
-                  void loadDetail(machine.id).catch(onError);
-                }}
-              >
-                <span className="vending-machine-icon">▣</span>
-                <span>
-                  <strong>{machine.name}</strong>
-                  <small>{machine.id.slice(0,8)}</small>
-                </span>
-              </button>
-            ))}
-            {machines.length===0&&<div className="vending-empty">まだ自販機がありません。</div>}
-          </div>
-
-          <div className="payment-connect">
-            <small className="muted">PayPay / Kyashの接続は「PayPay設定」画面で管理します。</small>
-            {onOpenPayments&&(
-              <button type="button" className="secondary" onClick={onOpenPayments}>PayPay設定を開く</button>
-            )}
-          </div>
-        </aside>
+      <div className="vending-layout vending-layout-single">
 
         <div className="vending-main">
           {!selected||!detail ? (
             <div className="vending-select-prompt">
-              <strong>自販機を作成または選択してください</strong>
-              <span>複数の自販機をサーバーごとに管理できます。</span>
+              <strong>読み込み中…</strong>
+              <span>自販機の設定を取得しています。</span>
             </div>
           ) : (
             <>
               <nav className="vending-section-nav" aria-label="自販機の管理メニュー">
-                {([['panel','パネル'],['products','商品・在庫'],['settings','クーポン・通知'],['achievement','実績部屋']] as const).map(([id,label])=>(
+                {([['panel','パネル文面・ログ'],['settings','在庫追加通知'],['achievement','実績部屋']] as const).map(([id,label])=>(
                   <button type="button" key={id} aria-pressed={activeSection===id} onClick={()=>setActiveSection(id)}>{label}</button>
                 ))}
               </nav>
@@ -870,7 +613,7 @@ export default function VendingManager({
                     <span className="eyebrow">WYSIWYG PANEL DESIGNER</span>
                     <h3>{detail.name}</h3>
                     <small className="vending-designer-subtitle">
-                      設定とプレビューは連動します。商品をタップすると編集できます
+                      設定とプレビューは連動します。帯の色は一覧画面の●から変更できます
                     </small>
                   </div>
                   <div className="button-row">
@@ -880,7 +623,6 @@ export default function VendingManager({
                     <button className="primary" onClick={()=>void saveMachine()} disabled={busy}>
                       {busy?"保存中…":"設定を保存"}
                     </button>
-                    <button className="danger" onClick={()=>void removeMachine()} disabled={busy}>削除</button>
                   </div>
                 </div>
 
@@ -921,14 +663,6 @@ export default function VendingManager({
                           onChange={e=>setMachineForm({...machineForm,panelTitle:e.target.value})}
                           placeholder={machineForm.name||"自販機"}
                           maxLength={256}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>パネルの色</span>
-                        <input
-                          type="color"
-                          value={machineForm.panelColor}
-                          onChange={e=>setMachineForm({...machineForm,panelColor:e.target.value})}
                         />
                       </label>
                       <label className="field">
@@ -1039,7 +773,7 @@ export default function VendingManager({
                               <small>今日 04:14</small>
                             </div>
 
-                            <div className="vending-discord-embed">
+                            <div className="vending-discord-embed" style={{["--embed-color" as string]:machineForm.panelColor}}>
                               <input
                                 className="vending-wysiwyg-title"
                                 value={machineForm.panelTitle}
@@ -1060,18 +794,15 @@ export default function VendingManager({
 
                               <div className="vending-preview-products">
                                 {previewProducts.length ? previewProducts.map(product=>(
-                                  <button
-                                    type="button"
-                                    className={`vending-preview-product ${editingProduct?.id===product.id?"editing":""}`}
+                                  <div
+                                    className="vending-preview-product"
                                     key={product.id}
-                                    onClick={()=>editProduct(detail.products.find(item=>item.id===product.id)??product)}
-                                    title="クリックして商品を編集"
                                   >
                                     <strong>{product.emoji?product.emoji+" ":""}{product.name}</strong>
                                     <span>
                                       PayPay: {product.price_paypay}円 / Kyash: {product.price_kyash}円 / 在庫: {product.infinite_stock?"∞":product.stock_count} / 販売: {product.sales_count}
                                     </span>
-                                  </button>
+                                  </div>
                                 )):(
                                   <div className="vending-preview-empty-product">
                                     現在販売中の商品はありません。
@@ -1106,250 +837,11 @@ export default function VendingManager({
                       </div>
                     </div>
 
-                    <div className="vending-publish-box">
-                      <div className="vending-publish-row">
-                        <select value={panelChannel} onChange={e=>setPanelChannel(e.target.value)}>
-                          <option value="">設置先チャンネル</option>
-                          {channels.map(channel=><option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-                        </select>
-                        <button className="primary" onClick={()=>void publishPanel()} disabled={!panelChannel||busy}>
-                          {busy?"反映中…":"この見た目でDiscordに設置"}
-                        </button>
-                      </div>
-                      <div className="vending-panel-update">
-                        <input
-                          value={panelMessageUrl}
-                          onChange={e=>setPanelMessageUrl(e.target.value)}
-                          placeholder="既存パネルのDiscordメッセージURL"
-                        />
-                        <button className="secondary" onClick={()=>void updatePanel()} disabled={!panelMessageUrl.trim()||busy}>
-                          この見た目で既存パネル更新
-                        </button>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>
 
-              <div hidden={activeSection!=="products"} className="vending-tabs-section vending-products-section">
-                <div className="section-head compact">
-                  <div>
-                    <span className="eyebrow">PRODUCTS / STOCK</span>
-                    <h3>{detail.name} の商品・在庫</h3>
-                    <p className="muted">この自販機に入っている商品だけを管理しています。有限在庫と無限在庫は別々に表示します。</p>
-                  </div>
-                  <span className="status-pill"><i /> 販売累計 {stockSummary.salesCount}</span>
-                </div>
-
-                <div className="vending-stock-overview" aria-label="在庫の絞り込み">
-                  <button type="button" className={stockFilter==="all"?"active":""} onClick={()=>setStockFilter("all")}>
-                    <span>全商品</span>
-                    <strong>{stockSummary.productCount}</strong>
-                    <small>商品</small>
-                  </button>
-                  <button type="button" className={stockFilter==="finite"?"active":""} onClick={()=>setStockFilter("finite")}>
-                    <span>有限在庫</span>
-                    <strong>{stockSummary.finiteUnits}</strong>
-                    <small>{stockSummary.finiteProductCount}商品 / 合計個数</small>
-                  </button>
-                  <button type="button" className={stockFilter==="infinite"?"active":""} onClick={()=>setStockFilter("infinite")}>
-                    <span>無限在庫</span>
-                    <strong>∞ {stockSummary.infiniteProductCount}</strong>
-                    <small>商品</small>
-                  </button>
-                  <button type="button" className={(stockFilter==="empty"?"active ":"")+(stockSummary.emptyProductCount>0?"warning":"")} onClick={()=>setStockFilter("empty")}>
-                    <span>在庫切れ</span>
-                    <strong>{stockSummary.emptyProductCount}</strong>
-                    <small>有限商品</small>
-                  </button>
-                </div>
-
-                <details className="vending-add-product">
-                  <summary>＋ 新しい商品を追加</summary>
-                <form className="vending-product-create" onSubmit={(event)=>void addProduct(event)}>
-                  <div className="form-grid three">
-                    <label className="field"><span>商品名</span><input required value={newProduct.name} onChange={e=>setNewProduct({...newProduct,name:e.target.value})}/></label>
-                    <label className="field"><span>PayPay価格</span><input type="number" min={0} value={newProduct.pricePayPay} onChange={e=>setNewProduct({...newProduct,pricePayPay:Number(e.target.value)})}/></label>
-                    <label className="field"><span>Kyash価格</span><input type="number" min={0} value={newProduct.priceKyash} onChange={e=>setNewProduct({...newProduct,priceKyash:Number(e.target.value)})}/></label>
-                  </div>
-                  <div className="form-grid two">
-                    <label className="field"><span>説明</span><input value={newProduct.description} onChange={e=>setNewProduct({...newProduct,description:e.target.value})}/></label>
-                    <label className="field"><span>絵文字</span><input value={newProduct.emoji} onChange={e=>setNewProduct({...newProduct,emoji:e.target.value})} placeholder="📦"/></label>
-                  </div>
-                  <label className="toggle-row compact-toggle vending-stock-create-mode">
-                    <span className="toggle-copy">
-                      <strong>無限在庫にする</strong>
-                      <small>{newProduct.infiniteStock?"同じ内容を何度でも納品します":"1件ずつ在庫を登録して販売します"}</small>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={newProduct.infiniteStock}
-                      onChange={e=>setNewProduct({...newProduct,infiniteStock:e.target.checked})}
-                    />
-                  </label>
-                  {newProduct.infiniteStock&&(
-                    <label className="field">
-                      <span>無限在庫の納品内容</span>
-                      <textarea
-                        required
-                        value={newProduct.infiniteContent}
-                        onChange={e=>setNewProduct({...newProduct,infiniteContent:e.target.value})}
-                        placeholder="購入者へ毎回送る内容"
-                      />
-                    </label>
-                  )}
-                  {!newProduct.infiniteStock&&(
-                    <div className="vending-stock-create-note">
-                      商品追加後に「有限在庫」からコード・URL・テキストを1行1件で登録できます。
-                    </div>
-                  )}
-                  <button className="secondary" type="submit" disabled={busy}>＋ 商品を追加</button>
-                </form>
-
-                </details>
-                <div className="vending-products">
-                  {visibleProducts.map(product=>(
-                    <article key={product.id} className={`vending-product-card ${editingProduct?.id===product.id?"active":""} ${product.infinite_stock?"infinite":"finite"}`}>
-                      <button type="button" className="vending-product-summary" onClick={()=>editProduct(product)}>
-                        <span className="vending-product-emoji">{product.emoji||"📦"}</span>
-                        <span className="vending-product-copy">
-                          <strong>{product.name}</strong>
-                          <small>PayPay ¥{product.price_paypay} · Kyash ¥{product.price_kyash}</small>
-                          <span className={`vending-stock-type ${product.infinite_stock?"infinite":"finite"}`}>
-                            {product.infinite_stock?"∞ 無限在庫":"有限在庫"}
-                          </span>
-                        </span>
-                        <span className={`vending-stock-count ${!product.infinite_stock&&product.stock_count<=0?"empty":""}`}>
-                          {product.infinite_stock?"∞":product.stock_count+"個"}
-                        </span>
-                        <span className="vending-sales">販売 {product.sales_count}</span>
-                      </button>
-                    </article>
-                  ))}
-                  {visibleProducts.length===0&&(
-                    <div className="vending-filter-empty">
-                      {stockFilter==="empty"?"在庫切れの商品はありません。":"この条件に該当する商品はありません。"}
-                    </div>
-                  )}
-                </div>
-                {editingProduct&&(
-                  <div className="vending-product-editor" ref={productEditorRef}>
-                    <div className="section-head compact">
-                      <h3>{editingProduct.name} を編集 {productDirty&&<span className="vending-unsaved">● 未保存</span>}</h3>
-                      <button className="editor-close" onClick={()=>setEditingProduct(null)}>×</button>
-                    </div>
-                    <div className="form-grid three">
-                      <label className="field"><span>商品名</span><input value={productEdit.name} onChange={e=>setProductEdit({...productEdit,name:e.target.value})}/></label>
-                      <label className="field"><span>PayPay価格</span><input type="number" value={productEdit.pricePayPay} onChange={e=>setProductEdit({...productEdit,pricePayPay:Number(e.target.value)})}/></label>
-                      <label className="field"><span>Kyash価格</span><input type="number" value={productEdit.priceKyash} onChange={e=>setProductEdit({...productEdit,priceKyash:Number(e.target.value)})}/></label>
-                    </div>
-                    <div className="form-grid two">
-                      <label className="field"><span>説明</span><textarea value={productEdit.description} onChange={e=>setProductEdit({...productEdit,description:e.target.value})}/></label>
-                      <label className="field"><span>絵文字</span><input value={productEdit.emoji} onChange={e=>setProductEdit({...productEdit,emoji:e.target.value})}/></label>
-                    </div>
-                    <div className={`vending-stock-mode-banner ${productEdit.infiniteStock?"infinite":"finite"}`}>
-                      <div>
-                        <strong>{productEdit.infiniteStock?"∞ 無限在庫":"有限在庫"}</strong>
-                        <span>
-                          {productEdit.infiniteStock
-                            ?"在庫数は減りません。同じ納品内容を購入ごとに送ります。"
-                            :`現在 ${Math.max(0,editingStockCount)}個。1行を在庫1件として個別に消費します。`}
-                        </span>
-                      </div>
-                      <span className="vending-stock-mode-value">{productEdit.infiniteStock?"∞":Math.max(0,editingStockCount)+"個"}</span>
-                    </div>
-                    <label className="toggle-row compact-toggle">
-                      <span className="toggle-copy">
-                        <strong>無限在庫として扱う</strong>
-                        <small>{productEdit.infiniteStock?"ON: 同じ内容を繰り返し納品":"OFF: 登録した有限在庫を1件ずつ消費"}</small>
-                      </span>
-                      <input type="checkbox" checked={productEdit.infiniteStock} onChange={e=>setProductEdit({...productEdit,infiniteStock:e.target.checked})}/>
-                    </label>
-                    {productEdit.infiniteStock&&(
-                      <label className="field">
-                        <span>無限在庫の納品内容</span>
-                        <textarea
-                          value={productEdit.infiniteContent}
-                          onChange={e=>setProductEdit({...productEdit,infiniteContent:e.target.value})}
-                          placeholder="購入者へ毎回送る内容"
-                        />
-                        <small className="vending-field-help">有限在庫へ戻しても、以前に登録した有限在庫は残ります。</small>
-                      </label>
-                    )}
-                    <div className="button-row">
-                      <button className="primary" onClick={()=>void saveProduct()} disabled={busy}>商品を保存</button>
-                      <button className="danger" onClick={()=>void removeProduct(editingProduct)} disabled={busy}>商品削除</button>
-                    </div>
-
-                    {!productEdit.infiniteStock&&(
-                      <div className="vending-stock-editor">
-                        <div className="vending-stock-editor-head">
-                          <div>
-                            <span className="eyebrow">FINITE STOCK</span>
-                            <strong>有限在庫を追加・確認</strong>
-                          </div>
-                          <span className={`vending-stock-live-count ${editingStockCount<=0?"empty":""}`}>
-                            現在 {Math.max(0,editingStockCount)}個
-                          </span>
-                        </div>
-                        <textarea value={stockText} onChange={e=>setStockText(e.target.value)} placeholder={"1行＝在庫1件\nコードA\nコードB\nコードC"}/>
-                        <div className="vending-stock-file-row">
-                          <label className="secondary vending-file-button">
-                            TXTを読み込む
-                            <input
-                              type="file"
-                              accept=".txt,text/plain"
-                              onChange={(event)=>{
-                                const file=event.target.files?.[0];
-                                if(!file) return;
-                                void file.text().then(text=>setStockText(text)).catch(onError);
-                                event.currentTarget.value="";
-                              }}
-                            />
-                          </label>
-                          <small>{stockText ? stockText.split(/\r?\n/).filter(Boolean).length+"行を読込済み" : "1行＝在庫1件"}</small>
-                        </div>
-                        {stockModeNeedsSave&&(
-                          <div className="vending-stock-save-first">
-                            在庫方式を変更しました。先に「商品を保存」してから有限在庫を操作してください。
-                          </div>
-                        )}
-                        <div className="button-row">
-                          <button className="secondary" onClick={()=>void addStock()} disabled={!stockText.trim()||busy||stockModeNeedsSave}>在庫追加</button>
-                          <button className="secondary" onClick={()=>void viewStock()} disabled={busy||stockModeNeedsSave}>在庫内容確認</button>
-                          <input className="withdraw-input" type="number" min={1} max={500} value={withdrawQuantity} onChange={e=>setWithdrawQuantity(Number(e.target.value))} disabled={stockModeNeedsSave}/>
-                          <button className="secondary" onClick={()=>void withdraw()} disabled={busy||stockModeNeedsSave||editingStockCount<=0}>引出</button>
-                        </div>
-                        {stockPreview.length>0&&(
-                          <pre className="stock-preview">{stockPreview.map(item=>item.content).join("\n")}</pre>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div hidden={activeSection!=="settings"} className="vending-grid-two">
-                <div className="vending-tabs-section">
-                  <span className="eyebrow">COUPONS</span>
-                  <h3>クーポン</h3>
-                  <form className="coupon-create" onSubmit={(event)=>void addCoupon(event)}>
-                    <input value={couponCode} onChange={e=>setCouponCode(e.target.value)} placeholder="CODE"/>
-                    <input type="number" min={1} value={couponDiscount} onChange={e=>setCouponDiscount(Number(e.target.value))}/>
-                    <button className="secondary" type="submit">追加</button>
-                  </form>
-                  <div className="coupon-list">
-                    {detail.coupons.map(coupon=>(
-                      <div className="coupon-row" key={coupon.code}>
-                        <strong>{coupon.code}</strong>
-                        <span>-¥{coupon.discount}/個</span>
-                        <button className="danger" onClick={()=>void removeCoupon(coupon.code)}>削除</button>
-                      </div>
-                    ))}
-                    {detail.coupons.length===0&&<small className="muted">クーポンなし</small>}
-                  </div>
-                </div>
-
+              <div hidden={activeSection!=="settings"} className="vending-settings-single">
                 <div className="vending-tabs-section">
                   <div className="section-head compact">
                     <div>
