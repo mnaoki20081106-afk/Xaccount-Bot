@@ -15,7 +15,8 @@ import {
   acceptPayPayLink, checkKyashLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
   payPayLoginOtp, payPayLoginStart, receiveKyashLink, saveKyashAccount, saveKyashChallenge,
   takeKyashChallenge, PAYPAY_HOLD_NOTICE, PAYPAY_OTP_RE, isPayPayUuid, normalizePayPayLink,
-  payPayLinkAmount, validatePayPayLinkInfo, renewPayPaySession, payPaySessionValid,
+  payPayLinkAmount, validatePayPayLinkInfo, renewPayPaySession, payPaySessionValid, payPayPaymentReady,
+  lookupPayPayLink, payPayLookupMessage,
   PAYPAY_REFRESH_MS, type PayPayAccount
 } from "./vending-payments";
 
@@ -1128,9 +1129,9 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       if(order.payment_method==="paypay"){
         const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY);
         if(!account) return ires(eph("販売者のPayPayが未登録です。"));
-        if(!normalizePayPayLink(link)) return ires(eph("PayPay送金リンクが正しくありません。"));
-        const info=await checkPayPayLink(link,account);
-        if(!info) return ires(eph("PayPayリンクを確認できませんでした。"));
+        const lookup=await lookupPayPayLink(link,account);
+        if(lookup.kind!=="ok") return ires(eph(payPayLookupMessage(lookup)));
+        const info=lookup.data;
         const verified=validatePayPayLinkInfo(info,order.total_amount);
         if(!verified.ok){
           const amount=payPayLinkAmount(info);
@@ -1310,54 +1311,59 @@ export { VendingHttpError, requireGuild };
 // if PayPay asks for one, the seller logs in again from the dashboard.
 // ---------------------------------------------------------------------------
 
-const PAYPAY_RETRY_AFTER_NETWORK_MS=10*60_000;
-
 async function payPayStatus(env:Env,userId:string,account:PayPayAccount){
+  // Same fields as the reference PayPayAuthManager.status().
   const state=await getPayPayRefreshState(env,userId);
   const session=account.session??null;
-  const valid=payPaySessionValid(session);
   return {
     registered:true,
-    valid,
-    paymentReady:valid&&Boolean(session?.cookies?.token),
+    valid:payPaySessionValid(session),
+    paymentReady:payPayPaymentReady(session),
     expiresAt:session?.expiresAt??null,
     refreshedAt:session?.refreshedAt??null,
     requiresOtp:Boolean(state?.paypay_requires_otp),
     lastError:state?.paypay_last_error??null,
+    lastStatus:state?.paypay_last_status??null,
     lastCode:state?.paypay_last_code??null,
+    lastResponseType:state?.paypay_last_response_type??null,
     lastAttemptAt:state?.paypay_last_attempt_at??null
   };
 }
 
+/**
+ * reference PayPayAuthManager.refresh(due_only): renew with the SAVED
+ * phone/password/client_uuid. Never requests or submits OTP automatically.
+ * Scheduled (due-only) runs make at most one attempt per hour, success or not;
+ * a manual renewal ("今すぐ延長") is not throttled.
+ */
 async function refreshPayPayAccount(
   env:Env,userId:string,account:PayPayAccount,options:{force?:boolean}={}
 ):Promise<"not_due"|"busy"|"renewed"|"otp_required"|"rejected"|"network_error">{
   const now=Date.now();
   const session=account.session??null;
-  const due=!payPaySessionValid(session)||now-(session?.refreshedAt??0)>=PAYPAY_REFRESH_MS;
-  if(!options.force&&!due) return "not_due";
-  const state=await getPayPayRefreshState(env,userId);
-  // One attempt per hour after OTP/rejection (avoids repeated SMS / lockouts),
-  // a network failure is retried after 10 minutes, and after a success the
-  // 60s gap only guards against overlapping cron runs. Manual renewal: 30s.
-  const lastError=state?.paypay_last_error??null;
-  const gap=options.force?30_000
-    :lastError&&lastError!=="network_error"?PAYPAY_REFRESH_MS
-    :lastError?PAYPAY_RETRY_AFTER_NETWORK_MS
-    :60_000;
-  if(!await claimPayPayRefresh(env,userId,now,now-gap)) return "busy";
+  if(!options.force&&payPaySessionValid(session)&&now-Number(session?.refreshedAt??0)<PAYPAY_REFRESH_MS) return "not_due";
+  // The claim is the reference lock: overlapping cron runs and a double click
+  // cannot log in twice (5s guard for manual renewal).
+  const gap=options.force?5_000:PAYPAY_REFRESH_MS;
+  if(!await claimPayPayRefresh(env,userId,now,now-gap)) return options.force?"busy":"not_due";
   const result=await renewPayPaySession(account);
   if(result.outcome==="renewed"&&result.session){
+    if(!result.session.cookies.token){
+      console.warn("PayPay OAuth token renewed, but no browser session cookie was returned; receive not verified");
+    }
     await account.persistSession?.(result.session);
     await recordPayPayRefresh(env,userId,{requiresOtp:false,error:null,code:null});
     return "renewed";
   }
+  // On OTP the old session is kept; it stays usable until it expires.
   await recordPayPayRefresh(env,userId,{
     requiresOtp:result.outcome==="otp_required",
     error:result.outcome,
-    code:result.code??null
+    code:result.code??null,
+    status:result.status??null,
+    responseType:result.responseType??null
   });
-  console.warn("PayPay session renewal failed",result.outcome,result.code??"-");
+  console.warn("PayPay session renewal failed",result.outcome,result.status??"-",result.code??"-");
   return result.outcome;
 }
 

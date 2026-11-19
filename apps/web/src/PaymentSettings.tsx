@@ -14,15 +14,22 @@ type PayPayState={
   requiresOtp:boolean;
   lastError:string|null;
   lastCode:string|null;
+  lastStatus?:number|null;
+  lastResponseType?:string|null;
   lastAttemptAt:number|null;
 };
 type PaymentStatus={paypay:boolean;kyash:boolean;paypayState?:PayPayState|null};
 
 const errorLabels:Record<string,string>={
   otp_required:"PayPayがSMS認証を求めています。下のフォームから再ログインしてください",
-  rejected:"PayPayがログインを拒否しました（パスワード変更などを確認してください）",
-  network_error:"PayPayへの通信に失敗しました。10分後に自動で再試行します"
+  rejected:"PayPayがログインを拒否しました（パスワード変更などを確認してください）。1時間後に自動で再試行します",
+  network_error:"PayPayへの通信に失敗しました。1時間後に自動で再試行します（「今すぐ延長」ですぐ再試行できます）"
 };
+
+function errorDetail(state:PayPayState){
+  const parts=[state.lastStatus?"HTTP "+state.lastStatus:"",state.lastCode??"",state.lastResponseType??""].filter(Boolean);
+  return parts.length?"（"+parts.join(" / ")+"）":"";
+}
 
 function time(value:number|null){
   return value?new Date(value).toLocaleString("ja-JP"):"—";
@@ -144,7 +151,7 @@ export default function PaymentSettings({
           <div className="xc-section-title"><div><h2>PayPay</h2><p>電話番号とパスワードでログインし、SMSのOTPで認証します。</p></div></div>
           {status?.paypay&&!relogin&&!payPayForm.challengeId&&!status.paypayState?.requiresOtp?(
             <div className="xc-form">
-              <p className="muted">PayPayアカウントは接続済みです。Webセッション（約2時間）は1時間ごとに保存済みのログイン情報で自動延長します。</p>
+              <p className="muted">PayPayアカウントは接続済みです。Webセッション（約2時間）は1時間ごとに保存済みのログイン情報で自動延長します。購入処理中に自動ログインすることはありません（SMS認証が勝手に送られないため）。</p>
               {status.paypayState&&(
                 <div className="xc-table-wrap">
                   <table className="xc-table" style={{minWidth:0}}>
@@ -154,7 +161,7 @@ export default function PaymentSettings({
                       <tr><td>最終延長</td><td>{time(status.paypayState.refreshedAt)}</td></tr>
                       <tr><td>最終試行</td><td>{time(status.paypayState.lastAttemptAt)}</td></tr>
                       {status.paypayState.lastError&&(
-                        <tr><td>直近のエラー</td><td style={{color:"#ff7b86"}}>{errorLabels[status.paypayState.lastError]??status.paypayState.lastError}{status.paypayState.lastCode?"（"+status.paypayState.lastCode+"）":""}</td></tr>
+                        <tr><td>直近のエラー</td><td style={{color:"#ff7b86"}}>{errorLabels[status.paypayState.lastError]??status.paypayState.lastError}{errorDetail(status.paypayState)}</td></tr>
                       )}
                     </tbody>
                   </table>

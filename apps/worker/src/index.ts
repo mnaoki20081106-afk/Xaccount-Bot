@@ -50,7 +50,7 @@ import {
   type DiscordUser
 } from "./discord";
 import { getPayPay } from "./vending-db";
-import { acceptPayPayLink, checkPayPayLink, normalizePayPayLink, validatePayPayLinkInfo } from "./vending-payments";
+import { acceptPayPayLink, lookupPayPayLink, payPayLookupMessage, validatePayPayLinkInfo } from "./vending-payments";
 import {
   BackupHttpError,
   backupRestoreSweep,
@@ -1394,9 +1394,9 @@ async function submitShopLink(interaction:any,env:Env):Promise<Response>{
   if(!payPayAccount){
     return interactionResponse(ephemeral("販売者のPayPayが未登録です。"));
   }
-  if(!normalizePayPayLink(link)) return interactionResponse(ephemeral("PayPay送金リンクが正しくありません。"));
-  const info:any=await checkPayPayLink(link,payPayAccount);
-  if(!info) return interactionResponse(ephemeral("送金リンクを確認できませんでした。"));
+  const lookup=await lookupPayPayLink(link,payPayAccount);
+  if(lookup.kind!=="ok") return interactionResponse(ephemeral(payPayLookupMessage(lookup)));
+  const info:any=lookup.data;
   if(String(info?.payload?.orderStatus??"")!=="PENDING"){
     return interactionResponse(ephemeral("このリンクは既に受け取り・辞退・キャンセルされています。新しい送金リンクを入力してください。"));
   }

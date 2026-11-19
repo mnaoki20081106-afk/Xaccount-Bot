@@ -11,6 +11,7 @@ import {
   payPayWalletSplit,
   payPayLinkAmount,
   normalizePayPayLink,
+  lookupPayPayLink,
   checkKyashLink,
   getKyashAccount,
   receiveKyashLink
@@ -442,7 +443,8 @@ export async function handleShiireServiceBridge(
       // Do not turn an unavailable/consumed link into a rejected order.
       let previousResult:any={};
       try{previousResult=JSON.parse(receipt?.response_json??"{}");}catch{}
-      const retryLogin=wasPending&&previousResult.status==="LOGIN_REQUIRED";
+      // These stop before any acceptance attempt, so retrying is safe.
+      const retryLogin=wasPending&&(previousResult.status==="LOGIN_REQUIRED"||previousResult.status==="LINK_UNAVAILABLE");
       if(wasPending&&!retryLogin){
         return json(env,{ok:false,status:"pending",reason:"PAYMENT_RESULT_REQUIRES_RECONCILIATION"},202);
       }
@@ -463,7 +465,14 @@ export async function handleShiireServiceBridge(
           await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"PAYPAY_LINK_INVALID"});
           return json(env,{error:"PAYPAY_LINK_INVALID"},409);
         }
-        const info=await checkPayPayLink(link,account);
+        const lookup=await lookupPayPayLink(link,account);
+        if(lookup.kind==="login_required"||lookup.kind==="unavailable"){
+          // No money moved; keep the receipt pending so the same request can be retried.
+          const status=lookup.kind==="login_required"?"LOGIN_REQUIRED":"LINK_UNAVAILABLE";
+          await finishPaymentReceipt(env,idempotencyKey,"PENDING",{status});
+          return json(env,{ok:false,status:"pending",reason:status},202);
+        }
+        const info=lookup.kind==="ok"?lookup.data:null;
         const linkAmount=payPayLinkAmount(info);
         const currentStatus=String(info?.payload?.orderStatus??"");
         if(!info||!Number.isFinite(linkAmount)||linkAmount<amount){

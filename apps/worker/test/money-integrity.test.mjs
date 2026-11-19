@@ -14,16 +14,21 @@ import {handleSupplyBridge} from './src/supply-bridge';
 import {acceptPayPayLink,receiveKyashLink,saveKyashAccount} from './src/vending-payments';
 import {vendingSweep,payPayRefreshSweep} from './src/vending';
 import {getPayPay} from './src/vending-db';
+const SESSION=()=>({accessToken:'saved-access-token',cookies:{token:'web-session-cookie'},expiresAt:Date.now()+7000000,refreshedAt:Date.now()});
+const WEB={phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'};
 export default {async fetch(req,env){
  const u=new URL(req.url);
- if(u.pathname==='/init'){await ensureVendingSchema(env);await savePayPay(env,'shared-dashboard','test','test','test',env.SESSION_ENCRYPTION_KEY);await saveKyashAccount(env,'shared-dashboard',{email:'test',password:'test',clientUuid:'test',installationUuid:'test',accessToken:'test'});return Response.json({ok:true});}
+ if(u.pathname==='/init'){await ensureVendingSchema(env);await savePayPay(env,'shared-dashboard','test','test','test',env.SESSION_ENCRYPTION_KEY,SESSION());await saveKyashAccount(env,'shared-dashboard',{email:'test',password:'test',clientUuid:'test',installationUuid:'test',accessToken:'test'});return Response.json({ok:true});}
  if(u.pathname==='/expire'){await cleanVendingExpired(env);return Response.json({ok:true});}
  if(u.pathname==='/sweep'){await vendingSweep(env);return Response.json({ok:true});}
- if(u.pathname==='/paypay') return Response.json(await acceptPayPayLink('test',{phone:'test',password:'test',uuid:'test'},100));
+ if(u.pathname==='/paypay') return Response.json(await acceptPayPayLink('test',{phone:'test',password:'test',uuid:'test',session:SESSION()},100));
  if(u.pathname==='/refresh'){await payPayRefreshSweep(env);const a=await getPayPay(env,'shared-dashboard',env.SESSION_ENCRYPTION_KEY);const st=await env.DB.prepare('SELECT paypay_requires_otp,paypay_last_error FROM vending_payment_accounts WHERE user_id=?').bind('shared-dashboard').first();return Response.json({session:a?.session??null,state:st});}
  if(u.pathname==='/seed-session'){const a=await getPayPay(env,'shared-dashboard',env.SESSION_ENCRYPTION_KEY);await a.persistSession(await req.json());return Response.json({ok:true});}
- if(u.pathname==='/paypay-web-text'){const t=await req.text();return Response.json(await acceptPayPayLink(t,{phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'},100));}
- if(u.pathname==='/paypay-web') return Response.json(await acceptPayPayLink('https://pay.paypay.ne.jp/AbCdEf123456',{phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'},100));
+ if(u.pathname==='/paypay-web-text'){const t=await req.text();return Response.json(await acceptPayPayLink(t,{...WEB,session:SESSION()},100));}
+ if(u.pathname==='/paypay-web-expired') return Response.json(await acceptPayPayLink('AbCdEf123456',{...WEB,session:{...SESSION(),expiresAt:Date.now()-1000}},100));
+ if(u.pathname==='/paypay-web-nosession') return Response.json(await acceptPayPayLink('AbCdEf123456',WEB,100));
+ if(u.pathname==='/paypay-web-nocookie') return Response.json(await acceptPayPayLink('AbCdEf123456',{...WEB,session:{...SESSION(),cookies:{}}},100));
+ if(u.pathname==='/paypay-web') return Response.json(await acceptPayPayLink('https://pay.paypay.ne.jp/AbCdEf123456',{...WEB,session:SESSION()},100));
  if(u.pathname==='/kyash') return Response.json(await receiveKyashLink('test',{clientUuid:'test',installationUuid:'test',accessToken:'test'},100));
  return await handleSupplyBridge(req,env,u)??await handleShiireServiceBridge(req,env,u)??new Response('missing',{status:404});
 }};`,resolveDir:process.cwd(),sourcefile:'audit-entry.ts'},bundle:true,write:false,format:'esm',platform:'browser',plugins:process.env.AUDIT_BASELINE?[{name:'baseline',setup(b){b.onLoad({filter:/\/src\/.*\.ts$/},args=>({contents:execFileSync('git',['show','HEAD:'+relative(root,args.path)],{cwd:root,encoding:'utf8'}),loader:'ts'}));}}]:[]});
@@ -36,6 +41,7 @@ async function fixture(options={}){
   calls.push(req.url);
   requests.push({url:req.url,method:req.method,cookie:req.headers.get('cookie'),referer:req.headers.get('referer'),body:req.method==='POST'?await req.clone().text():null});
   if(req.url.includes('getP2PLinkInfo')){
+   if(options.linkStatus)return Response.json({},{status:options.linkStatus});
    const data={amount:options.amount??50};
    if(!options.omitSplit)data.subWalletSplit={
     senderEmoneyAmount:options.money??(options.amount??50),
@@ -51,6 +57,7 @@ async function fixture(options={}){
   }
   if(req.url.includes('acceptP2P')){
    if(options.acceptReply)return Response.json(options.acceptReply.body,{status:options.acceptReply.status??200});
+   if(options.acceptStatus)return Response.json({header:{resultCode:'S0001'}},{status:options.acceptStatus});
    return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:'COMPLETED'},error:null});
   }
   if(req.url.includes('kyash.me/payments/'))return new Response('<span class="amountText text_send">'+(options.amount??50)+'</span><a data-href-app="kyash://claim/test">');
@@ -176,7 +183,7 @@ test('PayPay Web: link lookup and acceptance use the session cookie and observed
  assert.equal(url.origin+url.pathname,'https://www.paypay.ne.jp/app/v2/p2p-api/getP2PLinkInfo');
  assert.equal(url.searchParams.get('verificationCode'),'AbCdEf123456');
  assert.equal(url.searchParams.get('client_uuid'),'11111111-2222-3333-4444-555555555555');
- assert.equal(info.cookie,'token=web-session-cookie','the HttpOnly token cookie from login is used, not the OAuth token');
+ assert.equal(info.cookie,'token=web-session-cookie','the saved HttpOnly token cookie is used, not the OAuth token');
  assert.match(info.referer,/^https:\/\/www\.paypay\.ne\.jp\/app\/p2p\/AbCdEf123456\?pid=SMS&link_key=AbCdEf123456/);
  const accept=requests.find(q=>q.url.includes('acceptP2P'));
  assert.equal(accept.url,'https://www.paypay.ne.jp/app/v2/p2p-api/acceptP2PSendMoneyLink');
@@ -189,7 +196,7 @@ test('PayPay Web: link lookup and acceptance use the session cookie and observed
  assert.equal(body.verificationCode,'AbCdEf123456');
  assert.equal(body.client_uuid,'11111111-2222-3333-4444-555555555555');
  assert.match(body.requestId,/^[0-9a-f-]{36}$/);
- assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,1,'one login serves lookup and accept');
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,0,'payments never log in');
 });
 test('PayPay Web: hold codes stay pending and S0000 without COMPLETED is not a payment',async()=>{
  for(const code of ['42007013','42007016']){
@@ -248,10 +255,43 @@ test('PayPay Web: session is renewed hourly with the saved UUID and never asks O
 });
 test('PayPay Web: OTP during renewal is recorded and not retried within the hour',async()=>{
  const {mf,requests}=await fixture({oauth:'otp'});
+ await mf.dispatchFetch('https://test.example/seed-session',{method:'POST',body:JSON.stringify({accessToken:'old-access-token',cookies:{token:'old'},expiresAt:Date.now()+3000000,refreshedAt:Date.now()-3700000})});
  let r=await (await mf.dispatchFetch('https://test.example/refresh')).json();
  assert.equal(r.state.paypay_requires_otp,1);
  assert.equal(r.state.paypay_last_error,'otp_required');
  await mf.dispatchFetch('https://test.example/refresh');
  assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,1,'no repeated OTP-triggering logins');
  assert.equal(requests.some(q=>q.body&&JSON.parse(q.body).grant_type==='otp'),false,'OTP is never submitted automatically');
+});
+
+test('PayPay Web: payments use only the saved session and never log in (reference payment_session_if_valid)',async()=>{
+ for(const path of ['/paypay-web-expired','/paypay-web-nosession','/paypay-web-nocookie']){
+  const {mf,requests}=await fixture({amount:100});
+  const r=await (await mf.dispatchFetch('https://test.example'+path)).json();
+  assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(r.status,'LOGIN_REQUIRED',path);
+  assert.equal(requests.length,0,path+': no PayPay request (no login, no lookup)');
+ }
+ const {mf,requests}=await fixture({amount:100,acceptStatus:401});
+ const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+ assert.equal(r.status,'LOGIN_REQUIRED');
+ assert.equal(requests.filter(q=>q.url.includes('acceptP2P')).length,1,'a rejected accept is not retried');
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,0);
+});
+test('PayPay Web: a temporary PayPay failure keeps the order pending',async()=>{
+ const {mf,requests}=await fixture({amount:100,linkStatus:503});
+ const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+ assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(r.status,'LINK_UNAVAILABLE');
+ assert.equal(requests.some(q=>q.url.includes('acceptP2P')),false);
+});
+test('PayPay Web: shiire receipt stays retryable when login is missing',async()=>{
+ const {mf,db,requests}=await fixture({amount:100});
+ await mf.dispatchFetch('https://test.example/seed-session',{method:'POST',body:JSON.stringify({accessToken:'x',cookies:{token:'c'},expiresAt:Date.now()-1000,refreshedAt:0})});
+ const input={method:'paypay',link:'RetryLink1234',amount:100,idempotencyKey:'login-retry-123'};
+ const first=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
+ assert.equal(first.status,'pending');assert.equal(first.reason,'LOGIN_REQUIRED');
+ assert.equal(requests.length,0);
+ await mf.dispatchFetch('https://test.example/seed-session',{method:'POST',body:JSON.stringify({accessToken:'x',cookies:{token:'web-session-cookie'},expiresAt:Date.now()+7000000,refreshedAt:Date.now()})});
+ const second=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
+ assert.equal(second.ok,true);assert.equal(second.status,'completed');
+ assert.equal((await db.prepare("SELECT status FROM shiire_payment_receipts WHERE idempotency_key=?").bind(input.idempotencyKey).first()).status,'COMPLETED');
 });
