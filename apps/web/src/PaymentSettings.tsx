@@ -6,19 +6,42 @@ import { api } from "./api";
  * The separate 仕入れbot delegates payment checks to this same account through
  * the signed bridge, so one connection serves both bots.
  */
+type PayPayState={
+  valid:boolean;
+  paymentReady:boolean;
+  expiresAt:number|null;
+  refreshedAt:number|null;
+  requiresOtp:boolean;
+  lastError:string|null;
+  lastCode:string|null;
+  lastAttemptAt:number|null;
+};
+type PaymentStatus={paypay:boolean;kyash:boolean;paypayState?:PayPayState|null};
+
+const errorLabels:Record<string,string>={
+  otp_required:"PayPayがSMS認証を求めています。下のフォームから再ログインしてください",
+  rejected:"PayPayがログインを拒否しました（パスワード変更などを確認してください）",
+  network_error:"PayPayへの通信に失敗しました。10分後に自動で再試行します"
+};
+
+function time(value:number|null){
+  return value?new Date(value).toLocaleString("ja-JP"):"—";
+}
+
 export default function PaymentSettings({
   onNotice, onError
 }:{
   onNotice:(message:string)=>void;
   onError:(reason:unknown)=>void;
 }){
-  const [status,setStatus]=useState<{paypay:boolean;kyash:boolean}|null>(null);
+  const [status,setStatus]=useState<PaymentStatus|null>(null);
+  const [relogin,setRelogin]=useState(false);
   const [busy,setBusy]=useState(false);
   const [payPayForm,setPayPayForm]=useState({phone:"",password:"",challengeId:"",otp:""});
   const [kyashForm,setKyashForm]=useState({email:"",password:"",challengeId:"",otp:""});
 
   async function loadStatus(){
-    try{ setStatus(await api<{paypay:boolean;kyash:boolean}>("/api/vending/payments/status")); }
+    try{ setStatus(await api<PaymentStatus>("/api/vending/payments/status")); }
     catch(reason){ onError(reason); }
   }
 
@@ -38,6 +61,7 @@ export default function PaymentSettings({
     if(result.loggedIn||!result.challengeId){
       // PayPay accepted the password without asking for an SMS code.
       setPayPayForm({phone:"",password:"",challengeId:"",otp:""});
+      setRelogin(false);
       await loadStatus();
       onNotice("PayPayアカウントを接続しました");
       return;
@@ -52,8 +76,17 @@ export default function PaymentSettings({
       method:"POST",body:JSON.stringify({challengeId:payPayForm.challengeId,otp:payPayForm.otp})
     });
     setPayPayForm({phone:"",password:"",challengeId:"",otp:""});
+    setRelogin(false);
     await loadStatus();
     onNotice("PayPayアカウントを接続しました");
+  }); };
+
+  const refreshPayPay=()=>{ void run(async()=>{
+    const result=await api<{outcome:string}>("/api/vending/paypay/refresh",{method:"POST"});
+    await loadStatus();
+    if(result.outcome==="renewed") onNotice("PayPayのログインを延長しました");
+    else if(result.outcome==="busy") onNotice("延長処理を実行中です。少し待ってから再確認してください");
+    else onError(new Error(errorLabels[result.outcome]??"PayPayのログイン延長に失敗しました"));
   }); };
 
   const disconnectPayPay=()=>{
@@ -95,7 +128,9 @@ export default function PaymentSettings({
         <article className={`xc-stat ${status?.paypay?"green":"red"}`}>
           <span>PayPay</span>
           <strong>● {status?(status.paypay?"連携中（有効）":"未接続"):"確認中"}</strong>
-          <small>{status?.paypay?"決済受付稼働中":"下のフォームから接続"}</small>
+          <small>{status?.paypay
+            ?(status.paypayState?.requiresOtp?"要再ログイン（SMS認証）":status.paypayState?.paymentReady?"決済受付稼働中・1時間ごとに自動延長":"自動延長待ち")
+            :"下のフォームから接続"}</small>
         </article>
         <article className={`xc-stat ${status?.kyash?"green":"red"}`}>
           <span>Kyash</span>
@@ -107,10 +142,29 @@ export default function PaymentSettings({
       <section className="xc-asset-grid">
         <article className="xc-card">
           <div className="xc-section-title"><div><h2>PayPay</h2><p>電話番号とパスワードでログインし、SMSのOTPで認証します。</p></div></div>
-          {status?.paypay?(
+          {status?.paypay&&!relogin&&!payPayForm.challengeId&&!status.paypayState?.requiresOtp?(
             <div className="xc-form">
-              <p className="muted">PayPayアカウントは接続済みです。</p>
-              <div><button type="button" className="xc-btn red" disabled={busy} onClick={disconnectPayPay}>PayPay切断</button></div>
+              <p className="muted">PayPayアカウントは接続済みです。Webセッション（約2時間）は1時間ごとに保存済みのログイン情報で自動延長します。</p>
+              {status.paypayState&&(
+                <div className="xc-table-wrap">
+                  <table className="xc-table" style={{minWidth:0}}>
+                    <tbody>
+                      <tr><td>決済受付</td><td>{status.paypayState.paymentReady?<span className="xc-pill green">● 有効</span>:<span className="xc-pill red">● 無効</span>}</td></tr>
+                      <tr><td>セッション有効期限</td><td>{time(status.paypayState.expiresAt)}</td></tr>
+                      <tr><td>最終延長</td><td>{time(status.paypayState.refreshedAt)}</td></tr>
+                      <tr><td>最終試行</td><td>{time(status.paypayState.lastAttemptAt)}</td></tr>
+                      {status.paypayState.lastError&&(
+                        <tr><td>直近のエラー</td><td style={{color:"#ff7b86"}}>{errorLabels[status.paypayState.lastError]??status.paypayState.lastError}{status.paypayState.lastCode?"（"+status.paypayState.lastCode+"）":""}</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button type="button" className="xc-btn green" disabled={busy} onClick={refreshPayPay}>今すぐ延長</button>
+                <button type="button" className="xc-btn ghost" disabled={busy} onClick={()=>setRelogin(value=>!value)}>{relogin?"再ログインを閉じる":"再ログイン"}</button>
+                <button type="button" className="xc-btn red" disabled={busy} onClick={disconnectPayPay}>PayPay切断</button>
+              </div>
             </div>
           ):payPayForm.challengeId?(
             <form className="xc-form" onSubmit={verifyPayPay}>

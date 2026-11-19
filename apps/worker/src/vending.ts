@@ -9,12 +9,14 @@ import {
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
   getMachine, getOrder, listSingleMachineIds, markSingleMachine, getPayPay, getStockNotify, getVmPanelImage, getVmProduct, incrementAchievementRoomCount, listAchievementCountRooms, listAchievementRooms, listCoupons, listDeliverySent, listMachines, listVmProducts,
   markDeliverySent, markPaid, orderStock, releaseStock, removePayPay, replaceAchievementRooms, reserveOrder, resetDelivery, savePayChallenge, savePayPay, saveStockNotify, saveVmPanelImage, stockContents,
-  takePayChallenge, updateAchievementCountNameState, reorderVmProducts, dashboardSummary, listPanelAssets, getPanelAsset, createPanelAsset, updatePanelAsset, deletePanelAsset, recordPanelAssetMessage, type PanelAsset, type PanelAssetInput, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
+  takePayChallenge, updateAchievementCountNameState, listPayPayRefreshStates, getPayPayRefreshState, claimPayPayRefresh, recordPayPayRefresh, reorderVmProducts, dashboardSummary, listPanelAssets, getPanelAsset, createPanelAsset, updatePanelAsset, deletePanelAsset, recordPanelAssetMessage, type PanelAsset, type PanelAssetInput, updateMachine, updateVmProduct, withdrawStock, type Vm, type VmAchievementRoom, type VmOrder, type VmProduct
 } from "./vending-db";
 import {
   acceptPayPayLink, checkKyashLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
   payPayLoginOtp, payPayLoginStart, receiveKyashLink, saveKyashAccount, saveKyashChallenge,
-  takeKyashChallenge, PAYPAY_HOLD_NOTICE
+  takeKyashChallenge, PAYPAY_HOLD_NOTICE, PAYPAY_OTP_RE, isPayPayUuid, normalizePayPayLink,
+  payPayLinkAmount, validatePayPayLinkInfo, renewPayPaySession, payPaySessionValid,
+  PAYPAY_REFRESH_MS, type PayPayAccount
 } from "./vending-payments";
 
 class VendingHttpError extends Error { constructor(public status:number,message:string){super(message);} }
@@ -639,10 +641,23 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
 
   if(url.pathname==="/api/vending/payments/status"&&request.method==="GET"){
     const s=await sessionFromRequest(request,env);
+    const [account,kyash]=await Promise.all([
+      getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY),
+      getKyashAccount(env,s.user_id)
+    ]);
     return json(env,{
-      paypay:Boolean(await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY)),
-      kyash:Boolean(await getKyashAccount(env,s.user_id))
+      paypay:Boolean(account),
+      kyash:Boolean(kyash),
+      paypayState:account?await payPayStatus(env,s.user_id,account):null
     });
+  }
+  if(url.pathname==="/api/vending/paypay/refresh"&&request.method==="POST"){
+    // Manual renewal ("今すぐ延長"), same as the hourly job but not throttled by the schedule.
+    const s=await sessionFromRequest(request,env);
+    const account=await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY);
+    if(!account) throw new VendingHttpError(409,"PayPayが未登録です");
+    const outcome=await refreshPayPayAccount(env,s.user_id,account,{force:true});
+    return json(env,{outcome,paypayState:await payPayStatus(env,s.user_id,await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY)??account)});
   }
   if(url.pathname==="/api/vending/paypay/status"&&request.method==="GET"){
     const s=await sessionFromRequest(request,env); return json(env,{registered:Boolean(await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY))});
@@ -656,25 +671,34 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     // Keep the saved client_uuid for the same phone so PayPay sees the same browser.
     const s=await sessionFromRequest(request,env),b=await input<{phone:string;password:string}>(request);
     const previous=await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY).catch(()=>null);
-    const uuid=previous&&previous.phone===b.phone&&/^[0-9a-f-]{36}$/i.test(previous.uuid)?previous.uuid:crypto.randomUUID();
-    const result:any=await payPayLoginStart(b.phone,b.password,uuid);
-    if(result?.session){
+    const phone=String(b.phone??"").trim(),password=String(b.password??"");
+    if(!phone||!password) throw new VendingHttpError(400,"電話番号とパスワードを入力してください");
+    const uuid=previous&&previous.phone===phone&&isPayPayUuid(previous.uuid)?previous.uuid:crypto.randomUUID();
+    const result=await payPayLoginStart(phone,password,uuid);
+    if(result.kind==="token"){
       // Logged in without OTP: the session is usable for payments immediately.
-      await savePayPay(env,s.user_id,b.phone,b.password,uuid,env.SESSION_ENCRYPTION_KEY,result.session);
+      await savePayPay(env,s.user_id,phone,password,uuid,env.SESSION_ENCRYPTION_KEY,result.session);
       return json(env,{ok:true,loggedIn:true});
     }
-    if(result?.response_type==="ErrorResponse") throw new VendingHttpError(400,"PayPayログイン情報が一致しません");
-    if(!result?.otp_reference_id||!result?.otp_prefix) throw new VendingHttpError(502,"PayPay OTP開始に失敗しました");
-    const challengeId=await savePayChallenge(env,s.user_id,JSON.stringify({phone:b.phone,password:b.password,uuid,otpReferenceId:result.otp_reference_id,otpPrefix:result.otp_prefix}),env.SESSION_ENCRYPTION_KEY);
-    return json(env,{challengeId,otpPrefix:result.otp_prefix});
+    if(result.kind==="network") throw new VendingHttpError(502,"PayPayへの通信に失敗しました。時間をおいて再試行してください");
+    if(result.kind==="rejected"){
+      throw new VendingHttpError(400,result.hint==="bad_credentials"?"PayPayの電話番号またはパスワードが違います":"PayPayがログインを拒否しました"+(result.code?"（"+result.code+"）":""));
+    }
+    const challengeId=await savePayChallenge(env,s.user_id,JSON.stringify({phone,password,uuid,otpReferenceId:result.otpReferenceId,otpPrefix:result.otpPrefix}),env.SESSION_ENCRYPTION_KEY);
+    return json(env,{challengeId,otpPrefix:result.otpPrefix});
   }
   if(url.pathname==="/api/vending/paypay/login/verify"&&request.method==="POST"){
-    const s=await sessionFromRequest(request,env),b=await input<{challengeId:string;otp:string}>(request),raw=await takePayChallenge(env,b.challengeId,s.user_id,env.SESSION_ENCRYPTION_KEY);
+    const s=await sessionFromRequest(request,env),b=await input<{challengeId:string;otp:string}>(request);
+    // Check the format before consuming the one-time challenge.
+    const otp=String(b.otp??"").trim();
+    if(!PAYPAY_OTP_RE.test(otp)) throw new VendingHttpError(400,"SMSの4桁の認証コードを入力してください");
+    const raw=await takePayChallenge(env,b.challengeId,s.user_id,env.SESSION_ENCRYPTION_KEY);
     if(!raw) throw new VendingHttpError(410,"OTP認証が失効しました"); const p=JSON.parse(raw);
-    if(!/^\d{4}$/.test(String(b.otp??"").trim())) throw new VendingHttpError(400,"SMSの4桁の認証コードを入力してください");
-    b.otp=String(b.otp).trim();
-    const result:any=await payPayLoginOtp({uuid:p.uuid,otp:b.otp,otpReferenceId:p.otpReferenceId,otpPrefix:p.otpPrefix});
-    if(!result?.session) throw new VendingHttpError(400,"OTPコードが正しくありません");
+    const result=await payPayLoginOtp({uuid:p.uuid,otp,otpReferenceId:p.otpReferenceId,otpPrefix:p.otpPrefix});
+    if(result.kind==="network") throw new VendingHttpError(502,"PayPayへの通信に失敗しました。もう一度ログインからやり直してください");
+    if(result.kind!=="token"){
+      throw new VendingHttpError(400,result.kind==="rejected"&&result.hint==="otp_validation_failed"?"認証コードが正しくないか期限切れです":"OTPコードが正しくありません");
+    }
     await savePayPay(env,s.user_id,p.phone,p.password,p.uuid,env.SESSION_ENCRYPTION_KEY,result.session); return json(env,{ok:true});
   }
 
@@ -1104,15 +1128,16 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       if(order.payment_method==="paypay"){
         const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY);
         if(!account) return ires(eph("販売者のPayPayが未登録です。"));
+        if(!normalizePayPayLink(link)) return ires(eph("PayPay送金リンクが正しくありません。"));
         const info=await checkPayPayLink(link,account);
-        const amount=Number(info?.payload?.message?.data?.amount??0);
-        if(!info||!Number.isFinite(amount)){
-          return ires(eph("PayPay送金リンクを確認できませんでした。"));
-        }
-        if(amount<order.total_amount){
+        if(!info) return ires(eph("PayPayリンクを確認できませんでした。"));
+        const verified=validatePayPayLinkInfo(info,order.total_amount);
+        if(!verified.ok){
+          const amount=payPayLinkAmount(info);
           return ires(eph(
-            "金額が不足しています。必要: "+order.total_amount+
-            "円 / リンク: "+amount+"円"
+            verified.reason==="AMOUNT_MISMATCH"
+              ?verified.message+" 必要: "+order.total_amount+"円 / リンク: "+(Number.isFinite(amount)?amount:"?")+"円"
+              :verified.message
           ));
         }
 
@@ -1153,7 +1178,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
         if(result.pending){
           return ires(eph(
             result.status==="TEMPORARY_HOLD"
-              ?PAYPAY_HOLD_NOTICE
+              ?PAYPAY_HOLD_NOTICE+"（1分ごとに自動確認します）"
               :result.status==="LOGIN_REQUIRED"
                 ?"販売者のPayPayログインが切れています。在庫は確保したまま、販売者の再ログイン後に自動確認します。"
                 :"PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"
@@ -1161,7 +1186,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
         }
         await clearPaymentLink(env,order.id);
         return ires(eph(
-          "PayPay決済を確認できませんでした。別の有効な送金リンクを入力してください。"
+          (result.message??"PayPay決済を確認できませんでした。")+" 別の有効な送金リンクを入力してください。"
         ));
       }
 
@@ -1277,3 +1302,73 @@ export async function vendingSweep(env:Env){
 }
 
 export { VendingHttpError, requireGuild };
+
+// ---------------------------------------------------------------------------
+// PayPay Web session renewal (reference: PayPayAuthManager.refresh).
+// The Web session lasts about two hours, so it is renewed every hour with the
+// SAVED phone/password/client_uuid. An OTP is never submitted automatically:
+// if PayPay asks for one, the seller logs in again from the dashboard.
+// ---------------------------------------------------------------------------
+
+const PAYPAY_RETRY_AFTER_NETWORK_MS=10*60_000;
+
+async function payPayStatus(env:Env,userId:string,account:PayPayAccount){
+  const state=await getPayPayRefreshState(env,userId);
+  const session=account.session??null;
+  const valid=payPaySessionValid(session);
+  return {
+    registered:true,
+    valid,
+    paymentReady:valid&&Boolean(session?.cookies?.token),
+    expiresAt:session?.expiresAt??null,
+    refreshedAt:session?.refreshedAt??null,
+    requiresOtp:Boolean(state?.paypay_requires_otp),
+    lastError:state?.paypay_last_error??null,
+    lastCode:state?.paypay_last_code??null,
+    lastAttemptAt:state?.paypay_last_attempt_at??null
+  };
+}
+
+async function refreshPayPayAccount(
+  env:Env,userId:string,account:PayPayAccount,options:{force?:boolean}={}
+):Promise<"not_due"|"busy"|"renewed"|"otp_required"|"rejected"|"network_error">{
+  const now=Date.now();
+  const session=account.session??null;
+  const due=!payPaySessionValid(session)||now-(session?.refreshedAt??0)>=PAYPAY_REFRESH_MS;
+  if(!options.force&&!due) return "not_due";
+  const state=await getPayPayRefreshState(env,userId);
+  // One attempt per hour after OTP/rejection (avoids repeated SMS / lockouts),
+  // a network failure is retried after 10 minutes, and after a success the
+  // 60s gap only guards against overlapping cron runs. Manual renewal: 30s.
+  const lastError=state?.paypay_last_error??null;
+  const gap=options.force?30_000
+    :lastError&&lastError!=="network_error"?PAYPAY_REFRESH_MS
+    :lastError?PAYPAY_RETRY_AFTER_NETWORK_MS
+    :60_000;
+  if(!await claimPayPayRefresh(env,userId,now,now-gap)) return "busy";
+  const result=await renewPayPaySession(account);
+  if(result.outcome==="renewed"&&result.session){
+    await account.persistSession?.(result.session);
+    await recordPayPayRefresh(env,userId,{requiresOtp:false,error:null,code:null});
+    return "renewed";
+  }
+  await recordPayPayRefresh(env,userId,{
+    requiresOtp:result.outcome==="otp_required",
+    error:result.outcome,
+    code:result.code??null
+  });
+  console.warn("PayPay session renewal failed",result.outcome,result.code??"-");
+  return result.outcome;
+}
+
+export async function payPayRefreshSweep(env:Env){
+  await ensureVendingSchema(env);
+  for(const row of await listPayPayRefreshStates(env)){
+    try{
+      const account=await getPayPay(env,row.user_id,env.SESSION_ENCRYPTION_KEY);
+      if(account) await refreshPayPayAccount(env,row.user_id,account);
+    }catch(error){
+      console.error("PayPay renewal sweep failed",error instanceof Error?error.name:"error");
+    }
+  }
+}

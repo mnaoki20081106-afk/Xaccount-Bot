@@ -170,6 +170,17 @@ export async function ensureVendingSchema(env:Env){
       "ALTER TABLE vending_payment_accounts ADD COLUMN paypay_session_enc TEXT"
     ).run();
   }
+  // Hourly PayPay Web session renewal state.
+  for(const [name,type] of [
+    ["paypay_last_attempt_at","INTEGER"],
+    ["paypay_requires_otp","INTEGER NOT NULL DEFAULT 0"],
+    ["paypay_last_error","TEXT"],
+    ["paypay_last_code","TEXT"]
+  ] as const){
+    if(!paymentAccountColumns.some(column=>column.name===name)){
+      await env.DB.prepare("ALTER TABLE vending_payment_accounts ADD COLUMN "+name+" "+type).run();
+    }
+  }
 
   const productColumns=(await env.DB.prepare(
     "PRAGMA table_info(vending_products)"
@@ -675,6 +686,7 @@ export async function savePayPay(env:Env,userId:string,phone:string,password:str
   // this login (password or OTP) is stored so the first payment needs no new login.
   const sessionEnc=session?await encrypt(secret,JSON.stringify(session)):null;
   await env.DB.prepare("INSERT INTO vending_payment_accounts(user_id,paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET paypay_phone_enc=excluded.paypay_phone_enc,paypay_password_enc=excluded.paypay_password_enc,paypay_uuid=excluded.paypay_uuid,paypay_session_enc=excluded.paypay_session_enc,updated_at=excluded.updated_at").bind(userId,await encrypt(secret,phone),await encrypt(secret,password),uuid,sessionEnc,Date.now()).run();
+  await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_requires_otp=0,paypay_last_error=NULL,paypay_last_code=NULL,paypay_last_attempt_at=NULL WHERE user_id=?").bind(userId).run();
 }
 export async function getPayPay(env:Env,userId:string,secret:string){
   const r=await env.DB.prepare("SELECT paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc FROM vending_payment_accounts WHERE user_id=?").bind(userId).first<{paypay_phone_enc:string|null;paypay_password_enc:string|null;paypay_uuid:string|null;paypay_session_enc:string|null}>();
@@ -696,7 +708,41 @@ export async function getPayPay(env:Env,userId:string,secret:string){
     }
   };
 }
-export async function removePayPay(env:Env,userId:string){ await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_phone_enc=NULL,paypay_password_enc=NULL,paypay_uuid=NULL,paypay_session_enc=NULL,updated_at=? WHERE user_id=?").bind(Date.now(),userId).run(); }
+export async function removePayPay(env:Env,userId:string){ await env.DB.prepare("UPDATE vending_payment_accounts SET paypay_phone_enc=NULL,paypay_password_enc=NULL,paypay_uuid=NULL,paypay_session_enc=NULL,paypay_requires_otp=0,paypay_last_error=NULL,paypay_last_code=NULL,paypay_last_attempt_at=NULL,updated_at=? WHERE user_id=?").bind(Date.now(),userId).run(); }
+
+export type PayPayRefreshState={
+  user_id:string;
+  paypay_last_attempt_at:number|null;
+  paypay_requires_otp:number;
+  paypay_last_error:string|null;
+  paypay_last_code:string|null;
+};
+
+export async function listPayPayRefreshStates(env:Env){
+  return (await env.DB.prepare(
+    "SELECT user_id,paypay_last_attempt_at,paypay_requires_otp,paypay_last_error,paypay_last_code FROM vending_payment_accounts WHERE paypay_uuid IS NOT NULL AND paypay_phone_enc IS NOT NULL LIMIT 20"
+  ).all<PayPayRefreshState>()).results;
+}
+
+export async function getPayPayRefreshState(env:Env,userId:string){
+  return await env.DB.prepare(
+    "SELECT user_id,paypay_last_attempt_at,paypay_requires_otp,paypay_last_error,paypay_last_code FROM vending_payment_accounts WHERE user_id=?"
+  ).bind(userId).first<PayPayRefreshState>()??null;
+}
+
+/** Atomically claim a renewal attempt so overlapping cron runs never log in twice. */
+export async function claimPayPayRefresh(env:Env,userId:string,now:number,notBefore:number){
+  const result=await env.DB.prepare(
+    "UPDATE vending_payment_accounts SET paypay_last_attempt_at=? WHERE user_id=? AND paypay_uuid IS NOT NULL AND (paypay_last_attempt_at IS NULL OR paypay_last_attempt_at<=?)"
+  ).bind(now,userId,notBefore).run();
+  return (result.meta.changes??0)===1;
+}
+
+export async function recordPayPayRefresh(env:Env,userId:string,state:{requiresOtp:boolean;error:string|null;code:string|null}){
+  await env.DB.prepare(
+    "UPDATE vending_payment_accounts SET paypay_requires_otp=?,paypay_last_error=?,paypay_last_code=? WHERE user_id=?"
+  ).bind(state.requiresOtp?1:0,state.error,state.code,userId).run();
+}
 export async function savePayChallenge(env:Env,userId:string,payload:string,secret:string){ const id=randomId(); await env.DB.prepare("INSERT INTO vending_payment_login_challenges(id,user_id,provider,payload_enc,expires_at) VALUES (?,?,'paypay',?,?)").bind(id,userId,await encrypt(secret,payload),Date.now()+5*60_000).run(); return id; }
 export async function takePayChallenge(env:Env,id:string,userId:string,secret:string){ const r=await env.DB.prepare("SELECT payload_enc,expires_at FROM vending_payment_login_challenges WHERE id=? AND user_id=? AND provider='paypay'").bind(id,userId).first<{payload_enc:string;expires_at:number}>(); if(!r||r.expires_at<Date.now()) return null; await env.DB.prepare("DELETE FROM vending_payment_login_challenges WHERE id=?").bind(id).run(); return decrypt(secret,r.payload_enc); }
 

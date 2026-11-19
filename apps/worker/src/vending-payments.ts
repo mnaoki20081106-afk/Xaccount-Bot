@@ -2,9 +2,9 @@ import type { Env } from "./types";
 import { decrypt, encrypt, randomId } from "./utils";
 
 // ---------------------------------------------------------------------------
-// PayPay Web (www.paypay.ne.jp) — request format follows the owner-supplied
-// browser implementation (paypayu.py / paypaython_web_mobile.py, 2026-10-29):
-//   POST /app/v1/oauth/token                    password / otp login
+// PayPay Web (www.paypay.ne.jp). Ported from the owner-supplied browser
+// implementation (paypayu.py / paypaython_web_mobile.py, 2026-10-29):
+//   POST /app/v1/oauth/token                    password / otp login (+ hourly renewal)
 //   GET  /app/v2/p2p-api/getP2PLinkInfo         verificationCode + client_uuid, `token` cookie
 //   POST /app/v2/p2p-api/acceptP2PSendMoneyLink `token` cookie
 // Not an official API. Never log credentials, cookies, tokens or link codes.
@@ -20,8 +20,10 @@ const PAYPAY_UA=
   "AppleWebKit/605.1.15 (KHTML, like Gecko) "+
   "Version/18.0 Mobile/15E148 Safari/604.1";
 // The browser token's expires_in can be ~24h, but the usable Web session lasts
-// about two hours; use the shorter bound like the reference implementation.
-const PAYPAY_SESSION_MAX_MS=7200_000;
+// about two hours; use the shorter bound. The session is renewed every hour.
+export const PAYPAY_SESSION_MAX_MS=7200_000;
+export const PAYPAY_REFRESH_MS=3600_000;
+const PAYPAY_TIMEOUT_MS=25_000;
 const KYASH_VERSION="11.8.1";
 
 // Provider codes that mean "received but temporarily held" (受け取り保留).
@@ -31,6 +33,13 @@ export const PAYPAY_HOLD_NOTICE=
   "PayPayアプリで送金の状態を確認し、解除操作が表示される場合は解除してください。"+
   "解除後は販売者側で受取状況を再確認します。"+
   "確認が終わるまで、同じリンクを再送したり新しい送金をしたりしないでください。";
+
+const UUID_RE=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+export const PAYPAY_OTP_RE=/^[0-9]{4}$/;
+const LINK_RE=/https:\/\/pay\.paypay\.ne\.jp\/([A-Za-z0-9]{6,128})(?![A-Za-z0-9])/gi;
+const LINK_CODE_RE=/^[A-Za-z0-9]{6,128}$/;
+
+export function isPayPayUuid(value:string){ return UUID_RE.test(value); }
 
 function payPayHeaders(referer:string,extra?:Record<string,string>){
   return {
@@ -50,11 +59,34 @@ function payPayLinkReferer(code:string){
     "&af_dp=paypay%3A%2F%2Fpending%2Fdetail%3Fsource%3Dsns_link";
 }
 
-function payCode(link:string){
-  return link.trim().replace(/^https:\/\/pay\.paypay\.ne\.jp\//,"").split(/[?#/]/)[0] ?? "";
+/**
+ * Accepts a bare link code, a link, or a copied notification containing exactly
+ * one PayPay link. Any other URL (hidden Markdown target, phishing link, query,
+ * fragment, credentials, port) makes the input invalid.
+ */
+export function normalizePayPayLink(raw:string):string|null{
+  if(typeof raw!=="string"||raw.length<1||raw.length>4000) return null;
+  const text=raw.trim();
+  if(LINK_CODE_RE.test(text)) return text;
+  const codes=[...text.matchAll(LINK_RE)].map(match=>match[1]!);
+  if(codes.length===0||new Set(codes).size!==1) return null;
+  const code=codes[0]!;
+  for(const candidate of text.match(/https?:\/\/[^\s<>\[\]()"']+/gi)??[]){
+    let parts:URL;
+    try{ parts=new URL(candidate.replace(/[.,;。]+$/,"")); }catch{ return null; }
+    if(parts.protocol!=="https:"||parts.hostname!=="pay.paypay.ne.jp") return null;
+    if(parts.pathname!=="/"+code&&parts.pathname!=="/"+code+"/") return null;
+    if(parts.username||parts.password||parts.port||parts.hash||parts.search) return null;
+  }
+  return code;
 }
 
-export type PayPaySession={accessToken:string;cookies:Record<string,string>;expiresAt?:number};
+export type PayPaySession={
+  accessToken:string;
+  cookies:Record<string,string>;
+  expiresAt?:number;
+  refreshedAt?:number;
+};
 
 export type PayPayAccount={
   phone:string;
@@ -63,6 +95,11 @@ export type PayPayAccount={
   session?:PayPaySession|null;
   persistSession?:(session:PayPaySession)=>Promise<void>;
 };
+
+export function payPaySessionValid(session:PayPaySession|null|undefined,now=Date.now()){
+  // Sessions saved before expiresAt existed are tried once and renewed on auth failure.
+  return Boolean(session?.accessToken&&session.cookies?.token&&(!session.expiresAt||now<session.expiresAt-60_000));
+}
 
 function setCookieList(headers:Headers):string[]{
   const withList=headers as Headers&{getSetCookie?:()=>string[]};
@@ -88,57 +125,80 @@ function cookieHeader(cookies:Record<string,string>):string{
   return Object.entries(cookies).map(([name,value])=>`${name}=${value}`).join("; ");
 }
 
-// PayPay's receive endpoint expects JST wall-clock time with a fixed +0900 suffix.
-// Used only when the link does not report its own transactionAt.
-function jstRequestAt():string{
-  return new Date(Date.now()+9*3600_000).toISOString().slice(0,19)+"+0900";
+function providerCode(data:any):string|null{
+  if(!data||typeof data!=="object") return null;
+  const info=data.result_info&&typeof data.result_info==="object"?data.result_info.result_code:null;
+  for(const value of [data.error_code,data.code,data.result_code,info]){
+    if(typeof value==="string"&&/^[A-Za-z0-9_.-]{1,60}$/.test(value)) return value;
+  }
+  return null;
 }
 
-type OAuthReply={status:number;data:any;session:PayPaySession|null};
+export type PayPayOAuthResult=
+  |{kind:"token";session:PayPaySession}
+  |{kind:"otp";otpReferenceId:string;otpPrefix:string}
+  |{kind:"rejected";status:number;code:string|null;responseType:string|null;hint:"bad_credentials"|"otp_validation_failed"|null}
+  |{kind:"network"};
 
-async function payPayOAuth(payload:Record<string,unknown>):Promise<OAuthReply>{
-  const response=await fetch(PAYPAY_TOKEN_ENDPOINT,{
-    method:"POST",
-    headers:payPayHeaders(PAYPAY_SIGN_IN_REFERER),
-    body:JSON.stringify(payload)
-  });
-  const data:any=await response.json().catch(()=>null);
-  if(!(response.status>=200&&response.status<300)||typeof data?.access_token!=="string"||data.access_token.length<10){
-    return {status:response.status,data,session:null};
+async function payPayOAuth(payload:Record<string,unknown>):Promise<PayPayOAuthResult>{
+  let response:Response;
+  let data:any;
+  try{
+    response=await fetch(PAYPAY_TOKEN_ENDPOINT,{
+      method:"POST",
+      headers:payPayHeaders(PAYPAY_SIGN_IN_REFERER),
+      body:JSON.stringify(payload),
+      signal:AbortSignal.timeout(PAYPAY_TIMEOUT_MS)
+    });
+    data=await response.json().catch(()=>null);
+  }catch{
+    return {kind:"network"};
   }
-  const cookies:Record<string,string>={};
-  mergeCookies(cookies,response.headers);
-  // The HttpOnly `token` cookie authorizes link check/accept. If PayPay did not
-  // set one, fall back to the OAuth access token (earlier observed behavior).
-  if(!cookies.token) cookies.token=data.access_token;
-  const expiresIn=Number(data.expires_in);
-  const lifetime=Number.isFinite(expiresIn)&&expiresIn>0
-    ?Math.min(expiresIn*1000,PAYPAY_SESSION_MAX_MS)
-    :PAYPAY_SESSION_MAX_MS;
+  if(response.status>=200&&response.status<300&&typeof data?.access_token==="string"&&data.access_token.length>=10){
+    const cookies:Record<string,string>={};
+    mergeCookies(cookies,response.headers);
+    // The HttpOnly `token` cookie authorizes link check/accept. If PayPay did not
+    // set one, fall back to the OAuth access token (earlier observed behavior).
+    if(!cookies.token) cookies.token=data.access_token;
+    const expiresIn=Number(data.expires_in);
+    const lifetime=Number.isFinite(expiresIn)&&expiresIn>0
+      ?Math.min(expiresIn*1000,PAYPAY_SESSION_MAX_MS)
+      :PAYPAY_SESSION_MAX_MS;
+    const now=Date.now();
+    return {kind:"token",session:{accessToken:data.access_token,cookies,expiresAt:now+lifetime,refreshedAt:now}};
+  }
+  // An OTP challenge may arrive with HTTP 400.
+  if(typeof data?.otp_reference_id==="string"&&data.otp_reference_id&&typeof data?.otp_prefix==="string"&&/^[A-Za-z]{2,8}$/.test(data.otp_prefix)){
+    return {kind:"otp",otpReferenceId:data.otp_reference_id,otpPrefix:data.otp_prefix};
+  }
+  const message=data?.result_info?.result_msg;
+  const responseType=typeof data?.response_type==="string"&&/^[A-Za-z0-9_.-]{1,50}$/.test(data.response_type)?data.response_type:null;
   return {
+    kind:"rejected",
     status:response.status,
-    data,
-    session:{accessToken:data.access_token,cookies,expiresAt:Date.now()+lifetime}
+    code:providerCode(data),
+    responseType,
+    hint:message==="Bad credentials"?"bad_credentials"
+      :typeof message==="string"&&message.startsWith("Validate OTP call to notification service")?"otp_validation_failed"
+      :null
   };
 }
 
-/** Password login. Returns PayPay's reply (OTP challenge or token) plus a session when logged in. */
-export async function payPayLoginStart(phone:string,password:string,uuid:string){
-  const reply=await payPayOAuth({
+/** Password login with the given client_uuid (token, OTP challenge, rejection or network failure). */
+export function payPayLoginStart(phone:string,password:string,uuid:string){
+  return payPayOAuth({
     scope:"SIGN_IN",client_uuid:uuid,grant_type:"password",
     username:phone,password,add_otp_prefix:true,language:"ja"
   });
-  return {...(reply.data??{}),session:reply.session} as any;
 }
 
-/** OTP login with the same client_uuid. The returned session is ready for payments. */
-export async function payPayLoginOtp(input:{uuid:string;otp:string;otpReferenceId:string;otpPrefix:string}){
-  const reply=await payPayOAuth({
+/** OTP login with the same client_uuid. A token result is ready for payments. */
+export function payPayLoginOtp(input:{uuid:string;otp:string;otpReferenceId:string;otpPrefix:string}){
+  return payPayOAuth({
     scope:"SIGN_IN",grant_type:"otp",client_uuid:input.uuid,
     otp:input.otp,otp_prefix:String(input.otpPrefix),
     otp_reference_id:input.otpReferenceId,username_type:"MOBILE",language:"ja"
   });
-  return {...(reply.data??{}),session:reply.session} as any;
 }
 
 function authFailed(status:number,data:any){
@@ -165,44 +225,39 @@ function holdCode(body:any):string|null{
 }
 
 /**
- * One authenticated Web session for a single operation. Logs in with the saved
- * credentials when there is no valid session; a password login that asks for
- * OTP means the seller must log in again from the dashboard (LOGIN_REQUIRED).
+ * One authenticated Web session for a single operation. Uses the saved session
+ * (kept alive by the hourly renewal); logs in with the saved credentials only
+ * when it is missing or rejected. A login that asks for OTP means the seller
+ * must log in again from the dashboard (LOGIN_REQUIRED).
  */
 class PayPayWebClient{
   private session:PayPaySession|null;
   private changed=false;
   constructor(private account:PayPayAccount){
     const saved=account.session??null;
-    // Sessions saved before expiresAt existed are tried once and renewed on auth failure.
-    this.session=saved&&(!saved.expiresAt||saved.expiresAt>Date.now()+60_000)?saved:null;
+    this.session=payPaySessionValid(saved)?saved:null;
   }
 
   private async login():Promise<PayPaySession|null>{
-    const reply=await payPayOAuth({
-      scope:"SIGN_IN",client_uuid:this.account.uuid,grant_type:"password",
-      username:this.account.phone,password:this.account.password,add_otp_prefix:true,language:"ja"
-    });
-    this.session=reply.session;
-    if(reply.session) this.changed=true;
-    return reply.session;
-  }
-
-  private async ensure():Promise<PayPaySession|null>{
-    return this.session??await this.login();
+    const result=await payPayLoginStart(this.account.phone,this.account.password,this.account.uuid);
+    this.session=result.kind==="token"?result.session:null;
+    if(this.session) this.changed=true;
+    return this.session;
   }
 
   private async send(method:"GET"|"POST",url:string,referer:string,body?:unknown){
-    const session=await this.ensure();
+    const session=this.session??await this.login();
     if(!session) return {status:0,data:null as any,loginRequired:true};
     const response=await fetch(url,{
       method,
       headers:payPayHeaders(referer,{"Cookie":cookieHeader(session.cookies)}),
+      signal:AbortSignal.timeout(PAYPAY_TIMEOUT_MS),
       ...(body===undefined?{}:{body:JSON.stringify(body)})
     });
     const before=JSON.stringify(session.cookies);
     mergeCookies(session.cookies,response.headers);
     if(JSON.stringify(session.cookies)!==before) this.changed=true;
+    // Error responses (including HTTP 400) can carry a hold code, so always read JSON.
     const data:any=await response.json().catch(()=>null);
     return {status:response.status,data,loginRequired:false};
   }
@@ -233,20 +288,68 @@ class PayPayWebClient{
 
 /**
  * Authenticated link lookup (Web API). Returns the link JSON when PayPay answers
- * S0000, otherwise null. Requires the seller's PayPay account.
+ * S0000, otherwise null. Does not receive money.
  */
 export async function checkPayPayLink(link:string,account:PayPayAccount){
-  const code=payCode(link);
+  const code=normalizePayPayLink(link);
   if(!code) return null;
   const client=new PayPayWebClient(account);
   try{
-    const result=await client.linkInfo(code);
-    if(result.loginRequired||result.status!==200) return null;
+    const result=await client.linkInfo(code).catch(()=>null);
+    if(!result||result.loginRequired||result.status!==200) return null;
     if(result.data?.header?.resultCode!=="S0000") return null;
     return result.data;
   }finally{
     await client.persist();
   }
+}
+
+/** Amount shown by a looked-up link (pendingP2PInfo first, message data as fallback). */
+export function payPayLinkAmount(info:any):number{
+  const value=info?.payload?.pendingP2PInfo?.amount??info?.payload?.message?.data?.amount;
+  return typeof value==="number"?value:Number.NaN;
+}
+
+function parseIso(value:unknown):number|null{
+  if(typeof value!=="string"||!/(Z|[+-]\d{2}:?\d{2})$/.test(value)) return null;
+  const time=Date.parse(value);
+  return Number.isFinite(time)?time:null;
+}
+
+export type PayPayLinkCheck=
+  |{ok:true;orderId:string;messageId:string;chatId:string;requestAt:string;amount:number}
+  |{ok:false;reason:string;message:string};
+
+/**
+ * Validation of a pending link before acceptance (reference: validate_link_info).
+ * The amount must equal the order total exactly.
+ */
+export function validatePayPayLinkInfo(body:any,amount:number):PayPayLinkCheck{
+  const fail=(reason:string,message:string):PayPayLinkCheck=>({ok:false,reason,message});
+  if(!body||typeof body!=="object"||body?.header?.resultCode!=="S0000") return fail("INVALID","PayPayリンクを確認できませんでした。");
+  const p=body.payload;
+  if(!p||typeof p!=="object"||p.orderStatus!=="PENDING") return fail("NOT_PENDING","このリンクは未受取状態ではありません。別のリンクを使用してください。");
+  const info=p.pendingP2PInfo,message=p.message;
+  if(!info||typeof info!=="object"||!message||typeof message!=="object") return fail("MISSING_FIELDS","送金リンクの取引情報が不足しています。");
+  if(!Number.isInteger(info.amount)||info.amount!==amount||amount<1) return fail("AMOUNT_MISMATCH","PayPayリンクの送金金額と商品の合計額が一致しません。");
+  if(info.isLinkBlocked!==false||info.isSetPasscode!==false) return fail("BLOCKED_OR_PASSCODE","ブロック中またはパスコード付きのリンクは利用できません。");
+  const expiresAt=parseIso(info.expiredAt);
+  if(expiresAt===null||expiresAt<=Date.now()) return fail("EXPIRED","PayPayリンクの有効期限が切れているか、確認できません。");
+  const receiver=p.receiver,sender=p.sender;
+  if(!receiver||typeof receiver!=="object"||!sender||typeof sender!=="object") return fail("IDENTITY_MISSING","送金元・受取先を確認できませんでした。");
+  const receiverId=receiver.externalId,senderId=sender.externalId;
+  if(typeof receiverId!=="string"||!receiverId||typeof senderId!=="string"||!senderId) return fail("IDENTITY_MISSING","送金元・受取先の識別情報が不足しています。");
+  if(senderId===receiverId) return fail("SELF_PAYMENT","送金元と受取先が同一のリンクは利用できません。");
+  const data=message.data;
+  if(!data||typeof data!=="object") return fail("MESSAGE_MISSING","リンクのメッセージ情報が不足しています。");
+  const orderId=info.orderId;
+  if(typeof orderId!=="string"||!orderId||data.orderId!==orderId) return fail("ORDER_MISMATCH","リンクの注文情報が一致しません。");
+  if(data.amount!==amount||data.status!=="PENDING") return fail("MESSAGE_MISMATCH","リンクの金額・状態が一致しません。");
+  const messageId=message.messageId,chatId=message.chatRoomId,requestAt=data.transactionAt;
+  if(![messageId,chatId,requestAt].every(value=>typeof value==="string"&&value)||parseIso(requestAt)===null){
+    return fail("MESSAGE_INCOMPLETE","リンクの受取パラメータが不足しています。");
+  }
+  return {ok:true,orderId,messageId,chatId,requestAt,amount};
 }
 
 export type PayPayWalletSplit={
@@ -272,28 +375,41 @@ export function payPayWalletSplit(info:any):PayPayWalletSplit{
 function acceptConfirmed(status:number,body:any){
   return status===200&&
     body?.header?.resultCode==="S0000"&&
-    body?.payload?.orderStatus==="COMPLETED"&&
+    body?.payload!==null&&typeof body?.payload==="object"&&
+    body.payload.orderStatus==="COMPLETED"&&
     (body?.error===undefined||body?.error===null);
 }
 
+export type PayPayAcceptResult={ok:boolean;pending:boolean;amount:number;status:string;message?:string};
+
+/**
+ * Accept one link. Returns ok only after a confirmed acceptance. A timeout or
+ * network failure after the POST throws (result UNKNOWN): callers keep the order
+ * pending and must not blindly resend the same link.
+ */
 export async function acceptPayPayLink(
   link:string,
   account:PayPayAccount,
-  expectedAmount=1,
+  expectedAmount:number,
   options:{requirePayPayMoney?:boolean}={}
-):Promise<{ok:boolean;pending:boolean;amount:number;status:string}>{
-  const code=payCode(link);
+):Promise<PayPayAcceptResult>{
+  const code=normalizePayPayLink(link);
+  if(!code) return {ok:false,pending:false,amount:0,status:"BAD_LINK",message:"PayPay送金リンクが正しくありません。"};
   const client=new PayPayWebClient(account);
   try{
-    const lookup=code?await client.linkInfo(code):null;
-    if(lookup?.loginRequired) return {ok:false,pending:true,amount:0,status:"LOGIN_REQUIRED"};
-    const info=lookup&&lookup.status===200&&lookup.data?.header?.resultCode==="S0000"?lookup.data:null;
-    if(!info) return {ok:false,pending:false,amount:0,status:"INVALID"};
-    const amount=Number(info?.payload?.message?.data?.amount??0);
-    const status=String(info?.payload?.orderStatus??"UNKNOWN");
-    if(!Number.isSafeInteger(amount)||amount<expectedAmount){
-      return {ok:false,pending:false,amount,status:"AMOUNT_INSUFFICIENT"};
+    let lookup;
+    try{ lookup=await client.linkInfo(code); }
+    catch{ return {ok:false,pending:true,amount:0,status:"LINK_NETWORK",message:"PayPayリンク確認で通信エラーが発生しました。"}; }
+    if(lookup.loginRequired) return {ok:false,pending:true,amount:0,status:"LOGIN_REQUIRED"};
+    if(lookup.status!==200) return {ok:false,pending:false,amount:0,status:"INVALID",message:"PayPayリンクの確認に失敗しました。"};
+    const info=lookup.data;
+    const amount=payPayLinkAmount(info);
+    const orderStatus=String(info?.payload?.orderStatus??"UNKNOWN");
+    if(info?.header?.resultCode==="S0000"&&orderStatus!=="PENDING"){
+      return {ok:false,pending:false,amount,status:orderStatus,message:"このリンクは未受取状態ではありません。別のリンクを使用してください。"};
     }
+    const verified=validatePayPayLinkInfo(info,expectedAmount);
+    if(!verified.ok) return {ok:false,pending:false,amount,status:verified.reason,message:verified.message};
     if(options.requirePayPayMoney){
       const split=payPayWalletSplit(info);
       if(!split.known){
@@ -303,20 +419,13 @@ export async function acceptPayPayLink(
         return {ok:false,pending:false,amount,status:"PAYPAY_MONEY_LIGHT_NOT_ALLOWED"};
       }
     }
-    if(info?.payload?.pendingP2PInfo?.isSetPasscode){
-      return {ok:false,pending:false,amount,status:"PASSCODE_REQUIRED"};
-    }
-    if(status!=="PENDING") return {ok:false,pending:false,amount,status};
 
-    const message=info.payload.message??{};
-    const data=message.data??{};
-    const pendingInfo=info.payload.pendingP2PInfo??{};
     const receivePayload={
-      requestAt:typeof data.transactionAt==="string"&&data.transactionAt?data.transactionAt:jstRequestAt(),
-      orderId:pendingInfo.orderId??data.orderId,
+      requestAt:verified.requestAt,
+      orderId:verified.orderId,
       requestId:crypto.randomUUID(),
-      senderChannelUrl:message.chatRoomId,
-      senderMessageId:message.messageId,
+      senderChannelUrl:verified.chatId,
+      senderMessageId:verified.messageId,
       verificationCode:code,
       client_uuid:account.uuid,
       iosMinimumVersion:"3.45.0",
@@ -328,14 +437,24 @@ export async function acceptPayPayLink(
     if(acceptConfirmed(received.status,received.data)){
       return {ok:true,pending:false,amount,status:"COMPLETED"};
     }
-    if(holdCode(received.data)) return {ok:false,pending:true,amount,status:"TEMPORARY_HOLD"};
+    if(holdCode(received.data)) return {ok:false,pending:true,amount,status:"TEMPORARY_HOLD",message:PAYPAY_HOLD_NOTICE};
     // Link state alone cannot prove WHICH account received the money, so only a
-    // confirmed acceptance may authorize delivery. Anything else stays pending and
-    // is re-checked while the link is still PENDING.
-    return {ok:false,pending:true,amount,status:"PENDING"};
+    // confirmed acceptance may authorize delivery. Anything else stays pending.
+    return {ok:false,pending:true,amount,status:"PENDING",message:"PayPay受取結果を確認できませんでした。再購入せず販売者にお問い合わせください。"};
   }finally{
     await client.persist();
   }
+}
+
+export type PayPayRefreshOutcome="renewed"|"otp_required"|"rejected"|"network_error";
+
+/** Renew the Web session with the SAVED phone/password/client_uuid. Never submits an OTP. */
+export async function renewPayPaySession(account:PayPayAccount):Promise<{outcome:PayPayRefreshOutcome;session?:PayPaySession;code?:string|null}>{
+  const result=await payPayLoginStart(account.phone,account.password,account.uuid);
+  if(result.kind==="token") return {outcome:"renewed",session:result.session};
+  if(result.kind==="otp") return {outcome:"otp_required"};
+  if(result.kind==="network") return {outcome:"network_error"};
+  return {outcome:"rejected",code:result.code};
 }
 
 function kyashHeaders(clientUuid:string,installationUuid:string,accessToken?:string){

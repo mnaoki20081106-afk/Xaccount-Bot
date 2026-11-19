@@ -50,7 +50,7 @@ import {
   type DiscordUser
 } from "./discord";
 import { getPayPay } from "./vending-db";
-import { acceptPayPayLink, checkPayPayLink } from "./vending-payments";
+import { acceptPayPayLink, checkPayPayLink, normalizePayPayLink, validatePayPayLinkInfo } from "./vending-payments";
 import {
   BackupHttpError,
   backupRestoreSweep,
@@ -67,6 +67,7 @@ import {
   handleVendingCommand,
   handleVendingMedia,
   vendingSweep,
+  payPayRefreshSweep,
   VendingHttpError
 } from "./vending";
 import {
@@ -1360,7 +1361,7 @@ async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<string>{
   try{
     const account=await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY);
     if(account){
-      const result=await acceptPayPayLink(link,account);
+      const result=await acceptPayPayLink(link,account,payment.amount_yen);
       status=result.ok?"COMPLETED":result.pending?"PENDING":"FAILED";
       reason=result.status;
     }else{
@@ -1392,18 +1393,14 @@ async function submitShopLink(interaction:any,env:Env):Promise<Response>{
   if(!payPayAccount){
     return interactionResponse(ephemeral("販売者のPayPayが未登録です。"));
   }
+  if(!normalizePayPayLink(link)) return interactionResponse(ephemeral("PayPay送金リンクが正しくありません。"));
   const info:any=await checkPayPayLink(link,payPayAccount);
   if(!info) return interactionResponse(ephemeral("送金リンクを確認できませんでした。"));
-  const amount=Number(info?.payload?.message?.data?.amount??0);
-  if(!Number.isSafeInteger(amount)||amount<product.price_yen){
-    return interactionResponse(ephemeral(`金額が不足しています。必要: ${product.price_yen}円 / リンク: ${amount}円`));
-  }
-  if(info?.payload?.pendingP2PInfo?.isSetPasscode){
-    return interactionResponse(ephemeral("パスコード付きのリンクは使用できません。"));
-  }
   if(String(info?.payload?.orderStatus??"")!=="PENDING"){
     return interactionResponse(ephemeral("このリンクは既に受け取り・辞退・キャンセルされています。新しい送金リンクを入力してください。"));
   }
+  const verified=validatePayPayLinkInfo(info,product.price_yen);
+  if(!verified.ok) return interactionResponse(ephemeral(verified.message));
 
   const paymentId=randomId();
   try{
@@ -3573,6 +3570,7 @@ export default {
     keepRunning("auditWatch scheduled task failed",auditWatch(env));
     keepRunning("paymentSweep scheduled task failed",paymentSweep(env));
     keepRunning("vendingSweep scheduled task failed",vendingSweep(env));
+    keepRunning("payPayRefreshSweep scheduled task failed",payPayRefreshSweep(env));
 
     if(env.SECURITY_GATEWAY){
       keepRunning(

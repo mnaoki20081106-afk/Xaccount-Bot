@@ -9,6 +9,8 @@ import {
   acceptPayPayLink,
   checkPayPayLink,
   payPayWalletSplit,
+  payPayLinkAmount,
+  normalizePayPayLink,
   checkKyashLink,
   getKyashAccount,
   receiveKyashLink
@@ -457,12 +459,21 @@ export async function handleShiireServiceBridge(
           await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"PAYPAY_NOT_CONFIGURED"});
           return json(env,{error:"PAYPAY_NOT_CONFIGURED"},409);
         }
+        if(!normalizePayPayLink(link)){
+          await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"PAYPAY_LINK_INVALID"});
+          return json(env,{error:"PAYPAY_LINK_INVALID"},409);
+        }
         const info=await checkPayPayLink(link,account);
-        const linkAmount=Number(info?.payload?.message?.data?.amount??0);
+        const linkAmount=payPayLinkAmount(info);
         const currentStatus=String(info?.payload?.orderStatus??"");
         if(!info||!Number.isFinite(linkAmount)||linkAmount<amount){
           await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{linkAmount});
           return json(env,{error:"PAYPAY_AMOUNT_INSUFFICIENT",linkAmount,required:amount},409);
+        }
+        // The Web reference accepts only a link whose amount equals the order total.
+        if(linkAmount!==amount){
+          await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{linkAmount});
+          return json(env,{error:"PAYPAY_AMOUNT_MISMATCH",linkAmount,required:amount},409);
         }
         if(requirePayPayMoney){
           const split=payPayWalletSplit(info);

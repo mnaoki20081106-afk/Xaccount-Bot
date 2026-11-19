@@ -12,13 +12,17 @@ import {ensureVendingSchema,cleanVendingExpired,attachPaymentLink,savePayPay} fr
 import {handleShiireServiceBridge} from './src/shiire-bridge';
 import {handleSupplyBridge} from './src/supply-bridge';
 import {acceptPayPayLink,receiveKyashLink,saveKyashAccount} from './src/vending-payments';
-import {vendingSweep} from './src/vending';
+import {vendingSweep,payPayRefreshSweep} from './src/vending';
+import {getPayPay} from './src/vending-db';
 export default {async fetch(req,env){
  const u=new URL(req.url);
  if(u.pathname==='/init'){await ensureVendingSchema(env);await savePayPay(env,'shared-dashboard','test','test','test',env.SESSION_ENCRYPTION_KEY);await saveKyashAccount(env,'shared-dashboard',{email:'test',password:'test',clientUuid:'test',installationUuid:'test',accessToken:'test'});return Response.json({ok:true});}
  if(u.pathname==='/expire'){await cleanVendingExpired(env);return Response.json({ok:true});}
  if(u.pathname==='/sweep'){await vendingSweep(env);return Response.json({ok:true});}
  if(u.pathname==='/paypay') return Response.json(await acceptPayPayLink('test',{phone:'test',password:'test',uuid:'test'},100));
+ if(u.pathname==='/refresh'){await payPayRefreshSweep(env);const a=await getPayPay(env,'shared-dashboard',env.SESSION_ENCRYPTION_KEY);const st=await env.DB.prepare('SELECT paypay_requires_otp,paypay_last_error FROM vending_payment_accounts WHERE user_id=?').bind('shared-dashboard').first();return Response.json({session:a?.session??null,state:st});}
+ if(u.pathname==='/seed-session'){const a=await getPayPay(env,'shared-dashboard',env.SESSION_ENCRYPTION_KEY);await a.persistSession(await req.json());return Response.json({ok:true});}
+ if(u.pathname==='/paypay-web-text'){const t=await req.text();return Response.json(await acceptPayPayLink(t,{phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'},100));}
  if(u.pathname==='/paypay-web') return Response.json(await acceptPayPayLink('https://pay.paypay.ne.jp/AbCdEf123456',{phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'},100));
  if(u.pathname==='/kyash') return Response.json(await receiveKyashLink('test',{clientUuid:'test',installationUuid:'test',accessToken:'test'},100));
  return await handleSupplyBridge(req,env,u)??await handleShiireServiceBridge(req,env,u)??new Response('missing',{status:404});
@@ -37,10 +41,14 @@ async function fixture(options={}){
     senderEmoneyAmount:options.money??(options.amount??50),
     senderPrepaidAmount:options.moneyLight??0
    };
-   data.orderId='order-1';data.transactionAt='2026-10-29T19:48:00+09:00';
-   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',pendingP2PInfo:{orderId:'order-1',isSetPasscode:false,isLinkBlocked:false},message:{messageId:'msg-1',chatRoomId:'room-1',data}}});
+   data.orderId='order-1';data.transactionAt='2026-10-29T19:48:00+09:00';data.status=options.status??'PENDING';
+   const info={orderId:'order-1',amount:options.amount??50,isSetPasscode:false,isLinkBlocked:options.blocked??false,expiredAt:options.expiredAt??new Date(Date.now()+86400000).toISOString()};
+   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',pendingP2PInfo:info,sender:{externalId:'sender-1'},receiver:{externalId:options.selfPayment?'sender-1':'receiver-1'},message:{messageId:'msg-1',chatRoomId:'room-1',data}}});
   }
-  if(req.url.includes('/oauth/token'))return new Response(JSON.stringify({access_token:'oauth-access-token',expires_in:86400}),{headers:{'Content-Type':'application/json','Set-Cookie':'token=web-session-cookie; Path=/; HttpOnly; Secure'}});
+  if(req.url.includes('/oauth/token')){
+   if(options.oauth==='otp')return Response.json({otp_reference_id:'ref-1',otp_prefix:'ABCD'},{status:400});
+   return new Response(JSON.stringify({access_token:'oauth-access-token',expires_in:86400}),{headers:{'Content-Type':'application/json','Set-Cookie':'token=web-session-cookie; Path=/; HttpOnly; Secure'}});
+  }
   if(req.url.includes('acceptP2P')){
    if(options.acceptReply)return Response.json(options.acceptReply.body,{status:options.acceptReply.status??200});
    return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:'COMPLETED'},error:null});
@@ -103,7 +111,7 @@ test('expiration failure leaves reservation intact',async()=>{
 
 test('consumed PayPay link does not prove seller payment on pending receipt',async()=>{
  const {mf,db}=await fixture({status:'COMPLETED',amount:100});
- const input={method:'paypay',link:'test-link',amount:100,idempotencyKey:'payment-test-123'};
+ const input={method:'paypay',link:'TestLink123',amount:100,idempotencyKey:'payment-test-123'};
  await signed(mf,'/api/shiire/payment/receive',input);
  await db.prepare("UPDATE shiire_payment_receipts SET status='PENDING' WHERE idempotency_key=?").bind(input.idempotencyKey).run();
  const result=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
@@ -112,7 +120,7 @@ test('consumed PayPay link does not prove seller payment on pending receipt',asy
 });
 test('stockless PayPay receipt accepts PayPay Money only',async()=>{
  const {mf,calls}=await fixture({amount:100,money:100,moneyLight:0});
- const input={method:'paypay',link:'money-only-link',amount:100,idempotencyKey:'stockless-money-123',requirePayPayMoney:true};
+ const input={method:'paypay',link:'MoneyOnlyLink1',amount:100,idempotencyKey:'stockless-money-123',requirePayPayMoney:true};
  const response=await signed(mf,'/api/shiire/payment/receive',input);
  const result=await response.json();
  assert.equal(response.status,200);
@@ -122,7 +130,7 @@ test('stockless PayPay receipt accepts PayPay Money only',async()=>{
 });
 test('stockless PayPay receipt rejects Money Light before acceptance',async()=>{
  const {mf,calls}=await fixture({amount:100,money:0,moneyLight:100});
- const input={method:'paypay',link:'money-light-link',amount:100,idempotencyKey:'stockless-light-123',requirePayPayMoney:true};
+ const input={method:'paypay',link:'MoneyLightLink1',amount:100,idempotencyKey:'stockless-light-123',requirePayPayMoney:true};
  const response=await signed(mf,'/api/shiire/payment/receive',input);
  const result=await response.json();
  assert.equal(response.status,409);
@@ -133,7 +141,7 @@ test('stockless PayPay receipt rejects Money Light before acceptance',async()=>{
 });
 test('stockless PayPay receipt rejects unknown balance type before acceptance',async()=>{
  const {mf,calls}=await fixture({amount:100,omitSplit:true});
- const input={method:'paypay',link:'unknown-wallet-link',amount:100,idempotencyKey:'stockless-unknown-123',requirePayPayMoney:true};
+ const input={method:'paypay',link:'UnknownWallet1',amount:100,idempotencyKey:'stockless-unknown-123',requirePayPayMoney:true};
  const response=await signed(mf,'/api/shiire/payment/receive',input);
  const result=await response.json();
  assert.equal(response.status,409);
@@ -192,4 +200,58 @@ test('PayPay Web: hold codes stay pending and S0000 without COMPLETED is not a p
  const {mf}=await fixture({amount:100,acceptReply:{body:{header:{resultCode:'S0000'},payload:{orderStatus:'PENDING'}}}});
  const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
  assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(r.status,'PENDING');
+});
+
+test('PayPay Web: link must match the order exactly (reference validate_link_info)',async()=>{
+ const cases=[
+  [{amount:150},'AMOUNT_MISMATCH'],
+  [{amount:100,blocked:true},'BLOCKED_OR_PASSCODE'],
+  [{amount:100,selfPayment:true},'SELF_PAYMENT'],
+  [{amount:100,expiredAt:'2020-01-01T00:00:00Z'},'EXPIRED']
+ ];
+ for(const [options,reason] of cases){
+  const {mf,calls}=await fixture(options);
+  const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+  assert.equal(r.ok,false);assert.equal(r.pending,false);assert.equal(r.status,reason);
+  assert.equal(calls.some(u=>u.includes('acceptP2P')),false,reason+' must be rejected before acceptance');
+ }
+});
+test('PayPay Web: copied text with a second URL is rejected, a single link is accepted',async()=>{
+ const {mf,calls}=await fixture({amount:100});
+ const bad=await (await mf.dispatchFetch('https://test.example/paypay-web-text',{method:'POST',body:'受け取って https://pay.paypay.ne.jp/AbCdEf123456 https://evil.example/x'})).json();
+ assert.equal(bad.status,'BAD_LINK');
+ assert.equal(calls.some(u=>u.includes('paypay.ne.jp')),false);
+ const good=await (await mf.dispatchFetch('https://test.example/paypay-web-text',{method:'POST',body:'PayPayで送金しました https://pay.paypay.ne.jp/AbCdEf123456 。'})).json();
+ assert.equal(good.ok,true);
+});
+test('PayPay Web: session is renewed hourly with the saved UUID and never asks OTP silently',async()=>{
+ const {mf,requests}=await fixture();
+ const now=Date.now();
+ // Fresh session: not due.
+ await mf.dispatchFetch('https://test.example/seed-session',{method:'POST',body:JSON.stringify({accessToken:'old-access-token',cookies:{token:'old'},expiresAt:now+7000000,refreshedAt:now})});
+ let r=await (await mf.dispatchFetch('https://test.example/refresh')).json();
+ assert.equal(r.session.cookies.token,'old');
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,0);
+ // Refreshed more than an hour ago: renewed even though still valid.
+ await mf.dispatchFetch('https://test.example/seed-session',{method:'POST',body:JSON.stringify({accessToken:'old-access-token',cookies:{token:'old'},expiresAt:now+3000000,refreshedAt:now-3700000})});
+ r=await (await mf.dispatchFetch('https://test.example/refresh')).json();
+ assert.equal(r.session.cookies.token,'web-session-cookie');
+ assert.ok(r.session.expiresAt-Date.now()<=7200000,'session lifetime is capped at two hours');
+ assert.equal(r.state.paypay_last_error,null);
+ const login=requests.filter(q=>q.url.includes('/oauth/token'));
+ assert.equal(login.length,1);
+ assert.equal(JSON.parse(login[0].body).grant_type,'password');
+ assert.equal(JSON.parse(login[0].body).client_uuid,'test','the saved client_uuid is reused');
+ // Immediately afterwards nothing is due.
+ await mf.dispatchFetch('https://test.example/refresh');
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,1);
+});
+test('PayPay Web: OTP during renewal is recorded and not retried within the hour',async()=>{
+ const {mf,requests}=await fixture({oauth:'otp'});
+ let r=await (await mf.dispatchFetch('https://test.example/refresh')).json();
+ assert.equal(r.state.paypay_requires_otp,1);
+ assert.equal(r.state.paypay_last_error,'otp_required');
+ await mf.dispatchFetch('https://test.example/refresh');
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,1,'no repeated OTP-triggering logins');
+ assert.equal(requests.some(q=>q.body&&JSON.parse(q.body).grant_type==='otp'),false,'OTP is never submitted automatically');
 });
