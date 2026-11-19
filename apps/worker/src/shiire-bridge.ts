@@ -534,7 +534,8 @@ export async function handleShiireServiceBridge(
         }
         if(result.pending){
           await finishPaymentReceipt(env,idempotencyKey,"PENDING",result);
-          return json(env,{ok:false,status:"pending",amount:result.amount});
+          // reason (LOGIN_REQUIRED / LINK_UNAVAILABLE / TEMPORARY_HOLD / PENDING) lets the buyer see why.
+          return json(env,{ok:false,status:"pending",amount:result.amount,reason:result.status});
         }
         await finishPaymentReceipt(env,idempotencyKey,"REJECTED",result);
         return json(env,{ok:false,status:"rejected",amount:result.amount,reason:result.status},409);
