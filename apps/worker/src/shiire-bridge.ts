@@ -17,6 +17,7 @@ import {
   receiveKyashLink
 } from "./vending-payments";
 import { json, randomId, sha256Hex, withCors } from "./utils";
+import { createVmProduct, listVmProducts } from "./vending-db";
 
 const MAX_CLOCK_SKEW_MS=5*60_000;
 const OWNER_ID="shared-dashboard";
@@ -134,6 +135,108 @@ async function requireDashboardSession(request:Request,env:Env){
   if(!row) throw new Error("DASHBOARD_SESSION_EXPIRED");
 }
 
+class RetireError extends Error{
+  constructor(readonly status:number,readonly code:string,message:string){super(message);}
+}
+
+// The retired Discord-Shiire machines' products move to this Xaccount-Bot machine (user decision).
+export const RETIRE_TARGET_MACHINE_NAME="X垢";
+
+async function shiireJson<T>(env:Env,guildId:string,suffix:string,init:RequestInit={}):Promise<T>{
+  const response=await signedShiireFetch(env,"/bridge/main/guilds/"+guildId+suffix,init);
+  const text=await response.text();
+  let body:any=null;
+  try{body=text?JSON.parse(text):null;}catch{ /* not JSON */ }
+  if(!response.ok){
+    throw new RetireError(502,"SHIIRE_REQUEST_FAILED",
+      "仕入れbotの処理に失敗しました（"+suffix+" "+response.status+"）: "+String(body?.message??body?.error??text).slice(0,200));
+  }
+  return body as T;
+}
+
+type ShiireMachineView={id:string;name:string;active?:number;products:Array<{
+  id:string;name:string;description:string;price_paypay:number;price_kyash:number;emoji:string|null;procurement_class:string|null;
+}>;panels:Array<{channel_id:string;message_id:string}>};
+
+/**
+ * 旧仕入れbot自販機の廃止. Order matters and every step can be repeated:
+ *  1. the same-named products exist in the X垢 machine (reused when present)
+ *  2. HSTORA 仕入れ品 without a destination point at the product of their class
+ *     (never switched on here: enabling starts spending)
+ *  3. only then the old machines are deleted (panels removed, machine inactive)
+ */
+export async function retireShiireVending(env:Env,guildId:string){
+  // One run at a time per guild: two concurrent runs would both create the products.
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS shiire_retire_locks (guild_id TEXT PRIMARY KEY,expires_at INTEGER NOT NULL)").run();
+  const now=Date.now();
+  await env.DB.prepare("DELETE FROM shiire_retire_locks WHERE guild_id=? AND expires_at<?").bind(guildId,now).run();
+  const lock=await env.DB.prepare("INSERT OR IGNORE INTO shiire_retire_locks(guild_id,expires_at) VALUES (?,?)").bind(guildId,now+120_000).run();
+  if(Number(lock.meta.changes??0)!==1) throw new RetireError(409,"RETIRE_IN_PROGRESS","廃止処理を実行中です。しばらく待ってから再読み込みしてください。");
+  try{
+    return await retireShiireVendingLocked(env,guildId);
+  }finally{
+    await env.DB.prepare("DELETE FROM shiire_retire_locks WHERE guild_id=?").bind(guildId).run().catch(()=>undefined);
+  }
+}
+
+async function retireShiireVendingLocked(env:Env,guildId:string){
+  const machines=(await env.DB.prepare(
+    "SELECT id,name FROM vending_machines WHERE guild_id=? AND name=? AND active=1"
+  ).bind(guildId,RETIRE_TARGET_MACHINE_NAME).all<{id:string;name:string}>()).results;
+  if(machines.length!==1){
+    throw new RetireError(409,machines.length?"TARGET_MACHINE_AMBIGUOUS":"TARGET_MACHINE_NOT_FOUND",
+      machines.length
+        ?`「${RETIRE_TARGET_MACHINE_NAME}」という自販機が${machines.length}台あります。1台だけにしてから実行してください。`
+        :`「${RETIRE_TARGET_MACHINE_NAME}」という自販機が見つかりません。先に作成してください。`);
+  }
+  const target=machines[0]!;
+  const old=await shiireJson<ShiireMachineView[]>(env,guildId,"/vending");
+
+  const existing=await listVmProducts(env,target.id);
+  const byName=new Map(existing.map(row=>[row.name,row.id]));
+  const created:string[]=[];
+  const reused:string[]=[];
+  const productForClass=new Map<string,string>();
+  for(const machine of old){
+    for(const product of machine.products){
+      let id=byName.get(product.name);
+      if(id){
+        if(!created.includes(product.name)&&!reused.includes(product.name)) reused.push(product.name);
+      }else{
+        const made=await createVmProduct(env,target.id,{
+          name:product.name,
+          description:product.description??"",
+          pricePayPay:Math.max(0,Math.floor(Number(product.price_paypay)||0)),
+          priceKyash:Math.max(0,Math.floor(Number(product.price_kyash)||0)),
+          emoji:product.emoji??null
+        });
+        if(!made) throw new RetireError(500,"PRODUCT_CREATE_FAILED","「"+product.name+"」を作成できませんでした");
+        id=made.id;
+        byName.set(product.name,id);
+        created.push(product.name);
+      }
+      if(product.procurement_class&&!productForClass.has(product.procurement_class)) productForClass.set(product.procurement_class,id);
+    }
+  }
+
+  const procurement=await shiireJson<{items:Array<{id:string;name:string;template:string|null;condition:Record<string,string>;mainProductId:string|null}>}>(env,guildId,"/procurement");
+  const destinations:Array<{item:string;product:string}>=[];
+  for(const item of procurement.items){
+    const productId=item.template==="hstora"?productForClass.get(item.condition.class??""):undefined;
+    if(!productId||item.mainProductId) continue;
+    await shiireJson(env,guildId,"/procurement/items/"+encodeURIComponent(item.id),{method:"PATCH",body:JSON.stringify({mainProductId:productId})});
+    const name=[...byName].find(([,id])=>id===productId)?.[0]??productId;
+    destinations.push({item:item.name,product:name});
+  }
+
+  const retired:Array<{name:string;panelErrors:unknown[]}>=[];
+  for(const machine of old){
+    const result=await shiireJson<{ok:boolean;panelErrors?:unknown[]}>(env,guildId,"/vending/"+encodeURIComponent(machine.id),{method:"DELETE"});
+    retired.push({name:machine.name,panelErrors:result.panelErrors??[]});
+  }
+  return {ok:true,targetMachine:target.name,created,reused,destinations,retired};
+}
+
 export async function handleShiireDashboardProxy(
   request:Request,
   env:Env,
@@ -145,6 +248,14 @@ export async function handleShiireDashboardProxy(
   const guildId=match[1]!;
   await botJson(env,"/guilds/"+guildId);
   const suffix=match[2]??"";
+  if(suffix==="/retire-vending"&&request.method==="POST"){
+    try{
+      return withCors(env,json(env,await retireShiireVending(env,guildId)));
+    }catch(error){
+      if(error instanceof RetireError) return json(env,{error:error.code,message:error.message},error.status);
+      return json(env,{error:"RETIRE_FAILED",message:(error instanceof Error?error.message:String(error)).slice(0,300)},502);
+    }
+  }
   const target="/bridge/main/guilds/"+guildId+suffix+url.search;
   const body=["GET","HEAD"].includes(request.method)?"":await request.text();
   try{

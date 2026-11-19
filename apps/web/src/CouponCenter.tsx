@@ -42,16 +42,7 @@ export default function CouponCenter({
           rows.push(...details.flatMap(detail=>detail.coupons.map(coupon=>({...coupon,bot:"xaccount" as const,machineId:detail.id,machineName:detail.name}))));
         }catch(reason){ onError(reason); }
       })(),
-      (async()=>{
-        try{
-          // Coupons are only part of the per-machine detail response of the 仕入れbot.
-          const shiireList=await api<ShiireWithCoupons[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000);
-          shiire=await Promise.all(shiireList.map(machine=>
-            api<ShiireWithCoupons>(`/api/guilds/${guildId}/shiire/vending/${machine.id}`,{},30_000)
-          ));
-          setShiireError(null);
-        }catch(reason){ setShiireError(errorText(reason)); }
-      })()
+      // 仕入れbotの自販機は廃止済み（Xaccount-Botの自販機に一本化）。
     ]);
     rows.push(...shiire.flatMap(machine=>(machine.coupons??[]).map(coupon=>({...coupon,bot:"shiire" as const,machineId:machine.id,machineName:machine.name}))));
     setMachines(list);

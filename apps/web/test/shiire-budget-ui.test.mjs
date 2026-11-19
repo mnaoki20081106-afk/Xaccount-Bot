@@ -69,7 +69,7 @@ test('budget navigation validates percentages, saves the three classes and reloa
  const user=userEvent.setup();render(React.createElement(Shiire,props));
  await screen.findByText('$100');
  assert.equal(screen.queryByRole('spinbutton'),null,'overview contains no settings wall');
- assert.deepEqual(within(screen.getByRole('navigation')).getAllByRole('button').map(button=>button.textContent),['運用状況','仕入れ設定','販売設定','履歴と問題']);
+ assert.deepEqual(within(screen.getByRole('navigation')).getAllByRole('button').map(button=>button.textContent),['運用状況','仕入れ設定','履歴と問題']);
  await user.click(screen.getByRole('button',{name:'自動仕入れを開始'}));
  await screen.findByRole('button',{name:'自動仕入れを一時停止'});
  assert.deepEqual(automationWrites[0],{dry_run:false,auto_procurement_enabled:true,confirmLive:true});

@@ -73,12 +73,8 @@ export default function PanelOverview({
     setBusy(true);
     setLoadError("");
     try{
-      const [vending,shiire]=await Promise.all([
-        api<VendingPanelRow[]>(`/api/guilds/${guildId}/vending/panels`).catch(()=>[] as VendingPanelRow[]),
-        api<ShiireMachine[]>(`/api/guilds/${guildId}/shiire/vending`).catch(()=>[] as ShiireMachine[])
-      ]);
-      setVendingRows(vending);
-      setShiireMachines(shiire);
+      // 仕入れbotの自販機は廃止済み（Xaccount-Botの自販機に一本化）。
+      setVendingRows(await api<VendingPanelRow[]>(`/api/guilds/${guildId}/vending/panels`).catch(()=>[] as VendingPanelRow[]));
     }catch(reason){
       setLoadError(reason instanceof Error?reason.message:String(reason));
       onError(reason);
@@ -152,7 +148,7 @@ export default function PanelOverview({
         <article className="metric card">
           <span>自販機パネル</span>
           <strong>{totals.panels}</strong>
-          <small>自販機Bot + 仕入れBot</small>
+          <small>Xaccount-Botの自販機</small>
         </article>
         <article className="metric card">
           <span>Discordに設置済み</span>
@@ -172,7 +168,7 @@ export default function PanelOverview({
       </div>
 
       <div className="button-row wrap-row panel-overview-filter" role="tablist" aria-label="Botで絞り込み">
-        {(["all","自販機Bot","仕入れBot"] as const).map(value=>(
+        {(["all","自販機Bot"] as const).map(value=>(
           <button
             key={value}
             type="button"

@@ -1293,7 +1293,6 @@ export default function XGeneratorManager({ guildId, channels, onNotice, onError
                 <span>対象のBot</span>
                 <select value={restockSystem} onChange={e => setRestockSystem(e.target.value as RestockSystem)}>
                   <option value="vending">自販機Bot（自分で作る自販機）</option>
-                  <option value="shiire">仕入れBot（仕入れ連動の自販機）</option>
                 </select>
               </label>
               <label className="field">

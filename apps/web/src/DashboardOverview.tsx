@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import {
-  ConsoleChannel, Icon, Loading, ShiireMachineRow, channelName, errorText, yen
+  ConsoleChannel, Icon, Loading, channelName, errorText, yen
 } from "./console-ui";
 
 type Summary = {
@@ -47,16 +47,12 @@ export default function DashboardOverview({
   const [summary,setSummary]=useState<Summary|null>(null);
   const [panels,setPanels]=useState<PanelRow[]>([]);
   const [payments,setPayments]=useState<{paypay:boolean;kyash:boolean}|null>(null);
-  const [shiire,setShiire]=useState<ShiireMachineRow[]|null>(null);
-  const [shiireError,setShiireError]=useState<string|null>(null);
   const [busy,setBusy]=useState(false);
   const [loadError,setLoadError]=useState<string|null>(null);
   const [loaded,setLoaded]=useState(false);
-  const [shiireLoading,setShiireLoading]=useState(true);
 
   async function load(){
-    // Own data and the 仕入れbot load in parallel; the latter is a separate worker.
-    await Promise.all([loadOwn(),loadShiire()]);
+    await loadOwn();
   }
 
   async function loadOwn(){
@@ -76,20 +72,6 @@ export default function DashboardOverview({
     }finally{
       setBusy(false);
       setLoaded(true);
-    }
-  }
-
-  async function loadShiire(){
-    // Its absence must not hide this bot's data.
-    setShiireLoading(true);
-    try{
-      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000));
-      setShiireError(null);
-    }catch(reason){
-      setShiire(null);
-      setShiireError(errorText(reason));
-    }finally{
-      setShiireLoading(false);
     }
   }
 
@@ -116,9 +98,6 @@ export default function DashboardOverview({
     }catch(reason){ onError(reason); }
     finally{ setBusy(false); }
   }
-
-  const shiireStock=(shiire??[]).reduce((sum,machine)=>
-    sum+(machine.products??[]).reduce((inner,product)=>inner+(product.stockless_enabled?0:product.stock_count),0),0);
 
   return (
     <>
@@ -168,11 +147,6 @@ export default function DashboardOverview({
           <span>Kyash</span>
           <strong>● {payments?(payments.kyash?"連携中（有効）":"未接続"):"—"}</strong>
           <small>{payments?.kyash?"決済受付稼働中":"PayPay設定から接続"}</small>
-        </article>
-        <article className="xc-stat plain">
-          <span>仕入れbot（別Bot）</span>
-          <strong>{shiire?shiire.length:shiireLoading?"…":"—"}</strong>
-          <small>{shiire?`自販機 / 在庫 ${shiireStock}`:shiireLoading?"読み込み中…":"未接続または未設定"}</small>
         </article>
       </section>
 
@@ -254,38 +228,12 @@ export default function DashboardOverview({
                   </td>
                 </tr>
               ))}
-              {(shiire??[]).map(machine=>{
-                const products=machine.products??[];
-                const panel=machine.panels?.[0];
-                return (
-                  <tr key={"shiire:"+machine.id}>
-                    <td><span className="xc-name">{machine.name}</span></td>
-                    <td><span className="xc-pill orange">別Bot · 仕入れbot</span></td>
-                    <td>{panel?<span className="xc-pill green">● 稼働中</span>:<span className="xc-pill gray">未設置</span>}</td>
-                    <td>{panel?<span style={{color:"#9aa5ff"}}>#{channelName(channels,panel.channel_id)}</span>:"—"}</td>
-                    <td>{products.length} 件</td>
-                    <td style={{color:"#2fd39a",fontWeight:800}}>
-                      {products.reduce((sum,product)=>sum+(product.stockless_enabled?0:product.stock_count),0)} 個
-                    </td>
-                    <td>{products.reduce((sum,product)=>sum+(product.sales_count||0),0)}</td>
-                    <td className="actions">
-                      <button type="button" className="xc-btn tiny edit" onClick={()=>onEditShiire(machine.id)}>仕入れbotで管理</button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {shiireLoading&&!shiire&&(
-                <tr><td colSpan={8}><Loading label="仕入れbotの自販機を読み込み中…" /></td></tr>
-              )}
-              {loaded&&!shiireLoading&&panels.length===0&&(shiire??[]).length===0&&(
+              {loaded&&panels.length===0&&(
                 <tr><td colSpan={8} className="xc-empty">まだ自販機がありません。「自販機 &amp; 商品管理」から作成してください。</td></tr>
               )}
             </tbody>
           </table>
         </div>
-        {shiireError&&(
-          <p className="muted" style={{marginTop:10,fontSize:12}}>仕入れbot（別Bot）の自販機は取得できませんでした: {shiireError}</p>
-        )}
       </section>
     </>
   );

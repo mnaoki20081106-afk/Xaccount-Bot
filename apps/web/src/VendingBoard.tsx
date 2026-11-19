@@ -31,9 +31,6 @@ export default function VendingBoard({
   const [machines,setMachines]=useState<BoardMachine[]>([]);
   const [loaded,setLoaded]=useState(false);
   const [busy,setBusy]=useState(false);
-  const [shiire,setShiire]=useState<ShiireMachineRow[]|null>(null);
-  const [shiireError,setShiireError]=useState<string|null>(null);
-  const [shiireLoading,setShiireLoading]=useState(true);
   const [creating,setCreating]=useState(false);
   const [newName,setNewName]=useState("");
   const [addingTo,setAddingTo]=useState<string|null>(null);
@@ -65,20 +62,8 @@ export default function VendingBoard({
     }catch(reason){ onError(reason); }
     finally{ setBusy(false); }
   }
-  async function loadShiire(){
-    setShiireLoading(true);
-    try{
-      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000));
-      setShiireError(null);
-    }catch(reason){
-      setShiire(null);
-      setShiireError(errorText(reason));
-    }finally{
-      setShiireLoading(false);
-    }
-  }
   async function load(){
-    await Promise.all([loadOwn(),loadShiire()]);
+    await loadOwn();
   }
 
   useEffect(()=>{ void load(); },[guildId]);
@@ -487,63 +472,6 @@ export default function VendingBoard({
         </section>
       ))}
 
-      <div className="xc-bot-banner" role="note">
-        <span aria-hidden="true">🔗</span>
-        <span>
-          <strong>ここから下は別Bot「仕入れbot（Discord-Shiire）」の自販機です。</strong><br />
-          Xアカウントの自動仕入れ在庫を販売・納品するのは仕入れbotです。価格・パネル・在庫の編集は「仕入れbot」画面で行います（決済受取はこの管理画面のPayPay/Kyash設定を共有）。
-        </span>
-      </div>
-
-      {shiireLoading&&!shiire&&<section className="xc-card"><Loading label="仕入れbotの自販機を読み込み中…（別Botのため少し時間がかかります）" /></section>}
-      {!shiireLoading&&shiireError&&(
-        <section className="xc-card xc-empty">
-          仕入れbotに接続できませんでした: {shiireError}
-          <div style={{marginTop:10}}><button type="button" className="xc-btn ghost tiny" onClick={()=>void loadShiire()}>再読み込み</button></div>
-        </section>
-      )}
-      {shiire&&shiire.length===0&&<section className="xc-card xc-empty">仕入れbotの自販機はまだありません。</section>}
-
-      {(shiire??[]).map(machine=>{
-        const products=machine.products??[];
-        const panel=machine.panels?.[0]??null;
-        return (
-          <section key={machine.id} className="xc-card xc-machine other-bot" aria-label={machine.name+"（仕入れbot）"}>
-            <div className="xc-machine-head">
-              <div className="xc-machine-title">
-                <h2>{machine.name}</h2>
-                <span className="xc-pill orange">別Bot · 仕入れbot</span>
-                {panel
-                  ?<span className="xc-pill green">✅ パネル稼働中 (#{channelName(channels,panel.channel_id)})</span>
-                  :<span className="xc-pill gray">パネル未設置</span>}
-              </div>
-              <div className="xc-machine-actions">
-                <button type="button" className="xc-btn ghost" onClick={()=>onEditShiire(machine.id)}>仕入れbotで管理 →</button>
-              </div>
-            </div>
-            <div className="xc-table-wrap">
-              <table className="xc-table">
-                <thead><tr><th>#</th><th>商品名</th><th>価格</th><th>発送タイプ</th><th>在庫数</th><th>販売数</th><th>説明</th><th>アクション</th></tr></thead>
-                <tbody>
-                  {products.map((product,index)=>(
-                    <tr key={product.id}>
-                      <td className="muted">{index+1}</td>
-                      <td><span className="xc-name"><span className="emoji">{product.emoji||"📦"}</span>{product.name}</span></td>
-                      <td className="price">{yen(product.price_paypay)}<small>{product.price_kyash===product.price_paypay?"PayPay / Kyash":`PayPay · Kyash ${yen(product.price_kyash)}`}</small></td>
-                      <td>{product.stockless_enabled?<span className="xc-pill orange">⏳ 無在庫販売（注文後に仕入れ）</span>:<span className="xc-pill blue">🚚 自動仕入れ在庫</span>}</td>
-                      <td><span className={`xc-pill ${product.stock_count===0?"red":"green"}`}>在庫 {product.stock_count}</span></td>
-                      <td>{product.sales_count}</td>
-                      <td className={product.description?"desc":"muted"}>{product.description||"-"}</td>
-                      <td className="actions"><button type="button" className="xc-btn tiny edit" onClick={()=>onEditShiire(machine.id)}>仕入れbotで編集</button></td>
-                    </tr>
-                  ))}
-                  {products.length===0&&<tr><td colSpan={8} className="xc-empty">商品がありません。</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      })}
       {previewMachine&&(
         <Modal title={previewMachine.name+" のプレビュー"} onClose={()=>setPreviewId(null)} wide>
           <div className="xc-discord-preview">

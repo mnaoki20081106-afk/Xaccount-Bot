@@ -1,7 +1,6 @@
 import { DEFAULT_RESTOCK_MESSAGE, renderRestockMessage, validateRestockMessage } from "./shiire-restock-message";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
-import ShiireVendingManager from "./ShiireVendingManager";
 import "./shiire-operations.css";
 
 type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
@@ -144,7 +143,6 @@ const budgetCategories=[
 const sections:Array<{id:Section;label:string}>=[
   {id:"overview",label:"運用状況"},
   {id:"budget",label:"仕入れ設定"},
-  {id:"vending",label:"販売設定"},
   {id:"logs",label:"履歴と問題"}
 ];
 function purchasePatches(budget:ProcurementBudgetDetail,controls:ProcurementControls,restock:DailyRestockDetail){
@@ -316,12 +314,6 @@ export default function ShiireOperationsCenter({
     view==="payments"?[{id:"overview",label:"運用状況"},{id:"funding",label:"資金・安全装置"}]
     :view==="history"?[{id:"logs",label:"履歴と問題"},{id:"procurement",label:"購入履歴・購入条件"}]
     :null;
-  const focusedMachineRef=useRef<string|null>(null);
-  useEffect(()=>{
-    if(!focusMachineId||focusMachineId===focusedMachineRef.current) return;
-    focusedMachineRef.current=focusMachineId;
-    setSection("vending");
-  },[focusMachineId]);
   const [advanced,setAdvanced]=useState(false);
   const savedPurchase=useRef<Record<string,string>>({});
   const mainSection=viewSections
@@ -1090,7 +1082,7 @@ export default function ShiireOperationsCenter({
             <ol>
               <li><a href="https://hstora.com/en/wallet" target="_blank" rel="noreferrer">仕入れ先へ入金</a>。ExodusなどのウォレットからLTCを送金すると、反映後に仕入れ予算へ配分されます。</li>
               <li>「仕入れ設定」で予算の割合・在庫目標・単価上限を保存。</li>
-              <li>「販売設定」で価格を決め、Discordへ販売画面を設置。</li>
+              <li>販売価格とDiscordの販売画面は「自販機 &amp; 商品管理」（Xaccount-Botの自販機）で設定。</li>
             </ol>
             <div className="shiire-callout neutral" role="status">
               <strong>{overview.safety.emergencyStop?"次に：停止原因を確認し、停止解除":overview.providerIssues?.length?"次に：接続エラーを確認":overview.safety.dryRun?"次に：テスト運転を終了して自動仕入れを開始":!overview.safety.autoProcurementEnabled?"次に：自動仕入れを開始":Number(hstoraBalance?.balance??0)<=0?"次に：HStoraへLTCを補充":"自動仕入れは有効です。通常在庫は18:00に差分補充します。"}</strong>
@@ -1174,7 +1166,7 @@ export default function ShiireOperationsCenter({
               </div>
             </fieldset>
             <fieldset className="shiire-settings-group" disabled={controlBusy||detailBusy}>
-              <legend>3. 1個あたりの仕入れ上限</legend><p>この金額を超える商品は購入しません。販売価格は「販売設定」で決めます。</p>
+              <legend>3. 1個あたりの仕入れ上限</legend><p>この金額を超える商品は購入しません。販売価格は「自販機 &amp; 商品管理」で決めます。</p>
               <div className="form-grid two">
                 <FundingInput label="シャドウバンなしの単価上限（USD）" value={procurementControls.max_no_shadowban_unit_price_usd} step={0.01} onChange={value=>setProcurementControls({...procurementControls,max_no_shadowban_unit_price_usd:value})} />
                 <FundingInput label="検索上位の単価上限（円）" value={procurementControls.max_unit_price_jpy} step={1} onChange={value=>setProcurementControls({...procurementControls,max_unit_price_jpy:value})} />
@@ -1947,17 +1939,6 @@ export default function ShiireOperationsCenter({
         </>
       )}
 
-      {section==="vending"&&(
-        <ShiireVendingManager
-          key={"ShiireVendingManager:"+guildId}
-          guildId={guildId}
-          channels={channels}
-          roles={roles}
-          onNotice={onNotice}
-          onError={onError}
-          focusMachineId={focusMachineId}
-        />
-      )}
 
       {section==="logs"&&(
         <>

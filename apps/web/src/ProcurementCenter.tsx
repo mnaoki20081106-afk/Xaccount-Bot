@@ -58,6 +58,7 @@ export default function ProcurementCenter({
   const [data,setData]=useState<Overview|null>(null);
   const [loadError,setLoadError]=useState<string|null>(null);
   const [machines,setMachines]=useState<Machine[]|null>(null);
+  const [retireResult,setRetireResult]=useState<string[]|null>(null);
   const [busy,setBusy]=useState(false);
   const [restockTime,setRestockTime]=useState("18:00");
   const [editing,setEditing]=useState<{id:string|null;draft:ItemDraft}|null>(null);
@@ -319,6 +320,31 @@ export default function ProcurementCenter({
                 </div>
               ))}
             </div>
+          </details>
+
+          <details className="xc-card">
+            <summary style={{cursor:"pointer",fontWeight:800}}>旧仕入れbot自販機の廃止</summary>
+            <p className="muted" style={{fontSize:13}}>
+              仕入れbotの自販機の商品を、Xaccount-Botの「X垢」自販機に同じ名前・説明・価格・絵文字で作成し（同名の商品があればそれを使います）、
+              HSTORAの仕入れ品で補充先が未設定のものに設定します（有効化はしません）。そのあと旧自販機のDiscordパネルを削除し、旧自販機を停止します。
+              何度実行しても商品は重複しません。
+            </p>
+            <button type="button" className="xc-btn red" disabled={busy}
+              onClick={()=>{
+                if(!window.confirm("旧仕入れbot自販機を廃止しますか？設置済みのパネルはDiscordから削除されます。")) return;
+                void run(async()=>{
+                  const result=await api<{created:string[];reused:string[];destinations:Array<{item:string;product:string}>;retired:Array<{name:string;panelErrors:unknown[]}>}>(
+                    `/api/guilds/${guildId}/shiire/retire-vending`,{method:"POST",body:"{}"},120_000);
+                  setRetireResult([
+                    result.created.length?`作成した商品: ${result.created.join("、")}`:"新しく作成した商品はありません",
+                    result.reused.length?`既存の商品を使用: ${result.reused.join("、")}`:"",
+                    ...result.destinations.map(row=>`補充先を設定: ${row.item} → ${row.product}`),
+                    result.retired.length?`廃止した自販機: ${result.retired.map(row=>row.name+(row.panelErrors.length?`（削除できなかったパネル ${row.panelErrors.length}件）`:"")).join("、")}`:"廃止する自販機はありませんでした"
+                  ].filter(Boolean));
+                  await load();
+                },"旧仕入れbot自販機の廃止処理が完了しました");
+              }}>廃止を実行</button>
+            {retireResult&&<ul style={{fontSize:13,marginTop:10}}>{retireResult.map(line=><li key={line}>{line}</li>)}</ul>}
           </details>
         </>
       )}

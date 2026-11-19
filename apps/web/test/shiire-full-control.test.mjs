@@ -54,32 +54,3 @@ test("main dashboard wording reflects minute funding detection and 18:00 ordinar
   assert.match(source,/通常在庫は18:00/);
   assert.match(source,/18時の入荷まとめ通知/);
 });
-
-
-const vendingSource=readFileSync(
-  new URL("../src/ShiireVendingManager.tsx",import.meta.url),
-  "utf8"
-);
-
-test("legacy vending screen no longer owns a second procurement settings form",()=>{
-  assert.doesNotMatch(vendingSource,/async function saveProcurementSettings/);
-  assert.match(vendingSource,/仕入れの予算・在庫目標は「仕入れ設定」で変更/);
-});
-
-
-test("vending editor presets the requested sales names descriptions and prices",()=>{
-  assert.match(vendingSource,/Search Top \+ No shadow ban/);
-  assert.match(vendingSource,/検索上位に載るシャドバンされてない垢です。/);
-  assert.match(vendingSource,/price:350/);
-  assert.match(vendingSource,/【old】Search Top \+ No shadow ban/);
-  assert.match(vendingSource,/検索上位にのるシャドバンされていないOld垢です。より運用向きです！/);
-  assert.match(vendingSource,/price:500/);
-});
-
-
-test("vending price edits can repost existing Discord panels",()=>{
-  assert.match(vendingSource,/設置済みメッセージの修復/);
-  assert.match(vendingSource,/既設パネルを削除して再設置/);
-  assert.match(vendingSource,/repostPanels:true/);
-  assert.match(vendingSource,/\/panel\/repost/);
-});
