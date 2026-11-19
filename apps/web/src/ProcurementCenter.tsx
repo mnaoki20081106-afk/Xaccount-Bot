@@ -7,12 +7,13 @@ type Channel={id:string;name:string;type?:string;botCanPost?:boolean};
 type Role={id:string;name:string;position:number;isEveryone:boolean};
 
 type Field={key:string;label:string;type:"text"|"url"|"secret"|"select"|"number";required?:boolean;placeholder?:string;help?:string;options?:Array<{value:string;label:string}>};
-type Template={id:string;label:string;description:string;fields:Field[];conditionFields:Field[]};
+type Template={id:string;label:string;description:string;fields:Field[];conditionFields:Field[];supportsAmountCaps?:boolean};
 type Supplier={id:string;name:string;template:string;templateLabel:string;config:Record<string,string>;configuredSecrets:string[];enabled:boolean};
 type Item={
   id:string;name:string;supplierId:string;supplierName:string|null;template:string|null;templateLabel:string|null;
   condition:Record<string,string>;mainProductId:string|null;destinationLabel:string|null;
   minStock:number;targetStock:number;maxStock:number;maxBatch:number;budgetPercent:number;enabled:boolean;
+  maxPurchaseJpy:number;dailyLimitJpy:number;maxUnitPriceJpy:number;
   destinationAvailable:number|null;destinationMissing:boolean;waitingTransfer:number|null;
   lastJob:{status:string;requested:number;delivered:number;error:string|null;updatedAt:number}|null;
 };
@@ -22,6 +23,7 @@ type Machine={id:string;name:string;products:Array<{id:string;name:string;availa
 type ItemDraft={
   name:string;supplierId:string;condition:Record<string,string>;machineId:string;mainProductId:string;
   minStock:number;targetStock:number;maxStock:number;maxBatch:number;budgetPercent:number;enabled:boolean;
+  maxPurchaseJpy:number;dailyLimitJpy:number;maxUnitPriceJpy:number;
 };
 type SupplierDraft={id?:string;name:string;template:string;config:Record<string,string>;secrets:Record<string,string>};
 
@@ -96,11 +98,13 @@ export default function ProcurementCenter({
       setEditing({id:item.id,draft:{
         name:item.name,supplierId:item.supplierId,condition:{...item.condition},
         machineId:"",mainProductId:item.mainProductId??"",minStock:item.minStock,targetStock:item.targetStock,
-        maxStock:item.maxStock,maxBatch:item.maxBatch,budgetPercent:item.budgetPercent,enabled:item.enabled
+        maxStock:item.maxStock,maxBatch:item.maxBatch,budgetPercent:item.budgetPercent,enabled:item.enabled,
+        maxPurchaseJpy:item.maxPurchaseJpy??0,dailyLimitJpy:item.dailyLimitJpy??0,maxUnitPriceJpy:item.maxUnitPriceJpy??0
       }});
     }else{
       setEditing({id:null,draft:{name:"",supplierId:suppliers[0]?.id??NEW_SUPPLIER,condition:{},machineId:"",mainProductId:"",
-        minStock:1,targetStock:5,maxStock:0,maxBatch:10,budgetPercent:0,enabled:false}});
+        minStock:1,targetStock:5,maxStock:0,maxBatch:10,budgetPercent:0,enabled:false,
+        maxPurchaseJpy:0,dailyLimitJpy:0,maxUnitPriceJpy:0}});
       if(!suppliers.length) setSupplierDraft({name:"",template:templates[0]?.id??"custom_api",config:{},secrets:{}});
       // HSTORA can be registered only once; new suppliers default to another template then.
     }
@@ -135,7 +139,11 @@ export default function ProcurementCenter({
       const payload={
         name:editing.draft.name,supplierId,condition:editing.draft.condition,mainProductId:editing.draft.mainProductId,
         minStock:editing.draft.minStock,targetStock:editing.draft.targetStock,maxStock:editing.draft.maxStock,
-        maxBatch:editing.draft.maxBatch,budgetPercent:editing.draft.budgetPercent,enabled:editing.draft.enabled
+        maxBatch:editing.draft.maxBatch,budgetPercent:editing.draft.budgetPercent,enabled:editing.draft.enabled,
+        // Suppliers without unit prices cannot enforce caps; the server refuses non-zero values for them.
+        maxPurchaseJpy:capsSupported?editing.draft.maxPurchaseJpy:0,
+        dailyLimitJpy:capsSupported?editing.draft.dailyLimitJpy:0,
+        maxUnitPriceJpy:capsSupported?editing.draft.maxUnitPriceJpy:0
       };
       if(editing.id) await api(base+"/items/"+editing.id,{method:"PATCH",body:JSON.stringify(payload)},30_000);
       else await api(base+"/items",{method:"POST",body:JSON.stringify(payload)},30_000);
@@ -153,6 +161,7 @@ export default function ProcurementCenter({
   const editingTemplate=editing
     ?editing.draft.supplierId===NEW_SUPPLIER?templateById(supplierDraft?.template):templateById(supplierById(editing.draft.supplierId)?.template)
     :null;
+  const capsSupported=Boolean(editingTemplate?.supportsAmountCaps);
   const selectedMachine=useMemo(()=>machines?.find(row=>row.id===editing?.draft.machineId)??null,[machines,editing?.draft.machineId]);
 
   function supplierFields(draft:SupplierDraft,setDraft:(next:SupplierDraft)=>void,existing:Supplier|null){
@@ -265,7 +274,11 @@ export default function ProcurementCenter({
                         {item.maxStock>0&&<small className="muted"> （上限 {item.maxStock}）</small>}
                         {item.waitingTransfer?<small className="muted" style={{display:"block",fontSize:12}}>移動待ち {item.waitingTransfer}</small>:null}
                       </td>
-                      <td>{item.budgetPercent}%</td>
+                      <td>{item.budgetPercent}%
+                        {[item.maxPurchaseJpy>0&&`1回 ¥${item.maxPurchaseJpy.toLocaleString("ja-JP")}`,item.dailyLimitJpy>0&&`1日 ¥${item.dailyLimitJpy.toLocaleString("ja-JP")}`,item.maxUnitPriceJpy>0&&`単価 ¥${item.maxUnitPriceJpy.toLocaleString("ja-JP")}`].filter(Boolean).map(text=>(
+                          <small key={String(text)} className="muted" style={{display:"block",fontSize:12}}>{text}</small>
+                        ))}
+                      </td>
                       <td>
                         {item.enabled?<span className="xc-pill green">有効</span>:<span className="xc-pill gray">停止中</span>}
                         {item.lastJob&&<small className="muted" style={{display:"block",fontSize:12}} title={item.lastJob.error??undefined}>{jobLabel(item.lastJob)}</small>}
@@ -384,6 +397,18 @@ export default function ProcurementCenter({
                   <small className="muted">共通ウォレットの資金のうち、この仕入れ品に割り当てる割合。全仕入れ品の合計は100%まで。</small>
                 </label>
               </div>
+              {capsSupported?(
+                <>
+                  <div className="two">
+                    <label>1回の金額上限（円、0 = なし）<input type="number" min={0} step={1} value={editing.draft.maxPurchaseJpy} onChange={event=>setEditing({...editing,draft:{...editing.draft,maxPurchaseJpy:Number(event.target.value)}})} /></label>
+                    <label>1日の金額上限（円、0 = なし）<input type="number" min={0} step={1} value={editing.draft.dailyLimitJpy} onChange={event=>setEditing({...editing,draft:{...editing.draft,dailyLimitJpy:Number(event.target.value)}})} /></label>
+                    <label>単価の上限（円、0 = なし）<input type="number" min={0} step={1} value={editing.draft.maxUnitPriceJpy} onChange={event=>setEditing({...editing,draft:{...editing.draft,maxUnitPriceJpy:Number(event.target.value)}})} /></label>
+                  </div>
+                  <small className="muted">上限を超える分は仕入れません（1日は日本時間0時区切り、処理中の注文も含めて計算）。支払い・ウォレットの全体の上限も同時に効きます。</small>
+                </>
+              ):(
+                <small className="muted">この仕入れ先は価格を返さないため、金額上限は設定できません。</small>
+              )}
             </fieldset>
 
             <label style={{display:"flex",alignItems:"center",gap:8}}>
