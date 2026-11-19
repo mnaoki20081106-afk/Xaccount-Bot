@@ -1,7 +1,7 @@
 import { FormEvent, Fragment, useEffect, useState } from "react";
 import { api } from "./api";
 import {
-  ConsoleChannel, Icon, ShiireMachineRow, VmDetail, VmMachine, VmPanelRow, VmProduct,
+  ConsoleChannel, Icon, Loading, ShiireMachineRow, VmDetail, VmMachine, VmPanelRow, VmProduct,
   channelName, errorText, postableChannels, yen
 } from "./console-ui";
 
@@ -30,6 +30,7 @@ export default function VendingBoard({
   const [busy,setBusy]=useState(false);
   const [shiire,setShiire]=useState<ShiireMachineRow[]|null>(null);
   const [shiireError,setShiireError]=useState<string|null>(null);
+  const [shiireLoading,setShiireLoading]=useState(true);
   const [creating,setCreating]=useState(false);
   const [newName,setNewName]=useState("");
   const [addingTo,setAddingTo]=useState<string|null>(null);
@@ -40,7 +41,8 @@ export default function VendingBoard({
 
   const postable=postableChannels(channels);
 
-  async function load(){
+  // Both bots load in parallel; the 仕入れbot (another worker) can take several seconds.
+  async function loadOwn(){
     setBusy(true);
     try{
       const [list,panels]=await Promise.all([
@@ -52,13 +54,21 @@ export default function VendingBoard({
       setLoaded(true);
     }catch(reason){ onError(reason); }
     finally{ setBusy(false); }
+  }
+  async function loadShiire(){
+    setShiireLoading(true);
     try{
-      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`));
+      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000));
       setShiireError(null);
     }catch(reason){
       setShiire(null);
       setShiireError(errorText(reason));
+    }finally{
+      setShiireLoading(false);
     }
+  }
+  async function load(){
+    await Promise.all([loadOwn(),loadShiire()]);
   }
 
   useEffect(()=>{ void load(); },[guildId]);
@@ -80,7 +90,7 @@ export default function VendingBoard({
       await api(`/api/guilds/${guildId}/vending`,{method:"POST",body:JSON.stringify({name})});
       setNewName("");
       setCreating(false);
-      await load();
+      await loadOwn();
     },"自販機「"+name+"」を作成しました");
   }
 
@@ -107,7 +117,7 @@ export default function VendingBoard({
         body:JSON.stringify({channelId,replacePrevious:true})
       });
       setChannelEdit(null);
-      await load();
+      await loadOwn();
       if(result.previousRemoved===false){
         onError(new Error("新しいパネルは設置しましたが、旧パネルのメッセージを削除できませんでした。Discord側で削除してください"));
       }
@@ -118,7 +128,7 @@ export default function VendingBoard({
     if(!window.confirm(`自販機「${machine.name}」を削除しますか？商品・在庫も利用できなくなります。`)) return;
     await run(async()=>{
       await api(`/api/guilds/${guildId}/vending/${machine.id}`,{method:"DELETE"});
-      await load();
+      await loadOwn();
     },"自販機を削除しました");
   }
 
@@ -139,7 +149,7 @@ export default function VendingBoard({
       });
       setProductForm(emptyProduct);
       setAddingTo(null);
-      await load();
+      await loadOwn();
     },"商品を追加しました");
   }
 
@@ -157,7 +167,7 @@ export default function VendingBoard({
       });
     }catch(reason){
       onError(reason);
-      await load();
+      await loadOwn();
     }
   }
 
@@ -165,7 +175,7 @@ export default function VendingBoard({
     if(!window.confirm(`商品「${product.name}」を削除しますか？`)) return;
     await run(async()=>{
       await api(`/api/guilds/${guildId}/vending/${machine.id}/products/${product.id}`,{method:"DELETE"});
-      await load();
+      await loadOwn();
     },"商品を削除しました");
   }
 
@@ -178,7 +188,7 @@ export default function VendingBoard({
         body:JSON.stringify({lines})
       });
       setStockText("");
-      await load();
+      await loadOwn();
       onNotice(`${product.name} に在庫を${result.added}件追加しました`);
     });
   }
@@ -206,6 +216,8 @@ export default function VendingBoard({
           </div>
         </form>
       )}
+
+      {!loaded&&<section className="xc-card"><Loading label="自販機を読み込み中…" /></section>}
 
       {loaded&&machines.length===0&&(
         <section className="xc-card xc-empty">まだXaccount-Botの自販機がありません。「新しい自販機を作成」から追加してください。</section>
@@ -362,7 +374,13 @@ export default function VendingBoard({
         </span>
       </div>
 
-      {shiireError&&<section className="xc-card xc-empty">仕入れbotに接続できませんでした: {shiireError}</section>}
+      {shiireLoading&&!shiire&&<section className="xc-card"><Loading label="仕入れbotの自販機を読み込み中…（別Botのため少し時間がかかります）" /></section>}
+      {!shiireLoading&&shiireError&&(
+        <section className="xc-card xc-empty">
+          仕入れbotに接続できませんでした: {shiireError}
+          <div style={{marginTop:10}}><button type="button" className="xc-btn ghost tiny" onClick={()=>void loadShiire()}>再読み込み</button></div>
+        </section>
+      )}
       {shiire&&shiire.length===0&&<section className="xc-card xc-empty">仕入れbotの自販機はまだありません。</section>}
 
       {(shiire??[]).map(machine=>{

@@ -484,3 +484,12 @@
 html { scrollbar-gutter: stable; }
 /* While a long-press is armed or a channel is being dragged, the list must not pan. */
 body.dsm-touch-reordering .discord-channel-scroll { touch-action: none; overscroll-behavior: contain; }
+
+.xc-loading { display: flex; align-items: center; gap: 10px; padding: 14px 4px; color: #9aa5c0; font-size: 14px; font-weight: 700; }
+.xc-spinner {
+  width: 18px; height: 18px; flex: none; border-radius: 50%;
+  border: 2px solid #263050; border-top-color: #8f86ff;
+  animation: xc-spin .8s linear infinite;
+}
+@keyframes xc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .xc-spinner { animation-duration: 2.4s; } }

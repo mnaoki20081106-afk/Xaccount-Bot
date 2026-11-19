@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import {
-  ConsoleChannel, Icon, ShiireMachineRow, channelName, errorText, yen
+  ConsoleChannel, Icon, Loading, ShiireMachineRow, channelName, errorText, yen
 } from "./console-ui";
 
 type Summary = {
@@ -51,8 +51,15 @@ export default function DashboardOverview({
   const [shiireError,setShiireError]=useState<string|null>(null);
   const [busy,setBusy]=useState(false);
   const [loadError,setLoadError]=useState<string|null>(null);
+  const [loaded,setLoaded]=useState(false);
+  const [shiireLoading,setShiireLoading]=useState(true);
 
   async function load(){
+    // Own data and the 仕入れbot load in parallel; the latter is a separate worker.
+    await Promise.all([loadOwn(),loadShiire()]);
+  }
+
+  async function loadOwn(){
     setBusy(true);
     setLoadError(null);
     try{
@@ -68,14 +75,21 @@ export default function DashboardOverview({
       setLoadError(errorText(reason));
     }finally{
       setBusy(false);
+      setLoaded(true);
     }
-    // The 仕入れbot is a separate worker; its absence must not hide this bot's data.
+  }
+
+  async function loadShiire(){
+    // Its absence must not hide this bot's data.
+    setShiireLoading(true);
     try{
-      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`));
+      setShiire(await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000));
       setShiireError(null);
     }catch(reason){
       setShiire(null);
       setShiireError(errorText(reason));
+    }finally{
+      setShiireLoading(false);
     }
   }
 
@@ -117,6 +131,7 @@ export default function DashboardOverview({
       </section>
 
       {loadError&&<div className="alert error">概要データの取得に失敗しました: {loadError}</div>}
+      {!loaded&&<Loading label="概要を読み込み中…" />}
 
       <section className="xc-stat-grid" aria-label="主要な数値">
         <article className="xc-stat gold">
@@ -156,8 +171,8 @@ export default function DashboardOverview({
         </article>
         <article className="xc-stat plain">
           <span>仕入れbot（別Bot）</span>
-          <strong>{shiire?shiire.length:"—"}</strong>
-          <small>{shiire?`自販機 / 在庫 ${shiireStock}`:"未接続または未設定"}</small>
+          <strong>{shiire?shiire.length:shiireLoading?"…":"—"}</strong>
+          <small>{shiire?`自販機 / 在庫 ${shiireStock}`:shiireLoading?"読み込み中…":"未接続または未設定"}</small>
         </article>
       </section>
 
@@ -259,7 +274,10 @@ export default function DashboardOverview({
                   </tr>
                 );
               })}
-              {panels.length===0&&(shiire??[]).length===0&&(
+              {shiireLoading&&!shiire&&(
+                <tr><td colSpan={8}><Loading label="仕入れbotの自販機を読み込み中…" /></td></tr>
+              )}
+              {loaded&&!shiireLoading&&panels.length===0&&(shiire??[]).length===0&&(
                 <tr><td colSpan={8} className="xc-empty">まだ自販機がありません。「自販機 &amp; 商品管理」から作成してください。</td></tr>
               )}
             </tbody>

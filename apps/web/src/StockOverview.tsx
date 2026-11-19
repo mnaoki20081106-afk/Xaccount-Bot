@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { ShiireMachineRow, VmDetail, VmMachine, errorText } from "./console-ui";
+import { Loading, ShiireMachineRow, VmDetail, VmMachine, errorText } from "./console-ui";
 
 type Row = {
   key:string;
@@ -27,44 +27,46 @@ export default function StockOverview({
   onEditShiire:(machineId:string)=>void;
   onError:(reason:unknown)=>void;
 }){
-  const [rows,setRows]=useState<Row[]>([]);
+  const [ownRows,setOwnRows]=useState<Row[]>([]);
+  const [shiireRows,setShiireRows]=useState<Row[]>([]);
+  const [shiireLoading,setShiireLoading]=useState(true);
+  const rows=useMemo(()=>[...ownRows,...shiireRows],[ownRows,shiireRows]);
   const [busy,setBusy]=useState(false);
   const [filter,setFilter]=useState<"all"|"empty"|"low"|"infinite"|"shiire">("all");
   const [query,setQuery]=useState("");
   const [shiireError,setShiireError]=useState<string|null>(null);
 
-  async function load(){
+  // Own machines and the 仕入れbot (a separate, slower worker) load in parallel
+  // and each part is shown as soon as it arrives.
+  async function loadOwn(){
     setBusy(true);
-    const next:Row[]=[];
     try{
       const machines=await api<VmMachine[]>(`/api/guilds/${guildId}/vending`);
       const details=await Promise.all(machines.map(machine=>api<VmDetail>(`/api/guilds/${guildId}/vending/${machine.id}`)));
-      for(const detail of details){
-        for(const product of detail.products){
-          next.push({
-            key:"vm:"+product.id,bot:"xaccount",machineId:detail.id,machineName:detail.name,
-            productId:product.id,productName:product.name,emoji:product.emoji,
-            stock:product.infinite_stock?0:product.stock_count,infinite:Boolean(product.infinite_stock),
-            stockless:false,sales:product.sales_count
-          });
-        }
-      }
+      setOwnRows(details.flatMap(detail=>detail.products.map(product=>({
+        key:"vm:"+product.id,bot:"xaccount" as const,machineId:detail.id,machineName:detail.name,
+        productId:product.id,productName:product.name,emoji:product.emoji,
+        stock:product.infinite_stock?0:product.stock_count,infinite:Boolean(product.infinite_stock),
+        stockless:false,sales:product.sales_count
+      }))));
     }catch(reason){ onError(reason); }
+    finally{ setBusy(false); }
+  }
+  async function loadShiire(){
+    setShiireLoading(true);
     try{
-      const shiire=await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`);
-      for(const machine of shiire){
-        for(const product of machine.products??[]){
-          next.push({
-            key:"shiire:"+product.id,bot:"shiire",machineId:machine.id,machineName:machine.name,
-            productId:product.id,productName:product.name,emoji:product.emoji,
-            stock:product.stock_count,infinite:false,stockless:Boolean(product.stockless_enabled),sales:product.sales_count
-          });
-        }
-      }
+      const shiire=await api<ShiireMachineRow[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000);
+      setShiireRows(shiire.flatMap(machine=>(machine.products??[]).map(product=>({
+        key:"shiire:"+product.id,bot:"shiire" as const,machineId:machine.id,machineName:machine.name,
+        productId:product.id,productName:product.name,emoji:product.emoji,
+        stock:product.stock_count,infinite:false,stockless:Boolean(product.stockless_enabled),sales:product.sales_count
+      }))));
       setShiireError(null);
     }catch(reason){ setShiireError(errorText(reason)); }
-    setRows(next);
-    setBusy(false);
+    finally{ setShiireLoading(false); }
+  }
+  async function load(){
+    await Promise.all([loadOwn(),loadShiire()]);
   }
 
   useEffect(()=>{ void load(); },[guildId]);
@@ -93,7 +95,7 @@ export default function StockOverview({
           <h1>在庫エディタ</h1>
           <p>全自販機の在庫を一覧で確認できます。在庫切れ・残りわずかの商品が上に表示されます。</p>
         </div>
-        <button type="button" className="xc-btn ghost" disabled={busy} onClick={()=>void load()}>再読み込み</button>
+        <button type="button" className="xc-btn ghost" disabled={busy||shiireLoading} onClick={()=>void load()}>{busy||shiireLoading?"読み込み中…":"再読み込み"}</button>
       </div>
 
       <section className="xc-stat-grid">
@@ -147,11 +149,12 @@ export default function StockOverview({
                   </tr>
                 );
               })}
-              {visible.length===0&&<tr><td colSpan={7} className="xc-empty">{busy?"読み込み中...":"該当する商品はありません。"}</td></tr>}
+              {visible.length===0&&<tr><td colSpan={7} className="xc-empty">{busy||shiireLoading?"読み込み中…":"該当する商品はありません。"}</td></tr>}
             </tbody>
           </table>
         </div>
-        {shiireError&&<p className="muted" style={{marginTop:10,fontSize:12}}>仕入れbot（別Bot）の在庫は取得できませんでした: {shiireError}</p>}
+        {shiireLoading&&<div style={{marginTop:10}}><Loading label="仕入れbot（別Bot）の在庫を読み込み中…" /></div>}
+        {!shiireLoading&&shiireError&&<p className="muted" style={{marginTop:10,fontSize:12}}>仕入れbot（別Bot）の在庫は取得できませんでした: {shiireError}</p>}
       </section>
     </>
   );

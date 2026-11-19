@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./api";
-import { ShiireMachineRow, VmDetail, VmMachine, errorText, yen } from "./console-ui";
+import { Loading, ShiireMachineRow, VmDetail, VmMachine, errorText, yen } from "./console-ui";
 
 type Bot = "xaccount"|"shiire";
 type CouponRow = { bot:Bot; machineId:string; machineName:string; code:string; discount:number; created_at:number };
@@ -33,20 +33,27 @@ export default function CouponCenter({
     const rows:CouponRow[]=[];
     let list:VmMachine[]=[];
     let shiire:ShiireWithCoupons[]=[];
-    try{
-      list=await api<VmMachine[]>(`/api/guilds/${guildId}/vending`);
-      const details=await Promise.all(list.map(machine=>api<VmDetail>(`/api/guilds/${guildId}/vending/${machine.id}`)));
-      rows.push(...details.flatMap(detail=>detail.coupons.map(coupon=>({...coupon,bot:"xaccount" as const,machineId:detail.id,machineName:detail.name}))));
-    }catch(reason){ onError(reason); }
-    try{
-      // Coupons are only part of the per-machine detail response of the 仕入れbot.
-      const shiireList=await api<ShiireWithCoupons[]>(`/api/guilds/${guildId}/shiire/vending`,{},15_000);
-      shiire=await Promise.all(shiireList.map(machine=>
-        api<ShiireWithCoupons>(`/api/guilds/${guildId}/shiire/vending/${machine.id}`,{},15_000)
-      ));
-      rows.push(...shiire.flatMap(machine=>(machine.coupons??[]).map(coupon=>({...coupon,bot:"shiire" as const,machineId:machine.id,machineName:machine.name}))));
-      setShiireError(null);
-    }catch(reason){ setShiireError(errorText(reason)); }
+    // Both bots in parallel; the 仕入れbot is a separate, slower worker.
+    await Promise.all([
+      (async()=>{
+        try{
+          list=await api<VmMachine[]>(`/api/guilds/${guildId}/vending`);
+          const details=await Promise.all(list.map(machine=>api<VmDetail>(`/api/guilds/${guildId}/vending/${machine.id}`)));
+          rows.push(...details.flatMap(detail=>detail.coupons.map(coupon=>({...coupon,bot:"xaccount" as const,machineId:detail.id,machineName:detail.name}))));
+        }catch(reason){ onError(reason); }
+      })(),
+      (async()=>{
+        try{
+          // Coupons are only part of the per-machine detail response of the 仕入れbot.
+          const shiireList=await api<ShiireWithCoupons[]>(`/api/guilds/${guildId}/shiire/vending`,{},30_000);
+          shiire=await Promise.all(shiireList.map(machine=>
+            api<ShiireWithCoupons>(`/api/guilds/${guildId}/shiire/vending/${machine.id}`,{},30_000)
+          ));
+          setShiireError(null);
+        }catch(reason){ setShiireError(errorText(reason)); }
+      })()
+    ]);
+    rows.push(...shiire.flatMap(machine=>(machine.coupons??[]).map(coupon=>({...coupon,bot:"shiire" as const,machineId:machine.id,machineName:machine.name}))));
     setMachines(list);
     setShiireMachines(shiire);
     setCoupons(rows);
@@ -136,7 +143,7 @@ export default function CouponCenter({
                   <td className="actions"><button type="button" className="xc-btn tiny del" disabled={busy} onClick={()=>void remove(row)}>無効化</button></td>
                 </tr>
               ))}
-              {coupons.length===0&&<tr><td colSpan={6} className="xc-empty">{busy?"読み込み中...":"有効なクーポンはありません。"}</td></tr>}
+              {coupons.length===0&&<tr><td colSpan={6} className={busy?"":"xc-empty"}>{busy?<Loading label="クーポンを読み込み中…（仕入れbotの分も取得しています）" />:"有効なクーポンはありません。"}</td></tr>}
             </tbody>
           </table>
         </div>

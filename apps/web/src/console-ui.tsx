@@ -75,6 +75,16 @@ export function yen(value:number){
   return "¥"+Math.round(value).toLocaleString("ja-JP");
 }
 
+/** Inline loading indicator used while bot data (especially the 仕入れbot) is fetched. */
+export function Loading({label}:{label:string}){
+  return (
+    <div className="xc-loading" role="status" aria-live="polite">
+      <span className="xc-spinner" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 export function errorText(reason:unknown){
   return reason instanceof Error?reason.message:String(reason);
 }
