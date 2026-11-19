@@ -472,7 +472,7 @@ for (const legacy of [false, true]) {
     assert.deepEqual(results[1].body,[]);
     assert.deepEqual(results[2].body,[]);
     const version = await db.prepare("SELECT value FROM meta WHERE key='schema_version'").first();
-    assert.equal(version.value,'5');
+    assert.equal(version.value,'6','schema v6 added external_auths');
     const vm = await request(mf,`/api/guilds/${guildId}/vending`,token,'POST',{name:'Local test machine'});
     assert.equal(vm.status,201,JSON.stringify(vm.body));
     const vmList = await request(mf,`/api/guilds/${guildId}/vending`,token);
@@ -1828,4 +1828,40 @@ test('channel editor: forum channels are created, listed and their tags edited',
     {id:'111',name:'質問',moderated:true,emoji_id:null,emoji_name:'❓'},
     {name:'雑談'}
   ],'existing tags keep id/emoji/moderated');
+});
+
+test('console: channels from another guild are refused and text topics keep the 1024 limit', async t => {
+  const foreignChannel='999456789012345678';
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname===`/api/v10/channels/${foreignChannel}`&&request.method==='GET'){
+      return Response.json({id:foreignChannel,guild_id:'888456789012345678',type:0,name:'other'});
+    }
+    if(url.pathname===`/api/v10/channels/${chatChannelId}`&&request.method==='PATCH'){
+      const body=await request.clone().json();
+      calls[calls.length-1].body=body;
+      return Response.json({id:chatChannelId,name:'chat',type:0,...body});
+    }
+    return null;
+  }});
+  const token=(await request(mf,'/api/login',null,'POST',{password:'local-test-password'})).body.token;
+  const base=`/api/guilds/${guildId}/vending`;
+  const vm=await request(mf,base,token,'POST',{name:'Guard machine'});
+  const asset=await request(mf,`${base}/assets`,token,'POST',{name:'a',title:'t'});
+  const posts=()=>calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/channels/${foreignChannel}/messages`).length;
+  const deploy=await request(mf,`${base}/assets/${asset.body.id}/deploy`,token,'POST',{channelId:foreignChannel});
+  assert.equal(deploy.status,400);
+  const panel=await request(mf,`${base}/${vm.body.id}/panel`,token,'POST',{channelId:foreignChannel});
+  assert.equal(panel.status,400);
+  const notify=await request(mf,`${base}/${vm.body.id}/stock-notification`,token,'POST',{channelId:foreignChannel,roleId:targetRoleId,enabled:true});
+  assert.equal(notify.status,400);
+  const logs=await request(mf,`${base}/${vm.body.id}`,token,'PATCH',{publicLogChannelId:foreignChannel});
+  assert.equal(logs.status,400);
+  assert.equal(posts(),0,'nothing is posted into the other guild');
+  const ok=await request(mf,`${base}/assets/${asset.body.id}/deploy`,token,'POST',{channelId:chatChannelId});
+  assert.equal(ok.status,200,JSON.stringify(ok.body));
+
+  const topic=await request(mf,`/api/guilds/${guildId}/channels/${chatChannelId}`,token,'PATCH',{topic:'x'.repeat(1500)});
+  assert.equal(topic.status,200,JSON.stringify(topic.body));
+  const patch=calls.filter(c=>c.method==='PATCH'&&c.path===`/api/v10/channels/${chatChannelId}`).at(-1);
+  assert.equal(patch.body.topic.length,1024,'text channel topics are cut to Discord\'s 1024 limit');
 });

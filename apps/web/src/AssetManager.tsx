@@ -70,6 +70,7 @@ export default function AssetManager({
   const [utilityKind,setUtilityKind]=useState<"shadowban"|"2fa"|"account-format">("shadowban");
   const [utilityChannel,setUtilityChannel]=useState("");
   const [busy,setBusy]=useState(false);
+  const [orphanedMachine,setOrphanedMachine]=useState(false);
   const bodyRef=useRef<HTMLTextAreaElement>(null);
 
   const postable=postableChannels(channels);
@@ -94,8 +95,12 @@ export default function AssetManager({
     if(dirty&&!window.confirm("保存していない変更があります。破棄しますか？")) return;
     const next=asset?toDraft(asset):emptyDraft;
     setSelectedId(asset?.id??"");
-    setDraft(next);
     setSaved(next);
+    // A linked vending machine that was deleted is dropped from the draft, so the
+    // panel can be saved again (the server rejects an unknown machine).
+    const orphaned=Boolean(next.vendingMachineId)&&!machines.some(row=>row.id===next.vendingMachineId);
+    setDraft(orphaned?{...next,vendingMachineId:""}:next);
+    setOrphanedMachine(orphaned);
     setChannelId(asset?.channel_id??"");
   }
 
@@ -124,6 +129,7 @@ export default function AssetManager({
       const next=toDraft(asset);
       setDraft(next);
       setSaved(next);
+      setOrphanedMachine(false);
       onNotice("パネル「"+asset.name+"」を保存しました");
       return asset;
     }catch(reason){ onError(reason); return null; }
@@ -200,6 +206,9 @@ export default function AssetManager({
                   <option value="">なし（案内のみ）</option>
                   {machines.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
                 </select>
+                {orphanedMachine&&(
+                  <small style={{color:"#f5b77a"}}>紐付けていた自販機が削除されたため、自販機ボタンを外しました。保存すると反映されます。</small>
+                )}
               </label>
             </div>
             <div className="title-color">

@@ -523,7 +523,7 @@ export async function handleShiireServiceBridge(
           link,
           account,
           amount,
-          {requirePayPayMoney}
+          {requirePayPayMoney,linkInfo:info}
         );
         if(result.ok){
           await finishPaymentReceipt(env,idempotencyKey,"COMPLETED",{amount:result.amount});

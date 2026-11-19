@@ -1345,7 +1345,7 @@ async function deliverPayment(env:Env,payment:PaymentRow):Promise<void>{
 // PayPaython-style web session (saved login + client_uuid, no OTP). No merchant/OPA API.
 const SHOP_PAYPAY_OWNER="shared-dashboard";
 
-async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<string>{
+async function confirmAndDeliver(env:Env,payment:PaymentRow,linkInfo?:unknown):Promise<string>{
   if(payment.status==="COMPLETED"){
     await deliverPayment(env,payment);
     return "COMPLETED";
@@ -1362,7 +1362,7 @@ async function confirmAndDeliver(env:Env,payment:PaymentRow):Promise<string>{
   try{
     const account=await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY);
     if(account){
-      const result=await acceptPayPayLink(link,account,payment.amount_yen);
+      const result=await acceptPayPayLink(link,account,payment.amount_yen,{linkInfo});
       status=result.ok?"COMPLETED":result.pending?"PENDING":"FAILED";
       reason=result.status;
     }else{
@@ -1425,7 +1425,7 @@ async function submitShopLink(interaction:any,env:Env):Promise<Response>{
     delivered_at:null
   };
   await createPayment(env,payment);
-  const outcome=await confirmAndDeliver(env,payment).catch(error=>{
+  const outcome=await confirmAndDeliver(env,payment,info).catch(error=>{
     console.error("shop payment failed",paymentId,error);
     return "ERROR";
   });
@@ -2932,7 +2932,16 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
         payload.name=name;
       }
-      if(input.topic!==undefined) payload.topic=input.topic===null?null:String(input.topic).slice(0,4096);
+      if(input.topic!==undefined){
+        // Discord: forum/media guidelines allow 4096 characters, other topics 1024.
+        let limit=1024;
+        const topic=input.topic===null?null:String(input.topic);
+        if(topic&&topic.length>1024){
+          const current=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
+          if(current.type===15||current.type===16) limit=4096;
+        }
+        payload.topic=topic===null?null:topic.slice(0,limit);
+      }
       if(input.parentId!==undefined) payload.parent_id=input.parentId||null;
       if(input.availableTags!==undefined){
         // Keep id/emoji/moderated of tags that still exist so posts keep their tags.

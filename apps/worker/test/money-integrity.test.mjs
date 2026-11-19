@@ -28,6 +28,7 @@ export default {async fetch(req,env){
  if(u.pathname==='/paypay-web-expired') return Response.json(await acceptPayPayLink('AbCdEf123456',{...WEB,session:{...SESSION(),expiresAt:Date.now()-1000}},100));
  if(u.pathname==='/paypay-web-nosession') return Response.json(await acceptPayPayLink('AbCdEf123456',WEB,100));
  if(u.pathname==='/paypay-web-nocookie') return Response.json(await acceptPayPayLink('AbCdEf123456',{...WEB,session:{...SESSION(),cookies:{}}},100));
+ if(u.pathname==='/paypay-web-prefetched'){const info=await (await fetch('https://www.paypay.ne.jp/app/v2/p2p-api/getP2PLinkInfo?verificationCode=AbCdEf123456&client_uuid=x')).json();return Response.json(await acceptPayPayLink('AbCdEf123456',{...WEB,session:SESSION()},100,{linkInfo:info}));}
  if(u.pathname==='/paypay-web') return Response.json(await acceptPayPayLink('https://pay.paypay.ne.jp/AbCdEf123456',{...WEB,session:SESSION()},100));
  if(u.pathname==='/kyash') return Response.json(await receiveKyashLink('test',{clientUuid:'test',installationUuid:'test',accessToken:'test'},100));
  return await handleSupplyBridge(req,env,u)??await handleShiireServiceBridge(req,env,u)??new Response('missing',{status:404});
@@ -294,4 +295,12 @@ test('PayPay Web: shiire receipt stays retryable when login is missing',async()=
  const second=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
  assert.equal(second.ok,true);assert.equal(second.status,'completed');
  assert.equal((await db.prepare("SELECT status FROM shiire_payment_receipts WHERE idempotency_key=?").bind(input.idempotencyKey).first()).status,'COMPLETED');
+});
+
+test('PayPay Web: a lookup made by the caller is reused (one request before the 3s interaction deadline)',async()=>{
+ const {mf,requests}=await fixture({amount:100});
+ const r=await (await mf.dispatchFetch('https://test.example/paypay-web-prefetched')).json();
+ assert.equal(r.ok,true);
+ assert.equal(requests.filter(q=>q.url.includes('getP2PLinkInfo')).length,1,'only the caller lookup');
+ assert.equal(requests.filter(q=>q.url.includes('acceptP2P')).length,1);
 });

@@ -394,14 +394,16 @@ export async function acceptPayPayLink(
   link:string,
   account:PayPayAccount,
   expectedAmount:number,
-  options:{requirePayPayMoney?:boolean}={}
+  // linkInfo: a lookup made moments ago by the caller, reused to avoid a second request.
+  options:{requirePayPayMoney?:boolean;linkInfo?:any}={}
 ):Promise<PayPayAcceptResult>{
   const code=normalizePayPayLink(link);
   if(!code) return {ok:false,pending:false,amount:0,status:"BAD_LINK",message:"PayPay送金リンクが正しくありません。"};
   const client=new PayPayWebClient(account);
   {
-    let lookup;
-    try{ lookup=await client.linkInfo(code); }
+    let lookup:{status:number;data:any;loginRequired:boolean};
+    if(options.linkInfo?.header?.resultCode==="S0000") lookup={status:200,data:options.linkInfo,loginRequired:!payPayPaymentReady(account.session)};
+    else try{ lookup=await client.linkInfo(code); }
     catch{ return {ok:false,pending:true,amount:0,status:"LINK_NETWORK",message:"PayPayリンク確認で通信エラーが発生しました。"}; }
     if(lookup.loginRequired) return {ok:false,pending:true,amount:0,status:"LOGIN_REQUIRED"};
     // A temporary PayPay failure keeps the reserved order pending instead of failing it.

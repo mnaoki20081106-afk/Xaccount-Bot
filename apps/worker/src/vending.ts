@@ -37,6 +37,12 @@ async function requireGuild(request:Request,env:Env,guildId:string){
   return session;
 }
 function input<T>(r:Request){ return r.json() as Promise<T>; }
+/** The bot must never post into another guild because a client sent its channel id. */
+async function requireChannelInGuild(env:Env,guildId:string,channelId:string){
+  if(!/^\d{17,20}$/.test(channelId)) throw new VendingHttpError(400,"チャンネルを選択してください");
+  const channel=await botJson<{guild_id?:string}>(env,"/channels/"+channelId).catch(()=>null);
+  if(!channel||channel.guild_id!==guildId) throw new VendingHttpError(400,"このサーバーのチャンネルを選択してください");
+}
 function ires(data:unknown){ return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}}); }
 function eph(content:string,components?:unknown[],embeds?:unknown[]){ return {type:4,data:{content,flags:64,...(components?{components}:{}),...(embeds?{embeds}:{})}}; }
 async function send(env:Env,channelId:string,payload:unknown){
@@ -384,7 +390,8 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       dashboardSummary(env,guildId,session.user_id),
       listPanelDeployments(env,guildId)
     ]);
-    return json(env,{...totals,installedPanels:deployments.filter(row=>row.kind==="vending").length});
+    const own=new Set((await listMachines(env,guildId,session.user_id)).map(vm=>vm.id));
+    return json(env,{...totals,installedPanels:deployments.filter(row=>row.kind==="vending"&&own.has(row.object_id)).length});
   }
 
   // Asset management: free-form embed panels, optionally with a vending machine's buttons.
@@ -411,6 +418,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     }
     const channelId=String(b.channelId??"").trim();
     if(!/^\d{17,20}$/.test(channelId)) throw new VendingHttpError(400,"設置先チャンネルを選択してください");
+    await requireChannelInGuild(env,guildId,channelId);
     const message=await send(env,channelId,payload);
     await recordPanelAssetMessage(env,asset.id,channelId,message.id??null);
     return json(env,{ok:true,channelId,messageId:message.id??null});
@@ -442,6 +450,10 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     if(request.method==="GET") return json(env,{...vm,products:await listVmProducts(env,vmId),coupons:await listCoupons(env,vmId)});
     if(request.method==="PATCH"){
       const b=await input<any>(request); if(b.panelColor!==undefined&&b.panelColor!==null&&!/^#[0-9a-f]{6}$/i.test(String(b.panelColor))) throw new VendingHttpError(400,"パネルの色が不正です"); if(b.name!==undefined&&(!String(b.name).trim()||String(b.name).length>80)) throw new VendingHttpError(400,"自販機名が不正です");
+      for(const [key,current] of [["publicLogChannelId",vm.public_log_channel_id],["localLogChannelId",vm.local_log_channel_id],["privateLogChannelId",vm.private_log_channel_id]] as const){
+        const next=b[key];
+        if(next&&String(next)!==current) await requireChannelInGuild(env,guildId,String(next));
+      }
       await updateMachine(env,vmId,session.user_id,{name:b.name?.trim(),publicLog:b.publicLogChannelId,localLog:b.localLogChannelId,privateLog:b.privateLogChannelId,roleId:b.roleId,panelTitle:b.panelTitle,panelDescription:b.panelDescription,panelImageUrl:b.panelImageUrl,panelColor:b.panelColor});
       if(b.panelColor!==undefined){
         // Re-render the already installed panel so the new color shows up immediately.
@@ -590,6 +602,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
         return json(env,{ok:true,enabled:false});
       }
 
+      if(channelId!==current?.channel_id) await requireChannelInGuild(env,guildId,channelId);
       await saveStockNotify(env,vmId,guildId,channelId,roleId,enabled);
       return json(env,{ok:true,enabled});
     }
@@ -602,6 +615,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   const panel=url.pathname.match(/^\/api\/guilds\/(\d+)\/vending\/([^/]+)\/panel$/);
   if(panel&&request.method==="POST"){
     const guildId=panel[1]!,vmId=panel[2]!,session=await requireGuild(request,env,guildId),vm=await machineOwned(env,vmId,session.user_id),b=await input<{channelId:string;replacePrevious?:boolean}>(request),products=await listVmProducts(env,vmId);
+    await requireChannelInGuild(env,guildId,String(b.channelId??""));
     const previous=b.replacePrevious
       ?(await listPanelDeployments(env,guildId)).find(row=>row.kind==="vending"&&row.object_id===vmId)??null
       :null;
@@ -627,6 +641,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     const match=String(b.messageUrl??"").match(/discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/);
     if(!match||match[1]!==guildId) throw new VendingHttpError(400,"DiscordメッセージURLが不正です");
     const channelId=match[2]!,messageId=match[3]!,products=await listVmProducts(env,vmId);
+    await requireChannelInGuild(env,guildId,channelId);
     await botJson(env,"/channels/"+channelId+"/messages/"+messageId,{
       method:"PATCH",
       body:JSON.stringify({
@@ -1156,7 +1171,8 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
 
         let result;
         try{
-          result=await acceptPayPayLink(link,account,order.total_amount);
+          // Reuse the lookup above: Discord expects the modal answer within 3 seconds.
+          result=await acceptPayPayLink(link,account,order.total_amount,{linkInfo:info});
         }catch(error){
           console.error("PayPay receive ambiguous",order.id,error);
           return ires(eph(
@@ -1273,7 +1289,7 @@ export async function vendingSweep(env:Env){
       // Link status cannot prove WHICH account received the money.
       // Only an authenticated acceptance response may authorize delivery.
       if(status==="PENDING"){
-        const result=await acceptPayPayLink(link,account,order.total_amount);
+        const result=await acceptPayPayLink(link,account,order.total_amount,{linkInfo:info});
         if(result.ok){
           await markPaid(env,order.id,"paypay",order.payment_link_hash);
           const paid=await getOrder(env,order.id);
