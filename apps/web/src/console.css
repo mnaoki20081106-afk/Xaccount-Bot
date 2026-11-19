@@ -478,3 +478,9 @@
   font-style: normal; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
   color: #dbdee1; background: #1a2238; border: 1px solid #283253;
 }
+
+/* Locking page scroll during a drag removes the scrollbar; keep its gutter so the
+   channel list does not shift sideways under the pointer. */
+html { scrollbar-gutter: stable; }
+/* While a long-press is armed or a channel is being dragged, the list must not pan. */
+body.dsm-touch-reordering .discord-channel-scroll { touch-action: none; overscroll-behavior: contain; }

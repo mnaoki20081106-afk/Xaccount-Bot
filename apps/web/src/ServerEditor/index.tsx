@@ -1317,6 +1317,22 @@ if (gesture) window.clearTimeout(gesture.timer);
 };
 }, []);
 useEffect(() => {
+// React registers touchmove as a passive listener, so preventDefault() inside
+// onTouchMove is ignored and the list/page starts scrolling before the
+// document-level guard below is attached. Once the browser has started a
+// scroll it no longer lets us cancel it (and iOS cancels the touch), so the
+// long-press drag never got a chance. This native, non-passive listener stops
+// scrolling as soon as a press is armed and for the whole drag.
+const scroller = channelScrollRef.current;
+if (!scroller) return;
+const guard = (event: TouchEvent) => {
+if (!touchDraggingIdRef.current && !touchGestureRef.current?.armed) return;
+if (event.cancelable) event.preventDefault();
+};
+scroller.addEventListener("touchmove", guard, { passive: false });
+return () => scroller.removeEventListener("touchmove", guard);
+}, []);
+useEffect(() => {
 // Mouse/desktop drag (native HTML5 DnD) needs the same page-scroll lock as touch
 // drag below. Without it, dragging a channel/category near the top or bottom of
 // the window triggers the browser's own autoscroll and the whole page scrolls
@@ -1347,10 +1363,15 @@ ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(1.025)`;
 const scroller = channelScrollRef.current;
 if (scroller) {
 const rect = scroller.getBoundingClientRect();
+// Use the visible part of the list: it can extend past the viewport, and the
+// sticky console header covers its top.
+const header = document.querySelector(".xc-header")?.getBoundingClientRect().bottom ?? 0;
+const top = Math.max(rect.top, header);
+const bottom = Math.min(rect.bottom, window.innerHeight);
 const edge = 54;
-if (touch.clientY < rect.top + edge) {
+if (touch.clientY < top + edge) {
 scroller.scrollTop -= 12;
-} else if (touch.clientY > rect.bottom - edge) {
+} else if (touch.clientY > bottom - edge) {
 scroller.scrollTop += 12;
 }
 }
