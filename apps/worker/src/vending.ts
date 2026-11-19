@@ -14,7 +14,7 @@ import {
 import {
   acceptPayPayLink, checkKyashLink, checkPayPayLink, getKyashAccount, kyashLoginOtp, kyashLoginStart,
   payPayLoginOtp, payPayLoginStart, receiveKyashLink, saveKyashAccount, saveKyashChallenge,
-  takeKyashChallenge
+  takeKyashChallenge, PAYPAY_HOLD_NOTICE
 } from "./vending-payments";
 
 class VendingHttpError extends Error { constructor(public status:number,message:string){super(message);} }
@@ -653,7 +653,16 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
     return json(env,{ok:true});
   }
   if(url.pathname==="/api/vending/paypay/login/start"&&request.method==="POST"){
-    const s=await sessionFromRequest(request,env),b=await input<{phone:string;password:string}>(request),uuid=randomId(),result:any=await payPayLoginStart(b.phone,b.password,uuid);
+    // Keep the saved client_uuid for the same phone so PayPay sees the same browser.
+    const s=await sessionFromRequest(request,env),b=await input<{phone:string;password:string}>(request);
+    const previous=await getPayPay(env,s.user_id,env.SESSION_ENCRYPTION_KEY).catch(()=>null);
+    const uuid=previous&&previous.phone===b.phone&&/^[0-9a-f-]{36}$/i.test(previous.uuid)?previous.uuid:crypto.randomUUID();
+    const result:any=await payPayLoginStart(b.phone,b.password,uuid);
+    if(result?.session){
+      // Logged in without OTP: the session is usable for payments immediately.
+      await savePayPay(env,s.user_id,b.phone,b.password,uuid,env.SESSION_ENCRYPTION_KEY,result.session);
+      return json(env,{ok:true,loggedIn:true});
+    }
     if(result?.response_type==="ErrorResponse") throw new VendingHttpError(400,"PayPayログイン情報が一致しません");
     if(!result?.otp_reference_id||!result?.otp_prefix) throw new VendingHttpError(502,"PayPay OTP開始に失敗しました");
     const challengeId=await savePayChallenge(env,s.user_id,JSON.stringify({phone:b.phone,password:b.password,uuid,otpReferenceId:result.otp_reference_id,otpPrefix:result.otp_prefix}),env.SESSION_ENCRYPTION_KEY);
@@ -662,9 +671,11 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
   if(url.pathname==="/api/vending/paypay/login/verify"&&request.method==="POST"){
     const s=await sessionFromRequest(request,env),b=await input<{challengeId:string;otp:string}>(request),raw=await takePayChallenge(env,b.challengeId,s.user_id,env.SESSION_ENCRYPTION_KEY);
     if(!raw) throw new VendingHttpError(410,"OTP認証が失効しました"); const p=JSON.parse(raw);
+    if(!/^\d{4}$/.test(String(b.otp??"").trim())) throw new VendingHttpError(400,"SMSの4桁の認証コードを入力してください");
+    b.otp=String(b.otp).trim();
     const result:any=await payPayLoginOtp({uuid:p.uuid,otp:b.otp,otpReferenceId:p.otpReferenceId,otpPrefix:p.otpPrefix});
-    if(result?.response_type==="ErrorResponse") throw new VendingHttpError(400,"OTPコードが正しくありません");
-    await savePayPay(env,s.user_id,p.phone,p.password,p.uuid,env.SESSION_ENCRYPTION_KEY); return json(env,{ok:true});
+    if(!result?.session) throw new VendingHttpError(400,"OTPコードが正しくありません");
+    await savePayPay(env,s.user_id,p.phone,p.password,p.uuid,env.SESSION_ENCRYPTION_KEY,result.session); return json(env,{ok:true});
   }
 
   if(url.pathname==="/api/vending/kyash/login/start"&&request.method==="POST"){
@@ -1093,7 +1104,7 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
       if(order.payment_method==="paypay"){
         const account=await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY);
         if(!account) return ires(eph("販売者のPayPayが未登録です。"));
-        const info=await checkPayPayLink(link);
+        const info=await checkPayPayLink(link,account);
         const amount=Number(info?.payload?.message?.data?.amount??0);
         if(!info||!Number.isFinite(amount)){
           return ires(eph("PayPay送金リンクを確認できませんでした。"));
@@ -1141,7 +1152,11 @@ export async function handleVendingInteraction(interaction:any,env:Env,ctx:Execu
         }
         if(result.pending){
           return ires(eph(
-            "PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"
+            result.status==="TEMPORARY_HOLD"
+              ?PAYPAY_HOLD_NOTICE
+              :result.status==="LOGIN_REQUIRED"
+                ?"販売者のPayPayログインが切れています。在庫は確保したまま、販売者の再ログイン後に自動確認します。"
+                :"PayPay受け取りが保留されています。受け取り保留を解除してください。1分ごとに自動確認します。"
           ));
         }
         await clearPaymentLink(env,order.id);
@@ -1223,13 +1238,15 @@ export async function vendingSweep(env:Env){
   for(const row of pending){
     const order=await getOrder(env,row.id); if(!order||!order.payment_link_enc) continue;
     try{
-      const {decrypt}=await import("./utils"); const link=await decrypt(env.SESSION_ENCRYPTION_KEY,order.payment_link_enc),info:any=await checkPayPayLink(link),status=String(info?.payload?.orderStatus??"");
-      // Public link status cannot prove WHICH account received the money.
+      const {decrypt}=await import("./utils"); const link=await decrypt(env.SESSION_ENCRYPTION_KEY,order.payment_link_enc);
+      const vm=await getMachine(env,order.vending_machine_id);
+      const account=vm?await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY):null;
+      if(!account) continue;
+      // The Web link lookup is authenticated, so it needs the seller account first.
+      const info:any=await checkPayPayLink(link,account),status=String(info?.payload?.orderStatus??"");
+      // Link status cannot prove WHICH account received the money.
       // Only an authenticated acceptance response may authorize delivery.
       if(status==="PENDING"){
-        const vm=await getMachine(env,order.vending_machine_id);
-        const account=vm?await getPayPay(env,vm.owner_id,env.SESSION_ENCRYPTION_KEY):null;
-        if(!account) continue;
         const result=await acceptPayPayLink(link,account,order.total_amount);
         if(result.ok){
           await markPaid(env,order.id,"paypay",order.payment_link_hash);

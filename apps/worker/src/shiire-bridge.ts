@@ -457,7 +457,7 @@ export async function handleShiireServiceBridge(
           await finishPaymentReceipt(env,idempotencyKey,"REJECTED",{reason:"PAYPAY_NOT_CONFIGURED"});
           return json(env,{error:"PAYPAY_NOT_CONFIGURED"},409);
         }
-        const info=await checkPayPayLink(link);
+        const info=await checkPayPayLink(link,account);
         const linkAmount=Number(info?.payload?.message?.data?.amount??0);
         const currentStatus=String(info?.payload?.orderStatus??"");
         if(!info||!Number.isFinite(linkAmount)||linkAmount<amount){

@@ -32,11 +32,19 @@ export default function PaymentSettings({
   }
 
   const startPayPay=(event:FormEvent)=>{ event.preventDefault(); void run(async()=>{
-    const result=await api<{challengeId:string}>("/api/vending/paypay/login/start",{
+    const result=await api<{challengeId?:string;loggedIn?:boolean}>("/api/vending/paypay/login/start",{
       method:"POST",body:JSON.stringify({phone:payPayForm.phone,password:payPayForm.password})
     });
-    setPayPayForm(current=>({...current,challengeId:result.challengeId,otp:""}));
-    onNotice("PayPayのSMS認証コードを入力してください");
+    if(result.loggedIn||!result.challengeId){
+      // PayPay accepted the password without asking for an SMS code.
+      setPayPayForm({phone:"",password:"",challengeId:"",otp:""});
+      await loadStatus();
+      onNotice("PayPayアカウントを接続しました");
+      return;
+    }
+    const challengeId=result.challengeId;
+    setPayPayForm(current=>({...current,challengeId,otp:""}));
+    onNotice("PayPayのSMS認証コード（4桁）を入力してください");
   }); };
 
   const verifyPayPay=(event:FormEvent)=>{ event.preventDefault(); void run(async()=>{
@@ -107,7 +115,7 @@ export default function PaymentSettings({
           ):payPayForm.challengeId?(
             <form className="xc-form" onSubmit={verifyPayPay}>
               <label>SMS認証コード（OTP）
-                <input value={payPayForm.otp} inputMode="numeric" maxLength={6} required onChange={event=>setPayPayForm({...payPayForm,otp:event.target.value})} placeholder="PayPay OTP" />
+                <input value={payPayForm.otp} inputMode="numeric" maxLength={4} pattern="[0-9]{4}" required onChange={event=>setPayPayForm({...payPayForm,otp:event.target.value})} placeholder="PayPay OTP" />
               </label>
               <div className="xc-form-footer">
                 <button type="submit" className="xc-btn violet" disabled={busy}>認証して接続</button>

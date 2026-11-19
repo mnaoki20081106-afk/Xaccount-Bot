@@ -19,6 +19,7 @@ export default {async fetch(req,env){
  if(u.pathname==='/expire'){await cleanVendingExpired(env);return Response.json({ok:true});}
  if(u.pathname==='/sweep'){await vendingSweep(env);return Response.json({ok:true});}
  if(u.pathname==='/paypay') return Response.json(await acceptPayPayLink('test',{phone:'test',password:'test',uuid:'test'},100));
+ if(u.pathname==='/paypay-web') return Response.json(await acceptPayPayLink('https://pay.paypay.ne.jp/AbCdEf123456',{phone:'test',password:'test',uuid:'11111111-2222-3333-4444-555555555555'},100));
  if(u.pathname==='/kyash') return Response.json(await receiveKyashLink('test',{clientUuid:'test',installationUuid:'test',accessToken:'test'},100));
  return await handleSupplyBridge(req,env,u)??await handleShiireServiceBridge(req,env,u)??new Response('missing',{status:404});
 }};`,resolveDir:process.cwd(),sourcefile:'audit-entry.ts'},bundle:true,write:false,format:'esm',platform:'browser',plugins:process.env.AUDIT_BASELINE?[{name:'baseline',setup(b){b.onLoad({filter:/\/src\/.*\.ts$/},args=>({contents:execFileSync('git',['show','HEAD:'+relative(root,args.path)],{cwd:root,encoding:'utf8'}),loader:'ts'}));}}]:[]});
@@ -26,19 +27,24 @@ const instances=[];
 after(async()=>{await Promise.all(instances.map(m=>m.dispose()));});
 const secret='audit-secret-longer-than-32-characters';
 async function fixture(options={}){
- const calls=[];
+ const calls=[];const requests=[];
  const mf=new Miniflare({modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-08-06',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{SESSION_ENCRYPTION_KEY:secret,SHIIRE_BRIDGE_SECRET:secret,WEB_ORIGIN:'https://test.example'},outboundService:async req=>{
   calls.push(req.url);
+  requests.push({url:req.url,method:req.method,cookie:req.headers.get('cookie'),referer:req.headers.get('referer'),body:req.method==='POST'?await req.clone().text():null});
   if(req.url.includes('getP2PLinkInfo')){
    const data={amount:options.amount??50};
    if(!options.omitSplit)data.subWalletSplit={
     senderEmoneyAmount:options.money??(options.amount??50),
     senderPrepaidAmount:options.moneyLight??0
    };
-   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',message:{data}}});
+   data.orderId='order-1';data.transactionAt='2026-10-29T19:48:00+09:00';
+   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:options.status??'PENDING',pendingP2PInfo:{orderId:'order-1',isSetPasscode:false,isLinkBlocked:false},message:{messageId:'msg-1',chatRoomId:'room-1',data}}});
   }
-  if(req.url.includes('/oauth/token'))return Response.json({access_token:'test'});
-  if(req.url.includes('acceptP2P'))return Response.json({header:{resultCode:'S0000'}});
+  if(req.url.includes('/oauth/token'))return new Response(JSON.stringify({access_token:'oauth-access-token',expires_in:86400}),{headers:{'Content-Type':'application/json','Set-Cookie':'token=web-session-cookie; Path=/; HttpOnly; Secure'}});
+  if(req.url.includes('acceptP2P')){
+   if(options.acceptReply)return Response.json(options.acceptReply.body,{status:options.acceptReply.status??200});
+   return Response.json({header:{resultCode:'S0000'},payload:{orderStatus:'COMPLETED'},error:null});
+  }
   if(req.url.includes('kyash.me/payments/'))return new Response('<span class="amountText text_send">'+(options.amount??50)+'</span><a data-href-app="kyash://claim/test">');
   return Response.json({code:200});
  }});instances.push(mf);
@@ -46,7 +52,7 @@ async function fixture(options={}){
  const db=await mf.getD1Database('DB');
  await db.prepare("INSERT INTO vending_machines(id,guild_id,owner_id,name,created_at,updated_at) VALUES ('vm','g','o','test',1,1)").run();
  await db.prepare("INSERT INTO vending_products(id,vending_machine_id,name,description,price_paypay,price_kyash,created_at,updated_at) VALUES ('p','vm','test','',100,100,1,1)").run();
- return {mf,db,calls};
+ return {mf,db,calls,requests};
 }
 let seq=0;
 async function supply(mf,key,items){return signed(mf,'/api/vending/supply/deliver',{productId:'p',idempotencyKey:key,items});}
@@ -151,4 +157,39 @@ test('successful Kyash receipt retry keeps the same normalized completion status
  const again=await (await signed(mf,'/api/shiire/payment/receive',input)).json();
  assert.equal(first.status,'completed');assert.equal(again.status,'completed');assert.equal(again.ok,true);
  assert.equal(calls.filter(u=>u.includes('/receive')).length,1);
+});
+
+test('PayPay Web: link lookup and acceptance use the session cookie and observed payload',async()=>{
+ const {mf,requests}=await fixture({amount:100});
+ const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+ assert.equal(r.ok,true);assert.equal(r.status,'COMPLETED');
+ const info=requests.find(q=>q.url.includes('getP2PLinkInfo'));
+ const url=new URL(info.url);
+ assert.equal(url.origin+url.pathname,'https://www.paypay.ne.jp/app/v2/p2p-api/getP2PLinkInfo');
+ assert.equal(url.searchParams.get('verificationCode'),'AbCdEf123456');
+ assert.equal(url.searchParams.get('client_uuid'),'11111111-2222-3333-4444-555555555555');
+ assert.equal(info.cookie,'token=web-session-cookie','the HttpOnly token cookie from login is used, not the OAuth token');
+ assert.match(info.referer,/^https:\/\/www\.paypay\.ne\.jp\/app\/p2p\/AbCdEf123456\?pid=SMS&link_key=AbCdEf123456/);
+ const accept=requests.find(q=>q.url.includes('acceptP2P'));
+ assert.equal(accept.url,'https://www.paypay.ne.jp/app/v2/p2p-api/acceptP2PSendMoneyLink');
+ assert.equal(accept.cookie,'token=web-session-cookie');
+ const body=JSON.parse(accept.body);
+ assert.equal(body.requestAt,'2026-10-29T19:48:00+09:00');
+ assert.equal(body.orderId,'order-1');
+ assert.equal(body.senderChannelUrl,'room-1');
+ assert.equal(body.senderMessageId,'msg-1');
+ assert.equal(body.verificationCode,'AbCdEf123456');
+ assert.equal(body.client_uuid,'11111111-2222-3333-4444-555555555555');
+ assert.match(body.requestId,/^[0-9a-f-]{36}$/);
+ assert.equal(requests.filter(q=>q.url.includes('/oauth/token')).length,1,'one login serves lookup and accept');
+});
+test('PayPay Web: hold codes stay pending and S0000 without COMPLETED is not a payment',async()=>{
+ for(const code of ['42007013','42007016']){
+  const {mf}=await fixture({amount:100,acceptReply:{status:400,body:{header:{resultCode:code}}}});
+  const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+  assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(r.status,'TEMPORARY_HOLD');
+ }
+ const {mf}=await fixture({amount:100,acceptReply:{body:{header:{resultCode:'S0000'},payload:{orderStatus:'PENDING'}}}});
+ const r=await (await mf.dispatchFetch('https://test.example/paypay-web')).json();
+ assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(r.status,'PENDING');
 });

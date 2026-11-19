@@ -670,9 +670,11 @@ export async function finishDelivery(env:Env,order:VmOrder){
   ]);
 }
 
-export async function savePayPay(env:Env,userId:string,phone:string,password:string,uuid:string,secret:string){
-  // New credentials invalidate any session held for the previous login.
-  await env.DB.prepare("INSERT INTO vending_payment_accounts(user_id,paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc,updated_at) VALUES (?,?,?,?,NULL,?) ON CONFLICT(user_id) DO UPDATE SET paypay_phone_enc=excluded.paypay_phone_enc,paypay_password_enc=excluded.paypay_password_enc,paypay_uuid=excluded.paypay_uuid,paypay_session_enc=NULL,updated_at=excluded.updated_at").bind(userId,await encrypt(secret,phone),await encrypt(secret,password),uuid,Date.now()).run();
+export async function savePayPay(env:Env,userId:string,phone:string,password:string,uuid:string,secret:string,session:PayPaySession|null=null){
+  // New credentials replace any session held for the previous login; the session from
+  // this login (password or OTP) is stored so the first payment needs no new login.
+  const sessionEnc=session?await encrypt(secret,JSON.stringify(session)):null;
+  await env.DB.prepare("INSERT INTO vending_payment_accounts(user_id,paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET paypay_phone_enc=excluded.paypay_phone_enc,paypay_password_enc=excluded.paypay_password_enc,paypay_uuid=excluded.paypay_uuid,paypay_session_enc=excluded.paypay_session_enc,updated_at=excluded.updated_at").bind(userId,await encrypt(secret,phone),await encrypt(secret,password),uuid,sessionEnc,Date.now()).run();
 }
 export async function getPayPay(env:Env,userId:string,secret:string){
   const r=await env.DB.prepare("SELECT paypay_phone_enc,paypay_password_enc,paypay_uuid,paypay_session_enc FROM vending_payment_accounts WHERE user_id=?").bind(userId).first<{paypay_phone_enc:string|null;paypay_password_enc:string|null;paypay_uuid:string|null;paypay_session_enc:string|null}>();

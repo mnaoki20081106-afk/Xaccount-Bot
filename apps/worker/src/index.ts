@@ -1388,10 +1388,11 @@ async function submitShopLink(interaction:any,env:Env):Promise<Response>{
   if(!/^https:\/\/pay\.paypay\.ne\.jp\/[A-Za-z0-9]+/.test(link)){
     return interactionResponse(ephemeral("PayPayの送金リンクを入力してください。"));
   }
-  if(!(await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY))){
+  const payPayAccount=await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY);
+  if(!payPayAccount){
     return interactionResponse(ephemeral("販売者のPayPayが未登録です。"));
   }
-  const info:any=await checkPayPayLink(link);
+  const info:any=await checkPayPayLink(link,payPayAccount);
   if(!info) return interactionResponse(ephemeral("送金リンクを確認できませんでした。"));
   const amount=Number(info?.payload?.message?.data?.amount??0);
   if(!Number.isSafeInteger(amount)||amount<product.price_yen){
