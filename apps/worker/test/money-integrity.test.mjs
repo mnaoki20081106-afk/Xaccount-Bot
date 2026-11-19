@@ -100,6 +100,26 @@ test('idempotency payload distinguishes newlines inside individual items',async(
  const {mf}=await fixture();assert.equal((await supply(mf,'different',['a\nb','c'])).status,200);
  assert.equal((await supply(mf,'different',['a','b\nc'])).status,409);
 });
+test('reward withdraw takes stock once per key, concurrent duplicates take nothing extra',async()=>{
+ const {mf,db}=await fixture();await supply(mf,'seed',['w0','w1','w2','w3']);
+ const withdraw=(key,quantity=1)=>signed(mf,'/api/vending/supply/withdraw',{productId:'p',idempotencyKey:key,quantity});
+ const replies=await Promise.all(Array.from({length:4},()=>withdraw('reward-a').then(async r=>({status:r.status,body:await r.json()}))));
+ const first=replies[0].body.items;
+ assert.equal(first.length,1);
+ for(const r of replies){assert.equal(r.status,200,JSON.stringify(r.body));assert.deepEqual(r.body.items,first);}
+ const again=await (await withdraw('reward-a')).json();
+ assert.equal(again.duplicateRequest,true);assert.deepEqual(again.items,first);
+ assert.equal((await withdraw('reward-a',2)).status,409,'same key, different quantity');
+ const two=(await (await withdraw('reward-b',2)).json()).items;
+ assert.equal(two.length,2);
+ assert.equal(new Set([...first,...two]).size,3,'never the same account twice');
+ assert.equal((await db.prepare("SELECT count(*) n FROM vending_stock WHERE product_id='p' AND state='available'").first()).n,1);
+ const rest=(await (await withdraw('reward-c',5)).json()).items;
+ assert.equal(rest.length,1,'takes what is left');
+ assert.deepEqual([...first,...two,...rest].sort(),['w0','w1','w2','w3']);
+ assert.deepEqual((await (await withdraw('reward-d')).json()).items,[]);
+ assert.equal((await withdraw('reward-e',0)).status,400);
+});
 test('underpayment is rejected before PayPay acceptance',async()=>{
  const {mf,calls}=await fixture();const r=await (await mf.dispatchFetch('https://test.example/paypay')).json();
  assert.equal(r.ok,false);assert.equal(calls.some(u=>u.includes('acceptP2P')),false);

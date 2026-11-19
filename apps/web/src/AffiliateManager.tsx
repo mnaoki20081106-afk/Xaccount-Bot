@@ -11,7 +11,7 @@ type Props = {
 type Feedback = { kind: "success" | "error"; message: string };
 
 type RewardSource = {
-  mode: "dedicated" | "product";
+  mode: "dedicated" | "product" | "xaccount";
   productId: string | null;
   productName: string | null;
   machineName: string | null;
@@ -55,6 +55,7 @@ type AffiliateData = {
   invite: InviteDashboard;
   giveaway: GiveawayDashboard;
   products: CandidateProduct[];
+  productsError?: string | null;
 };
 
 const CLAIM_STATUS_LABEL: Record<string, string> = {
@@ -216,15 +217,20 @@ export default function AffiliateManager({ guildId, channels, onNotice, onError 
   const productPicker = (kind: "invite" | "giveaway", source: RewardSource) => (
     <label className="field">
       <span>景品の在庫</span>
-      <select value={source.mode === "product" ? source.productId ?? "" : ""} onChange={e => setProduct(kind, e.target.value)} disabled={busy}>
+      <select value={source.mode === "xaccount" ? source.productId ?? "" : ""} onChange={e => setProduct(kind, e.target.value)} disabled={busy}>
         <option value="">専用在庫（生成アカウントのみ・他の商品とは別）</option>
+        {source.mode === "xaccount" && source.productId && !(data?.products ?? []).some(p => p.id === source.productId) && (
+          <option value={source.productId}>{source.machineName ?? "?"} / {source.productName ?? "見つからない商品"}</option>
+        )}
         {(data?.products ?? []).map(p => (
           <option key={p.id} value={p.id}>{p.machineName} / {p.name}（在庫 {p.stockCount}）</option>
         ))}
       </select>
       <small>
-        既存の自販機の商品を選ぶと、その商品の在庫をそのまま景品として共有します（補充も販売在庫も1本化されます）。
-        {source.mode === "product" && source.unavailable && " 選択中の商品が見つかりません。在庫が0のままなら商品を選び直してください。"}
+        Xaccount-Botの自販機の商品を選ぶと、景品を渡すときにその商品の在庫から1個ずつ取り出してDMで届けます（補充も販売在庫も1本化されます）。
+        {source.mode === "product" && " 旧仕入れbot自販機の商品が選ばれています。Xaccount-Botの商品を選び直してください。"}
+        {source.mode === "xaccount" && source.unavailable && " 選択中の商品が見つかりません。商品を選び直してください。"}
+        {data?.productsError && " " + data.productsError}
       </small>
     </label>
   );

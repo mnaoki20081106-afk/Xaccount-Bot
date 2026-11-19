@@ -266,6 +266,66 @@ export async function handleSupplyBridge(
       });
     }
 
+    if(request.method==="POST"&&url.pathname==="/api/vending/supply/withdraw"){
+      // Rewards (招待報酬・無料配布) take accounts out of a product's stock.
+      const body=await request.text();
+      await verifySignedRequest(request,env,url,body);
+      let parsed:{productId?:unknown;quantity?:unknown;idempotencyKey?:unknown};
+      try{
+        parsed=JSON.parse(body) as typeof parsed;
+      }catch{
+        return json(env,{error:"invalid_json"},400);
+      }
+      const productId=String(parsed.productId??"").trim();
+      const idempotencyKey=String(parsed.idempotencyKey??"").trim();
+      const quantity=Number(parsed.quantity);
+      if(!productId||!idempotencyKey||idempotencyKey.length>160||!Number.isInteger(quantity)||quantity<1||quantity>50){
+        return json(env,{error:"invalid_request"},400);
+      }
+      const product=await getVmProduct(env,productId);
+      if(!product) return json(env,{error:"product_not_found"},404);
+      if(product.infinite_stock) return json(env,{error:"infinite_stock_not_supported"},409);
+
+      const marker="supply-withdraw:"+idempotencyKey;
+      const payloadHash="withdraw:"+quantity;
+      const taken=async()=>(await env.DB.prepare(
+        "SELECT content FROM vending_stock WHERE order_id=? AND state='withdrawn' ORDER BY created_at ASC,id ASC"
+      ).bind(marker).all<{content:string}>()).results.map(row=>row.content);
+      const replay=async()=>{
+        const existing=await env.DB.prepare(
+          "SELECT product_id,payload_hash FROM vending_supply_receipts WHERE idempotency_key=?"
+        ).bind(marker).first<{product_id:string;payload_hash:string}>();
+        if(!existing) return null;
+        if(existing.product_id!==productId||existing.payload_hash!==payloadHash){
+          return json(env,{error:"idempotency_conflict"},409);
+        }
+        return json(env,{ok:true,productId,items:await taken(),duplicateRequest:true});
+      };
+      const seen=await replay();
+      if(seen) return seen;
+
+      const now=Date.now();
+      try{
+        // One transaction: the receipt (unique key) and the stock rows it takes.
+        // A concurrent duplicate fails on the receipt and takes nothing.
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO vending_supply_receipts(idempotency_key,product_id,payload_hash,added_count,created_at) VALUES (?,?,?,0,?)")
+            .bind(marker,productId,payloadHash,now),
+          env.DB.prepare(`UPDATE vending_stock SET state='withdrawn',order_id=?,sold_at=?,reserved_until=NULL
+            WHERE id IN (SELECT id FROM vending_stock WHERE product_id=? AND state='available' ORDER BY created_at ASC,id ASC LIMIT ?)
+              AND state='available'`)
+            .bind(marker,now,productId,quantity),
+          env.DB.prepare("UPDATE vending_supply_receipts SET added_count=-changes() WHERE idempotency_key=?")
+            .bind(marker)
+        ]);
+      }catch(error){
+        const race=await replay();
+        if(race) return race;
+        throw error;
+      }
+      return json(env,{ok:true,productId,items:await taken(),duplicateRequest:false});
+    }
+
     return json(env,{error:"method_not_allowed"},405);
   }catch(error){
     return bridgeError(env,error);
