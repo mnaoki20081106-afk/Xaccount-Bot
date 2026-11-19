@@ -296,7 +296,8 @@ export default function ShiireOperationsCenter({
   roles,
   onNotice,
   onError,
-  focusMachineId
+  focusMachineId,
+  view
 }:{
   guildId:string;
   channels:Channel[];
@@ -307,8 +308,14 @@ export default function ShiireOperationsCenter({
   // specific machine. Applied once per value change, then left alone so the
   // operator's own navigation afterwards is never overridden.
   focusMachineId?:string|null;
+  // 仕入れ画面のタブ: 「支払い・ウォレット」と「履歴」だけを表示する。仕入れ設定は仕入れ品に移った。
+  view?:"payments"|"history";
 }){
-  const [section,setSection]=useState<Section>("overview");
+  const [section,setSection]=useState<Section>(view==="history"?"logs":"overview");
+  const viewSections:Array<{id:Section;label:string}>|null=
+    view==="payments"?[{id:"overview",label:"運用状況"},{id:"funding",label:"資金・安全装置"}]
+    :view==="history"?[{id:"logs",label:"履歴と問題"},{id:"procurement",label:"購入履歴・購入条件"}]
+    :null;
   const focusedMachineRef=useRef<string|null>(null);
   useEffect(()=>{
     if(!focusMachineId||focusMachineId===focusedMachineRef.current) return;
@@ -317,7 +324,9 @@ export default function ShiireOperationsCenter({
   },[focusMachineId]);
   const [advanced,setAdvanced]=useState(false);
   const savedPurchase=useRef<Record<string,string>>({});
-  const mainSection=["overview","vending","logs"].includes(section)?section:"budget";
+  const mainSection=viewSections
+    ?(viewSections.some(item=>item.id===section)?section:viewSections[0]!.id)
+    :["overview","vending","logs"].includes(section)?section:"budget";
   const [overviewError,setOverviewError]=useState("");
   const activeGuild=useRef(guildId);
   const overviewRequest=useRef(0);
@@ -1057,9 +1066,9 @@ export default function ShiireOperationsCenter({
       </section>
 
       <nav className="shiire-subnav" aria-label="仕入れbot管理メニュー">
-        {sections.map(item=>(<button type="button" key={item.id} className={mainSection===item.id?"active":""} aria-current={mainSection===item.id?"page":undefined} disabled={controlBusy} onClick={()=>setSection(item.id)}><strong>{item.label}</strong></button>))}
+        {(viewSections??sections).map(item=>(<button type="button" key={item.id} className={mainSection===item.id?"active":""} aria-current={mainSection===item.id?"page":undefined} disabled={controlBusy} onClick={()=>setSection(item.id)}><strong>{item.label}</strong></button>))}
       </nav>
-      {mainSection==="budget"&&<details className="card shiire-disclosure" open={advanced} onToggle={event=>setAdvanced(event.currentTarget.open)}>
+      {!viewSections&&mainSection==="budget"&&<details className="card shiire-disclosure" open={advanced} onToggle={event=>setAdvanced(event.currentTarget.open)}>
         <summary>通常は変更不要の設定</summary>
         <p>招待特典や購入先の品質条件など、必要な場合だけ変更してください。</p>
         <label className="field"><span>変更する設定</span><select value={section} disabled={controlBusy} onChange={event=>setSection(event.target.value as Section)}>

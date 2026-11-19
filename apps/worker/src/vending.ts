@@ -4,6 +4,7 @@ import { getDashboardSession } from "./db";
 import { json, randomId, sha256Hex } from "./utils";
 import { listPanelDeployments, recordPanelDeployment } from "./backup-db";
 import { handleSupplyBridge } from "./supply-bridge";
+import { notifyStockAdded } from "./vending-notify";
 import {
   addStock, attachPaymentLink, claimDelivery, cleanVendingExpired, clearPaymentLink, createCoupon, createMachine, createVmProduct,
   deleteCoupon, deleteMachine, deleteStockNotify, deleteVmPanelImage, deleteVmProduct, ensureVendingSchema, finishDelivery, getAchievementRoomsForMachine, getCoupon,
@@ -530,25 +531,7 @@ export async function handleVendingApi(request:Request,env:Env,url:URL):Promise<
       const lines=Array.isArray(b.lines)?b.lines:String(b.text??"").split(/\r?\n/);
       if(lines.filter(Boolean).length>500) throw new VendingHttpError(413,"在庫は1回500件まで追加できます");
       const count=await addStock(env,productId,lines);
-      const notification=await getStockNotify(env,vmId);
-      if(count>0&&b.notify!==false&&notification?.enabled){
-        const productInfo=await getVmProduct(env,productId);
-        if(productInfo){
-          await send(env,notification.channel_id,{
-            content:"<@&"+notification.role_id+">",
-            allowed_mentions:{roles:[notification.role_id]},
-            embeds:[{
-              title:"在庫追加のお知らせ",
-              color:5763719,
-              description:"**"+productInfo.name+"** の在庫が追加されました。",
-              fields:[
-                {name:"追加数",value:String(count)+"個",inline:true},
-                {name:"自販機",value:vm.name,inline:true}
-              ]
-            }]
-          }).catch(()=>undefined);
-        }
-      }
+      if(b.notify!==false) await notifyStockAdded(env,productId,count).catch(()=>undefined);
       return json(env,{ok:true,added:count});
     }
   }

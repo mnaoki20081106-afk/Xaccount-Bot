@@ -3,7 +3,7 @@ import { API_BASE, api, clearSession, currentSession, login } from "./api";
 import ServerEditor from "./ServerEditor";
 import RoleManager from "./RoleManager";
 import VendingManager from "./VendingManager";
-import ShiireOperationsCenter from "./ShiireOperationsCenter";
+import ProcurementCenter from "./ProcurementCenter";
 import XUtilityManager from "./XUtilityManager";
 import XGeneratorManager from "./XGeneratorManager";
 import AffiliateManager from "./AffiliateManager";
@@ -669,7 +669,7 @@ export default function App() {
       label: "連携Bot",
       note: "別Bot",
       items: [
-        { view: "shiire", label: "仕入れbot", icon: "truck", bot: "別Bot · Discord-Shiire" },
+        { view: "shiire", label: "仕入れ", icon: "truck", bot: "別Bot · Discord-Shiire" },
         { view: "affiliate", label: "アフィリエイト", icon: "users", bot: "別Bot · Discord-Shiire" },
         { view: "followbomb", label: "フォロ爆", icon: "spark", bot: "別Bot · Discord-Shiire" },
         { view: "utility", label: "X Utility", icon: "wrench", bot: "別Bot · X-Utility" },
@@ -1427,16 +1427,14 @@ export default function App() {
                   </section>
 
                   <section {...panelProps("shiire")}>
-                    {pageHead("仕入れbot", "Xアカウントの自動仕入れ・在庫・仕入れbot自販機を管理します。販売と納品は別Bot（Discord-Shiire）が行います。", "別Bot · Discord-Shiire")}
                     {activeView === "shiire" && (
-                      <ShiireOperationsCenter
-                        key={"ShiireOperationsCenter:" + selectedId}
+                      <ProcurementCenter
+                        key={"ProcurementCenter:" + selectedId}
                         guildId={selectedId!}
                         channels={meta.channels}
                         roles={meta.roles}
                         onNotice={flash}
                         onError={fail}
-                        focusMachineId={focusShiireMachineId}
                       />
                     )}
                   </section>

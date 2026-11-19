@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { getVmProduct } from "./vending-db";
+import { notifyStockAdded } from "./vending-notify";
 import { json, randomId, sha256Hex } from "./utils";
 
 const MAX_CLOCK_SKEW_MS=5*60_000;
@@ -250,6 +251,8 @@ export async function handleSupplyBridge(
         throw error;
       }
 
+      // 仕入れbotの補充も在庫追加通知で知らせる（通知の失敗で補充は取り消さない）。
+      if(added>0) await notifyStockAdded(env,productId,added).catch(error=>console.error("stock notification failed",productId,error));
       const countRow=await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM vending_stock WHERE product_id=? AND state='available'"
       ).bind(productId).first<{count:number}>();

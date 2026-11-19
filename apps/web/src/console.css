@@ -529,3 +529,14 @@ body.dsm-touch-reordering .discord-channel-scroll { touch-action: none; overscro
 .vending-settings-single { max-width: 760px; }
 /* Detail designer preview: draw the band in the machine's own color. */
 .vending-discord-embed::before { background: var(--embed-color, #57f287) !important; }
+
+/* 仕入れ: item editor */
+.xc-fieldset { border: 1px solid #222b45; border-radius: 14px; padding: 14px 16px 16px; display: grid; gap: 12px; margin: 0; }
+.xc-fieldset legend { padding: 0 6px; font-size: 13px; font-weight: 800; color: #b3a9ff; }
+.xc-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.xc-template {
+  display: grid; gap: 4px; text-align: left; padding: 12px; border-radius: 12px; cursor: pointer;
+  color: #e8edff; background: #121a30; border: 1px solid #222b45;
+}
+.xc-template small { color: #8f9ab4; font-size: 12px; line-height: 1.5; }
+.xc-template.active { border-color: #6c5ce7; background: rgba(108, 92, 231, .14); }
