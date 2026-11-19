@@ -904,6 +904,7 @@ async function discordMeta(env:Env,guildId:string){
           parentId:c.parent_id??null,
           topic:c.topic??"",
           position:c.position??0,
+          ...(c.type===15||c.type===16?{availableTags:(c.available_tags??[]).map(tag=>tag.name)}:{}),
           botCanView,
           botCanPost,
           permissionOverwrites:(c.permission_overwrites??[]).map(overwrite=>({
@@ -1627,6 +1628,28 @@ async function handleInteraction(
   return processInteraction(interaction,request,env,ctx);
 }
 
+// Forum tag names: trimmed, unique, at most 20 tags of 20 characters (Discord limits).
+function forumTagNames(raw:unknown):string[]{
+  if(raw===undefined||raw===null) return [];
+  if(!Array.isArray(raw)) throw new HttpError(400,"タグの形式が不正です");
+  const names=[...new Set(raw.map(value=>String(value??"").trim()).filter(Boolean))];
+  if(names.length>20) throw new HttpError(400,"フォーラムのタグは20個までです");
+  if(names.some(name=>name.length>20)) throw new HttpError(400,"タグ名は20文字以内にしてください");
+  return names;
+}
+
+async function createGuildChannel(env:Env,guildId:string,type:string,init:RequestInit):Promise<DiscordChannel>{
+  try{
+    return await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,init);
+  }catch(error){
+    // Discord only allows forum channels in Community servers.
+    if(type==="forum"&&error instanceof DiscordApiError&&error.status===400){
+      throw new HttpError(400,"フォーラムチャンネルを作成できませんでした。Discordのサーバー設定で「コミュニティ」を有効にしているか確認してください（"+error.message.slice(0,160)+"）");
+    }
+    throw error;
+  }
+}
+
 async function registerCommands(env:Env):Promise<void>{
   await botJson(env,`/applications/${env.DISCORD_APPLICATION_ID}/commands`,{
     method:"PUT",
@@ -2153,15 +2176,17 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
   if(channelsMatch&&request.method==="POST"){
     const guildId=channelsMatch[1]!;
     await requireGuild(request,env,guildId);
-    const input=await bodyObject<{name:string;type:"text"|"voice"|"category";parentId?:string|null;topic?:string}>(request);
+    const input=await bodyObject<{name:string;type:"text"|"voice"|"category"|"forum";parentId?:string|null;topic?:string;availableTags?:string[]}>(request);
     const name=input.name?.trim();
     if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
+    if(!["text","voice","category","forum"].includes(input.type)) throw new HttpError(400,"チャンネルの種類が不正です");
+    const forumTags=input.type==="forum"?forumTagNames(input.availableTags):[];
     const botOverwrite=[{
       id:env.DISCORD_APPLICATION_ID.trim(),
       type:1,
       allow:BOT_CHANNEL_GUARD_MASK.toString()
     }];
-    const created=await botJson<DiscordChannel>(env,`/guilds/${guildId}/channels`,{
+    const created=await createGuildChannel(env,guildId,input.type,{
       method:"POST",
       body:JSON.stringify(
         input.type==="category"
@@ -2171,6 +2196,16 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
                 name,
                 type:2,
                 parent_id:input.parentId||undefined,
+                ...(input.parentId?{}:{permission_overwrites:botOverwrite})
+              }
+          :input.type==="forum"
+            ?{
+                name,
+                type:15,
+                parent_id:input.parentId||undefined,
+                // Forum "topic" is shown as the post guidelines.
+                topic:input.topic?String(input.topic).slice(0,4096):undefined,
+                ...(forumTags.length?{available_tags:forumTags.map(tagName=>({name:tagName}))}:{}),
                 ...(input.parentId?{}:{permission_overwrites:botOverwrite})
               }
             :{
@@ -2889,6 +2924,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         name?:string;
         topic?:string|null;
         parentId?:string|null;
+        availableTags?:string[];
       }>(request);
       const payload:Record<string,unknown>={};
       if(input.name!==undefined){
@@ -2896,8 +2932,18 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
         payload.name=name;
       }
-      if(input.topic!==undefined) payload.topic=input.topic===null?null:String(input.topic).slice(0,1024);
+      if(input.topic!==undefined) payload.topic=input.topic===null?null:String(input.topic).slice(0,4096);
       if(input.parentId!==undefined) payload.parent_id=input.parentId||null;
+      if(input.availableTags!==undefined){
+        // Keep id/emoji/moderated of tags that still exist so posts keep their tags.
+        const current=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
+        if(current.type!==15&&current.type!==16) throw new HttpError(400,"タグはフォーラムチャンネルでのみ設定できます");
+        const existing=new Map((current.available_tags??[]).map(tag=>[tag.name,tag]));
+        payload.available_tags=forumTagNames(input.availableTags).map(tagName=>{
+          const tag=existing.get(tagName);
+          return tag?{id:tag.id,name:tag.name,moderated:tag.moderated??false,emoji_id:tag.emoji_id??null,emoji_name:tag.emoji_name??null}:{name:tagName};
+        });
+      }
       const updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
         method:"PATCH",
         body:JSON.stringify(payload)

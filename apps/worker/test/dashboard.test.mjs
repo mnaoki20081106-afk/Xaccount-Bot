@@ -51,6 +51,10 @@ async function runtime(t, options = {}) {
       const url = new URL(request.url);
       calls.push({ method: request.method, path: url.pathname });
       assert.equal(url.hostname, 'discord.com', 'tests must never contact payment providers');
+      if (options.outbound) {
+        const handled = await options.outbound(request, url, calls);
+        if (handled) return handled;
+      }
       if (
         request.method === 'POST' &&
         url.pathname === '/api/v10/oauth2/token'
@@ -1759,4 +1763,69 @@ test('console: product reorder, overview summary and asset panels', async t => {
   const removed=await request(mf,`${base}/assets/${asset.body.id}`,token,'DELETE');
   assert.equal(removed.body.ok,true);
   assert.equal((await request(mf,`${base}/assets`,token)).body.length,0);
+});
+
+test('channel editor: forum channels are created, listed and their tags edited', async t => {
+  const forumId='923456789012345678';
+  let forum={id:forumId,name:'質問箱',type:15,parent_id:'323456789012345678',position:2,topic:'ルール',
+    available_tags:[{id:'111',name:'質問',moderated:true,emoji_id:null,emoji_name:'❓'}],permission_overwrites:[]};
+  let communityEnabled=true;
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(request.method==='POST'&&url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      const body=await request.clone().json();
+      calls[calls.length-1].body=body;
+      if(body.type===15&&!communityEnabled) return Response.json({code:50024,message:'Cannot execute action on this channel type'},{status:400});
+      return Response.json({id:'923456789012345679',...body});
+    }
+    if(request.method==='GET'&&url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      return Response.json([
+        {id:'323456789012345678',name:'General',type:4,position:0},
+        {id:chatChannelId,name:'chat',type:0,parent_id:'323456789012345678',position:1,permission_overwrites:[]},
+        forum
+      ]);
+    }
+    if(url.pathname===`/api/v10/channels/${forumId}`){
+      if(request.method==='GET') return Response.json(forum);
+      if(request.method==='PATCH'){
+        const body=await request.clone().json();
+        calls[calls.length-1].body=body;
+        forum={...forum,...body};
+        return Response.json(forum);
+      }
+    }
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+
+  const meta=await request(mf,`/api/guilds/${guildId}/meta`,token);
+  assert.equal(meta.status,200,JSON.stringify(meta.body));
+  const listed=meta.body.channels.find(c=>c.id===forumId);
+  assert.equal(listed.type,'forum');
+  assert.deepEqual(listed.availableTags,['質問']);
+
+  const created=await request(mf,`/api/guilds/${guildId}/channels`,token,'POST',{
+    name:'要望',type:'forum',parentId:'323456789012345678',topic:'投稿ルール',availableTags:['要望','バグ','要望']
+  });
+  assert.equal(created.status,200,JSON.stringify(created.body));
+  const post=calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/guilds/${guildId}/channels`).at(-1);
+  assert.equal(post.body.type,15);
+  assert.equal(post.body.topic,'投稿ルール');
+  assert.deepEqual(post.body.available_tags,[{name:'要望'},{name:'バグ'}]);
+
+  const tooMany=await request(mf,`/api/guilds/${guildId}/channels`,token,'POST',{name:'x',type:'forum',availableTags:Array.from({length:21},(_,i)=>'t'+i)});
+  assert.equal(tooMany.status,400);
+
+  communityEnabled=false;
+  const rejected=await request(mf,`/api/guilds/${guildId}/channels`,token,'POST',{name:'y',type:'forum'});
+  assert.equal(rejected.status,400);
+  assert.match(rejected.body.message,/コミュニティ/);
+
+  const edited=await request(mf,`/api/guilds/${guildId}/channels/${forumId}`,token,'PATCH',{availableTags:['質問','雑談']});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  const patch=calls.filter(c=>c.method==='PATCH'&&c.path===`/api/v10/channels/${forumId}`).at(-1);
+  assert.deepEqual(patch.body.available_tags,[
+    {id:'111',name:'質問',moderated:true,emoji_id:null,emoji_name:'❓'},
+    {name:'雑談'}
+  ],'existing tags keep id/emoji/moderated');
 });

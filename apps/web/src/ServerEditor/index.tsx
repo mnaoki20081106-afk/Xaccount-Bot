@@ -8,6 +8,7 @@ type?: "text" | "voice" | "announcement" | "stage" | "forum" | "media";
 parentId?: string | null;
 topic?: string;
 position?: number;
+availableTags?: string[];
 permissionOverwrites?: Array<{
 id: string;
 type: number;
@@ -156,8 +157,63 @@ seen.add(row.key);
 return true;
 });
 }
+// Discord forum/media channels: SEND_MESSAGES creates posts, threads are posts.
+const FORUM_PRIMARY_PERMISSION_ROWS: PermissionRow[] = [
+{ key: "view", label: "チャンネルを見る" },
+{ key: "send", label: "投稿を作成" },
+{ key: "sendInThreads", label: "投稿内でメッセージを送信" },
+{ key: "history", label: "メッセージ履歴を読む" },
+{ key: "react", label: "リアクションを追加" },
+{ key: "files", label: "ファイルを添付" },
+{ key: "embeds", label: "リンクを埋め込む" },
+{ key: "appCommands", label: "アプリコマンドを使用" },
+{ key: "polls", label: "投票を作成" }
+];
+const FORUM_ADVANCED_PERMISSION_ROWS: PermissionRow[] = [
+{ key: "manageThreads", label: "投稿を管理" },
+{ key: "manageMessages", label: "メッセージを管理" },
+{ key: "mentionEveryone", label: "@everyone / @here をメンション" },
+{ key: "externalEmojis", label: "外部の絵文字を使用" },
+{ key: "externalStickers", label: "外部のスタンプを使用" },
+{ key: "voiceMessages", label: "ボイスメッセージを送信" },
+{ key: "createInvite", label: "招待を作成" },
+{ key: "manageWebhooks", label: "Webhookを管理" },
+{ key: "pinMessages", label: "メッセージをピン留め" },
+{ key: "bypassSlowmode", label: "低速モードを無視" }
+];
+type ChannelKind = NonNullable<ServerEditorMeta["channels"][number]["type"]>;
+export function channelIcon(type?: ChannelKind) {
+switch (type) {
+case "voice": return "🔊";
+case "stage": return "🎙";
+case "announcement": return "📢";
+case "forum": return "💬";
+case "media": return "🖼";
+default: return "#";
+}
+}
+function channelKindLabel(type?: ChannelKind) {
+switch (type) {
+case "voice": return "VOICE CHANNEL";
+case "stage": return "STAGE CHANNEL";
+case "announcement": return "ANNOUNCEMENT CHANNEL";
+case "forum": return "FORUM CHANNEL";
+case "media": return "MEDIA CHANNEL";
+default: return "TEXT CHANNEL";
+}
+}
+const isForumLike = (type?: string) => type === "forum" || type === "media";
+function parseTags(text: string) {
+return [...new Set(text.split(/[,、\n]+/).map((tag) => tag.trim()).filter(Boolean))];
+}
 function permissionGroupsForChannelType(type: string) {
 const isVoice = type === "voice" || type === "stage";
+if (isForumLike(type)) {
+return {
+primary: FORUM_PRIMARY_PERMISSION_ROWS,
+advanced: FORUM_ADVANCED_PERMISSION_ROWS
+};
+}
 return isVoice
 ? {
 primary: VOICE_PRIMARY_PERMISSION_ROWS,
@@ -230,7 +286,7 @@ armed: boolean;
 type Selection =
 | { kind: "channel"; id: string }
 | { kind: "category"; id: string }
-| { kind: "create"; type: "text" | "voice" | "category"; parentId: string | null }
+| { kind: "create"; type: "text" | "voice" | "category" | "forum"; parentId: string | null }
 | null;
 type Props = {
 guildId: string;
@@ -252,7 +308,9 @@ const [selection, setSelection] = useState<Selection>(null);
 const [name, setName] = useState("");
 const [topic, setTopic] = useState("");
 const [parentId, setParentId] = useState("");
-const [createType, setCreateType] = useState<"text" | "voice" | "category">("text");
+const [createType, setCreateType] = useState<"text" | "voice" | "category" | "forum">("text");
+// Forum tags, edited as comma separated names.
+const [tagsText, setTagsText] = useState("");
 const [saving, setSaving] = useState(false);
 const [permissionSaving, setPermissionSaving] = useState(false);
 const [permissionSaveFeedback, setPermissionSaveFeedback] = useState<{
@@ -376,33 +434,15 @@ const bulkSelectedChannels = useMemo(
 [meta.channels, bulkSelectedIds]
 );
 const bulkPermissionGroups = useMemo(() => {
-const hasText = bulkSelectedChannels.some(
-(channel) => channel.type !== "voice" && channel.type !== "stage"
-);
-const hasVoice = bulkSelectedChannels.some(
-(channel) => channel.type === "voice" || channel.type === "stage"
-);
-if (hasText && hasVoice) {
-return {
-primary: mergePermissionRows(
-TEXT_PRIMARY_PERMISSION_ROWS,
-          VOICE_PRIMARY_PERMISSION_ROWS
-),
-advanced: mergePermissionRows(
-TEXT_ADVANCED_PERMISSION_ROWS,
-          VOICE_ADVANCED_PERMISSION_ROWS
-)
-};
-}
-return hasVoice
-? {
-primary: VOICE_PRIMARY_PERMISSION_ROWS,
-advanced: VOICE_ADVANCED_PERMISSION_ROWS
-}
-: {
-primary: TEXT_PRIMARY_PERMISSION_ROWS,
-advanced: TEXT_ADVANCED_PERMISSION_ROWS
-};
+// Merge the permission rows of every selected channel kind (text / voice / forum).
+const groups = [...new Set(bulkSelectedChannels.map((channel) =>
+isForumLike(channel.type) ? "forum" : channel.type === "voice" || channel.type === "stage" ? "voice" : "text"
+))].map((kind) => permissionGroupsForChannelType(kind));
+if (groups.length === 0) return permissionGroupsForChannelType("text");
+return groups.slice(1).reduce((merged, group) => ({
+primary: mergePermissionRows(merged.primary, group.primary),
+advanced: mergePermissionRows(merged.advanced, group.advanced)
+}), groups[0]!);
 }, [bulkSelectedChannels]);
 const selectedPermissionGroups = selectedChannel
 ? permissionGroupsForChannelType(selectedChannel.type ?? "text")
@@ -485,6 +525,7 @@ if (!channel) return;
 setSelection({ kind: "channel", id });
 setName(channel.name);
 setTopic(channel.topic ?? "");
+setTagsText((channel.availableTags ?? []).join(", "));
 setParentId(channel.parentId ?? "");
 setPermissionTargetId(permissionPreviewRoleId);
 setPermissionDraft(draftFor(channel, permissionPreviewRoleId));
@@ -501,7 +542,8 @@ setName(category.name);
 setTopic("");
 setParentId("");
 }
-function openCreate(parent: string | null = null, type: "text" | "voice" | "category" = "text") {
+function openCreate(parent: string | null = null, type: "text" | "voice" | "category" | "forum" = "text") {
+setTagsText("");
 setSelection({ kind: "create", parentId: parent, type });
 setCreateType(type);
 setName("");
@@ -778,8 +820,9 @@ if (!showPermissionBadges) return null;
 const key: PermissionKey =
 channel.type === "voice" || channel.type === "stage" ? "speak" : "send";
 const mode = permissionMode(channel, permissionPreviewRoleId, key);
+const verb = isForumLike(channel.type) ? "投稿" : "発言";
 const label =
-      mode === "allow" ? "発言 可" : mode === "deny" ? "発言 不可" : "発言 継承";
+      mode === "allow" ? verb + " 可" : mode === "deny" ? verb + " 不可" : verb + " 継承";
 return (
 <span
 className={`permission-badge ${mode}`}
@@ -812,6 +855,10 @@ name.trim() !== channel.name ||
 (
 ["text", "announcement", "forum", "media"].includes(channel.type ?? "text") &&
               topic !== (channel.topic ?? "")
+) ||
+(
+isForumLike(channel.type) &&
+parseTags(tagsText).join("\n") !== (channel.availableTags ?? []).join("\n")
 )
 );
 setSaving(true);
@@ -867,7 +914,8 @@ parentId: parentId || null,
 ...(channel &&
 ["text", "announcement", "forum", "media"].includes(channel.type ?? "text")
 ? { topic }
-: {})
+: {}),
+...(channel && isForumLike(channel.type) ? { availableTags: parseTags(tagsText) } : {})
 };
 await api(`/api/guilds/${guildId}/channels/${selection.id}`, {
 method: "PATCH",
@@ -915,7 +963,8 @@ body: JSON.stringify({
 name: name.trim(),
 type: createType,
 parentId: createType === "category" ? null : parentId || null,
-topic: createType === "text" ? topic : undefined
+topic: createType === "text" || createType === "forum" ? topic : undefined,
+availableTags: createType === "forum" ? parseTags(tagsText) : undefined
 })
 });
 await onRefresh();
@@ -923,7 +972,7 @@ setSelection(null);
 setName("");
 setTopic("");
 setParentId("");
-onNotice(createType === "category" ? "カテゴリを追加しました" : "チャンネルを追加しました");
+onNotice(createType === "category" ? "カテゴリを追加しました" : createType === "forum" ? "フォーラムチャンネルを追加しました" : "チャンネルを追加しました");
 } catch (reason) {
 onError(reason);
 } finally {
@@ -1351,7 +1400,7 @@ transform: `translate3d(${touchDragGhost.x}px, ${touchDragGhost.y}px, 0) scale(1
 aria-hidden="true"
 >
 <span className="channel-hash">
-{touchDragGhost.type === "voice" || touchDragGhost.type === "stage" ? "🔊" : "#"}
+{channelIcon(touchDragGhost.type)}
 </span>
 <span className="channel-name">{touchDragGhost.name}</span>
 <span className="touch-ghost-grip">⋮⋮</span>
@@ -1533,9 +1582,9 @@ openChannel(channel.id);
 }}
 >
 <span className="channel-hash">
-{channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
+{channelIcon(channel.type)}
 </span>
-<span className="channel-name">{channel.name}</span>
+<span className="channel-name">{channel.name}{isForumLike(channel.type) && <small className="channel-kind-tag">{channel.type === "media" ? "メディア" : "フォーラム"}</small>}</span>
 {renderPermissionBadge(channel)}
 {bulkMode ? (
 <span
@@ -1636,9 +1685,9 @@ openChannel(channel.id);
 }}
 >
 <span className="channel-hash">
-{channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}
+{channelIcon(channel.type)}
 </span>
-<span className="channel-name">{channel.name}</span>
+<span className="channel-name">{channel.name}{isForumLike(channel.type) && <small className="channel-kind-tag">{channel.type === "media" ? "メディア" : "フォーラム"}</small>}</span>
 {renderPermissionBadge(channel)}
 {bulkMode ? (
 <span
@@ -1692,7 +1741,7 @@ key={channel.id}
 onClick={() => toggleBulkChannel(channel.id)}
 title="選択解除"
 >
-<span>{channel.type === "voice" || channel.type === "stage" ? "🔊" : "#"}</span>
+<span>{channelIcon(channel.type)}</span>
 <strong>{channel.name}</strong>
 <i>×</i>
 </button>
@@ -1809,13 +1858,14 @@ onClick={() => void saveBulkPermissions()}
 <select
 value={createType}
 onChange={(event) => {
-const next = event.target.value as "text" | "voice" | "category";
+const next = event.target.value as "text" | "voice" | "category" | "forum";
 setCreateType(next);
 if (next === "category") setParentId("");
 }}
 >
 <option value="text"># テキストチャンネル</option>
 <option value="voice">🔊 ボイスチャンネル</option>
+<option value="forum">💬 フォーラムチャンネル</option>
 <option value="category">カテゴリ</option>
 </select>
 </label>
@@ -1843,16 +1893,29 @@ placeholder={createType === "category" ? "INFORMATION" : "general"}
 ))}
 </select>
 </label>
-{createType === "text" && (
+{(createType === "text" || createType === "forum") && (
 <label>
-<span>トピック</span>
+<span>{createType === "forum" ? "投稿ガイドライン" : "トピック"}</span>
 <textarea
 value={topic}
 onChange={(event) => setTopic(event.target.value)}
-maxLength={1024}
-placeholder="任意"
+maxLength={createType === "forum" ? 4096 : 1024}
+placeholder={createType === "forum" ? "投稿前に表示されるルール（任意）" : "任意"}
 />
 </label>
+)}
+{createType === "forum" && (
+<>
+<label>
+<span>タグ（カンマ区切り・任意）</span>
+<input
+value={tagsText}
+onChange={(event) => setTagsText(event.target.value)}
+placeholder="質問, 報告, 雑談"
+/>
+<small className="muted">最大20個・各20文字まで。フォーラムはDiscordのコミュニティ機能が有効なサーバーでのみ作成できます。</small>
+</label>
+</>
 )}
 </>
 )}
@@ -1865,11 +1928,11 @@ placeholder="任意"
 <form className="editor-form" onSubmit={(event) => void saveExisting(event)}>
 <div className="editor-inspector-title">
 <div>
-<span className="eyebrow">{selectedCategory ? "CATEGORY" : selectedChannel?.type === "voice" || selectedChannel?.type === "stage" ? "VOICE CHANNEL" : "TEXT CHANNEL"}</span>
+<span className="eyebrow">{selectedCategory ? "CATEGORY" : channelKindLabel(selectedChannel?.type)}</span>
 <h3 className="inspector-channel-name">
 {selectedCategory
 ? selectedCategory.name
-: (selectedChannel?.type === "voice" || selectedChannel?.type === "stage" ? "🔊 " : "# ") + (selectedChannel?.name ?? "")}
+: channelIcon(selectedChannel?.type) + " " + (selectedChannel?.name ?? "")}
 </h3>
 <div className="inspector-move">
 <span>並び順</span>
@@ -1924,15 +1987,31 @@ onChange={(event) => setName(event.target.value)}
 </label>
 {selectedChannel.type === "text" || selectedChannel.type === "announcement" || selectedChannel.type === "forum" || selectedChannel.type === "media" ? (
 <label>
-<span>トピック</span>
+<span>{isForumLike(selectedChannel.type) ? "投稿ガイドライン" : "トピック"}</span>
 <textarea
 value={topic}
 onChange={(event) => setTopic(event.target.value)}
-maxLength={1024}
-placeholder="チャンネルの説明"
+maxLength={isForumLike(selectedChannel.type) ? 4096 : 1024}
+placeholder={isForumLike(selectedChannel.type) ? "投稿前に表示されるルール" : "チャンネルの説明"}
 />
 </label>
 ) : null}
+{isForumLike(selectedChannel.type) && (
+<label>
+<span>タグ（カンマ区切り）</span>
+<input
+value={tagsText}
+onChange={(event) => setTagsText(event.target.value)}
+placeholder="質問, 報告, 雑談"
+/>
+{parseTags(tagsText).length > 0 && (
+<span className="forum-tag-list">
+{parseTags(tagsText).map((tag) => <i key={tag}>{tag}</i>)}
+</span>
+)}
+<small className="muted">既存のタグは名前が同じなら投稿の付与状態を保ったまま残ります。最大20個・各20文字。</small>
+</label>
+)}
 <div className="channel-permission-editor">
 <div className="permission-editor-head">
 <div>

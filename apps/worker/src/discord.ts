@@ -29,6 +29,8 @@ export type DiscordChannel={
   parent_id?:string|null;
   topic?:string|null;
   position?:number;
+  // Forum / media channels only.
+  available_tags?:Array<{id?:string;name:string;moderated?:boolean;emoji_id?:string|null;emoji_name?:string|null}>;
   permission_overwrites?:Array<{
     id:string;
     type:number;

@@ -469,3 +469,12 @@
   .xc-main .server-editor-layout { grid-template-columns: minmax(0, 1fr); }
   .xc-main .discord-channel-scroll { max-height: 60vh; }
 }
+.channel-kind-tag {
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px; vertical-align: 1px;
+  font-size: 10px; font-weight: 800; color: #b3a9ff; background: rgba(124, 108, 246, .14); border: 1px solid rgba(124, 108, 246, .45);
+}
+.forum-tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.forum-tag-list i {
+  font-style: normal; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+  color: #dbdee1; background: #1a2238; border: 1px solid #283253;
+}
