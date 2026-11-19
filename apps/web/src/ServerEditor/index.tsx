@@ -288,6 +288,32 @@ const touchDraggingIdRef = useRef<string | null>(null);
 const touchDropTargetRef = useRef<TouchDropTarget>(null);
 const suppressClickUntilRef = useRef(0);
 const channelScrollRef = useRef<HTMLDivElement | null>(null);
+// Channel list search and collapsed categories (per guild, remembered in this browser).
+const [search, setSearch] = useState("");
+const [collapsedIds, setCollapsedIds] = useState<string[]>(() => {
+try {
+const saved = JSON.parse(localStorage.getItem(`dsm_collapsed_categories_${guildId}`) ?? "[]");
+return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : [];
+} catch {
+return [];
+}
+});
+const searchText = search.trim().toLowerCase();
+const channelMatches = (channel: ServerEditorMeta["channels"][number]) =>
+!searchText || channel.name.toLowerCase().includes(searchText);
+function toggleCollapsed(categoryId: string) {
+setCollapsedIds((current) => {
+const next = current.includes(categoryId)
+? current.filter((id) => id !== categoryId)
+: [...current, categoryId];
+try {
+localStorage.setItem(`dsm_collapsed_categories_${guildId}`, JSON.stringify(next));
+} catch {
+// Remembering collapsed categories is only a convenience.
+}
+return next;
+});
+}
 const [permissionTargetId, setPermissionTargetId] = useState(guildId);
 const [permissionDraft, setPermissionDraft] =
     useState<Record<PermissionKey, PermissionMode>>(EMPTY_PERMISSION_DRAFT);
@@ -993,6 +1019,28 @@ setSaving(false);
 setDragging(null);
 }
 }
+// Button-based reordering (same API as drag & drop) for precise moves.
+function channelSiblings(channel: ServerEditorMeta["channels"][number]) {
+return meta.channels
+.filter((item) => (item.parentId ?? null) === (channel.parentId ?? null))
+.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+}
+function moveChannelBy(channel: ServerEditorMeta["channels"][number], delta: -1 | 1) {
+const siblings = channelSiblings(channel);
+const index = siblings.findIndex((item) => item.id === channel.id);
+const target = siblings[index + delta];
+if (!target) return;
+void reorderChannel(channel.id, {
+targetId: target.id,
+placement: delta < 0 ? "before" : "after"
+});
+}
+function moveCategoryBy(category: ServerEditorMeta["categories"][number], delta: -1 | 1) {
+const index = meta.categories.findIndex((item) => item.id === category.id);
+const target = meta.categories[index + delta];
+if (!target) return;
+void reorderCategory(category.id, target.position ?? index + delta);
+}
 function dropOnChannel(target: ServerEditorMeta["channels"][number]) {
 if (!dragging || dragging.kind !== "channel" || dragging.id === target.id) {
 setDragging(null);
@@ -1311,10 +1359,9 @@ aria-hidden="true"
 )}
 <div className="section-head server-editor-heading">
 <div>
-<span className="eyebrow">LIVE SERVER EDITOR</span>
-<h2>サーバー構成をプレビュー編集</h2>
+<h2 className="server-editor-title">チャンネル一覧</h2>
 <p className="muted">
-            左のDiscord風プレビューから追加・編集・削除できます。スマホではチャンネルを長押しして自由に並べ替えできます。
+            ドラッグ（スマホは長押し）で並べ替え、チャンネルを選ぶと右側で名前・カテゴリ・権限を編集できます。▲▼ボタンでも1つずつ移動できます。
 </p>
 </div>
 <div className="editor-heading-actions">
@@ -1406,7 +1453,10 @@ data-uncategorized-drop="true"
 onDragOver={(event) => event.preventDefault()}
 onDrop={dropUncategorized}
 >
-<strong>{guildName}</strong>
+<div className="discord-preview-server-copy">
+<span>選択中のサーバー</span>
+<strong>{guildName} ({meta.channels.length} ch)</strong>
+</div>
 <button
 className="discord-plus"
 onClick={() => openCreate(null, "text")}
@@ -1415,6 +1465,17 @@ aria-label="チャンネルを追加"
 >
               ＋
 </button>
+</div>
+<div className="channel-search">
+<span aria-hidden="true">⌕</span>
+<input
+type="search"
+value={search}
+onChange={(event) => setSearch(event.target.value)}
+placeholder="チャンネルを探す"
+aria-label="チャンネルを探す"
+/>
+{searchText && <small>検索中は並べ替えできません</small>}
 </div>
 {showPermissionBadges && (
 <div className="permission-preview-context">
@@ -1445,13 +1506,13 @@ data-uncategorized-drop="true"
                 カテゴリなしへ移動
 </div>
 )}
-{uncategorized.length > 0 && (
+{uncategorized.filter(channelMatches).length > 0 && (
 <div className="discord-channel-group uncategorized-group">
-{uncategorized.map((channel) => (
+{uncategorized.filter(channelMatches).map((channel) => (
 <button
 key={channel.id}
 data-channel-id={channel.id}
-draggable={!bulkMode}
+draggable={!bulkMode && !searchText}
 onDragStart={() => setDragging({ kind: "channel", id: channel.id })}
 onDragEnd={() => setDragging(null)}
 onDragOver={(event) => event.preventDefault()}
@@ -1492,7 +1553,13 @@ className={`bulk-select-indicator ${
 </div>
 )}
 {meta.categories.map((category) => {
-const children = meta.channels.filter((channel) => channel.parentId === category.id);
+const allChildren = meta.channels.filter((channel) => channel.parentId === category.id);
+const categoryMatches = Boolean(searchText) && category.name.toLowerCase().includes(searchText);
+const children = searchText && !categoryMatches
+? allChildren.filter(channelMatches)
+: allChildren;
+if (searchText && !categoryMatches && children.length === 0) return null;
+const collapsed = !searchText && collapsedIds.includes(category.id);
 const selected = selection?.kind === "category" && selection.id === category.id;
 return (
 <div
@@ -1507,15 +1574,24 @@ data-category-id={category.id}
 >
 <div
 className={`discord-category ${selected ? "selected" : ""} ${dragging?.kind === "category" && dragging.id === category.id ? "dragging" : ""}`}
-                    draggable
+                    draggable={!searchText}
 onDragStart={() => setDragging({ kind: "category", id: category.id })}
 onDragEnd={() => setDragging(null)}
 onDragOver={(event) => event.preventDefault()}
 onDrop={() => dropOnCategory(category)}
 >
+<button
+type="button"
+className={`discord-category-toggle ${collapsed ? "collapsed" : ""}`}
+onClick={() => toggleCollapsed(category.id)}
+aria-expanded={!collapsed}
+aria-label={`${category.name} を${collapsed ? "開く" : "閉じる"}`}
+>
+⌄
+</button>
 <button className="discord-category-name" onClick={() => openCategory(category.id)}>
-<span>⌄</span>
 <strong>{category.name.toUpperCase()}</strong>
+<small className="discord-category-count">{allChildren.length}</small>
 </button>
 <button
 className="discord-plus category-plus"
@@ -1526,11 +1602,11 @@ aria-label={`${category.name} にチャンネルを追加`}
                       ＋
 </button>
 </div>
-{children.map((channel) => (
+{!collapsed && children.map((channel) => (
 <button
 key={channel.id}
 data-channel-id={channel.id}
-draggable={!bulkMode}
+draggable={!bulkMode && !searchText}
 onDragStart={(event) => {
 event.stopPropagation();
 setDragging({ kind: "channel", id: channel.id });
@@ -1789,8 +1865,36 @@ placeholder="任意"
 <form className="editor-form" onSubmit={(event) => void saveExisting(event)}>
 <div className="editor-inspector-title">
 <div>
-<span className="eyebrow">EDIT</span>
-<h3>{selectedCategory ? "カテゴリを編集" : "チャンネルを編集"}</h3>
+<span className="eyebrow">{selectedCategory ? "CATEGORY" : selectedChannel?.type === "voice" || selectedChannel?.type === "stage" ? "VOICE CHANNEL" : "TEXT CHANNEL"}</span>
+<h3 className="inspector-channel-name">
+{selectedCategory
+? selectedCategory.name
+: (selectedChannel?.type === "voice" || selectedChannel?.type === "stage" ? "🔊 " : "# ") + (selectedChannel?.name ?? "")}
+</h3>
+<div className="inspector-move">
+<span>並び順</span>
+<button
+type="button"
+disabled={saving || (selectedChannel
+? channelSiblings(selectedChannel)[0]?.id === selectedChannel.id
+: meta.categories[0]?.id === selectedCategory?.id)}
+onClick={() => selectedChannel ? moveChannelBy(selectedChannel, -1) : selectedCategory && moveCategoryBy(selectedCategory, -1)}
+>▲ 上へ</button>
+<button
+type="button"
+disabled={saving || (selectedChannel
+? channelSiblings(selectedChannel).at(-1)?.id === selectedChannel.id
+: meta.categories.at(-1)?.id === selectedCategory?.id)}
+onClick={() => selectedChannel ? moveChannelBy(selectedChannel, 1) : selectedCategory && moveCategoryBy(selectedCategory, 1)}
+>▼ 下へ</button>
+{selectedChannel && (
+<a
+href={`https://discord.com/channels/${guildId}/${selectedChannel.id}`}
+target="_blank"
+rel="noreferrer"
+>Discordで開く ↗</a>
+)}
+</div>
 </div>
 <button type="button" className="editor-close" onClick={() => setSelection(null)}>
                   ×

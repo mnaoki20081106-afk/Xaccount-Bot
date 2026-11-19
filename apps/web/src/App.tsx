@@ -172,6 +172,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeView, setActiveViewState] = useState<ConsoleView>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [serverTab, setServerTab] = useState<"channels" | "roles" | "templates">("channels");
   // null = table view; otherwise the detailed VendingManager is open on that target.
   const [vendingFocus, setVendingFocus] = useState<{
     machineId: string;
@@ -939,7 +940,18 @@ export default function App() {
               {settings && (
                 <>
                   <section {...panelProps("server")}>
-                    {pageHead("チャンネル位置エディタ", "Discordのカテゴリー・チャンネルの並び順・階層・権限、ロールを編集します。")}
+                    <div className="xc-page-head">
+                      <div>
+                        <h1>チャンネル位置エディタ</h1>
+                        <p>Discordのカテゴリー・チャンネルの並び順・階層・権限と、ロールを編集します。変更はDiscordへ即時反映されます。</p>
+                      </div>
+                      <div className="xc-filter" role="group" aria-label="編集対象">
+                        {([["channels","チャンネル"],["roles","ロール"],["templates","テンプレート"]] as const).map(([id,label]) => (
+                          <button type="button" key={id} aria-pressed={serverTab === id} onClick={() => setServerTab(id)}>{label}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div hidden={serverTab !== "channels"}>
                   <ServerEditor
                   key={"ServerEditor:"+selectedId}
                   guildId={selectedId!}
@@ -965,7 +977,8 @@ export default function App() {
                   onNotice={flash}
                   onError={fail}
                   />
-
+                    </div>
+                    <div hidden={serverTab !== "roles"}>
                   <RoleManager
                   key={"RoleManager:"+selectedId}
                   guildId={selectedId!}
@@ -978,7 +991,8 @@ export default function App() {
                   onNotice={flash}
                   onError={fail}
                   />
-
+                    </div>
+                    <div hidden={serverTab !== "templates"} style={{ display: serverTab === "templates" ? "grid" : undefined, gap: 20 }}>
                   <section className="metric-grid">
                   <article className="metric card">
                   <span>NATIVE GUARD</span>
@@ -1001,7 +1015,6 @@ export default function App() {
                   <small>Live server structure</small>
                   </article>
                   </section>
-
                     <section className="two-col">
                       <article className="card">
                       <span className="eyebrow">QUICK TEMPLATES</span>
@@ -1023,6 +1036,7 @@ export default function App() {
                       </div>
                       </article>
                     </section>
+                    </div>
                   </section>
 
                   <section {...panelProps("security")}>
