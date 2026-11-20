@@ -71,6 +71,14 @@ Pages workflowは`VITE_API_BASE_URL`未設定時にビルドを失敗させま�
 両方の実装をそのまま再利用できる部分は維持し、Worker境界だけを同一プロセス内の内部呼び出しへ置き換えています。
 
 
+## 仕入れ再設計（保留中）
+
+Discord-Shiire を仕入れ専用にする再設計は、段階5まで実装した状態で**保留**しています。詳細と進捗は [docs/procurement-redesign.md](docs/procurement-redesign.md)。
+
+- 実装済み（ブランチ `claude/keen-edison-m9yjbs`、main 未反映・未デプロイ）: 仕入れ品と仕入れ先テンプレート、仕入れ画面、仕入れ品ごとの金額上限、補充時の在庫追加通知、報酬を Xaccount-Bot の商品在庫から払い出し、旧仕入れbot自販機の廃止ボタン
+- 未着手: 段階1b 自前ウォレット（HStora の入金アドレスが固定かどうか未確認のため停止）、段階3 無在庫販売、段階6 全体テスト → main 反映
+- 再開時のデプロイ順: Xaccount-Bot を先、Discord-Shiire を後（払い出し API が先に必要）
+
 ## 仕入れbot 自販機
 
 メイン管理画面には、既存の **自販機** とは完全に分離した **仕入れbot** タブがあります。
